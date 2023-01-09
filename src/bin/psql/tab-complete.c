@@ -3235,10 +3235,16 @@ psql_completion(const char *text, int start, int end)
 /* CREATE SUBSCRIPTION */
 	else if (Matches("CREATE", "SUBSCRIPTION", MatchAny))
 		COMPLETE_WITH("CONNECTION");
-	else if (Matches("CREATE", "SUBSCRIPTION", MatchAny, "CONNECTION", MatchAny))
+	/*
+		conninfo is considered as multiple words because it contains '='
+		and it makes conninfo doesn't match MatchAny.
+		Here we match conninfo noting that it ends with a single quotation.
+	*/
+	else if ((HeadMatches("CREATE", "SUBSCRIPTION", MatchAny, "CONNECTION",
+					 MatchAny)) && ends_with(prev_wd, '\''))
 		COMPLETE_WITH("PUBLICATION");
-	else if (Matches("CREATE", "SUBSCRIPTION", MatchAny, "CONNECTION",
-					 MatchAny, "PUBLICATION"))
+	else if ((HeadMatches("CREATE", "SUBSCRIPTION", MatchAny, "CONNECTION",
+					 MatchAny)) && TailMatches("PUBLICATION"))
 	{
 		/* complete with nothing here as this refers to remote publications */
 	}

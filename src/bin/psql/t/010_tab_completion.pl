@@ -288,6 +288,14 @@ check_completion(
 # broken versions of libedit require clear_line not clear_query here
 clear_line();
 
+# check tab-completion for CONNECTION string with equal sign.
+check_completion(
+   "CREATE SUBSCRIPTION my_sub CONNECTION 'host=localhost port=5432 dbname=postgres' \t",
+   qr|PUBLICATION|,
+   "tab-completion for CONNECTION string with equal sign");
+
+clear_line();
+
 # COPY requires quoting
 # note: broken versions of libedit want to backslash the closing quote;
 # not much we can do about that
