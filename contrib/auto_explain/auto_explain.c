@@ -21,6 +21,7 @@
 #include "jit/jit.h"
 #include "nodes/params.h"
 #include "utils/guc.h"
+#include "utils/queryjumble.h"
 
 PG_MODULE_MAGIC;
 
@@ -407,6 +408,9 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 				ExplainPrintTriggers(es, queryDesc);
 			if (es->costs)
 				ExplainPrintJITSummary(es, queryDesc);
+			if (es->verbose && queryDesc->plannedstmt->queryId != UINT64CONST(0))
+				ExplainPropertyInteger("Query Identifier", NULL, (int64)
+									   queryDesc->plannedstmt->queryId, es);
 			ExplainEndOutput(es);
 
 			/* Remove last line break */
