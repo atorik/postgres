@@ -404,13 +404,13 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 			ExplainQueryText(es, queryDesc);
 			ExplainQueryParameters(es, queryDesc->params, auto_explain_log_parameter_max_length);
 			ExplainPrintPlan(es, queryDesc);
+			if (es->verbose && queryDesc->plannedstmt->queryId != UINT64CONST(0))
+				ExplainPropertyInteger("Query Identifier", NULL, (int64)
+									   queryDesc->plannedstmt->queryId, es);
 			if (es->analyze && auto_explain_log_triggers)
 				ExplainPrintTriggers(es, queryDesc);
 			if (es->costs)
 				ExplainPrintJITSummary(es, queryDesc);
-			if (es->verbose && queryDesc->plannedstmt->queryId != UINT64CONST(0))
-				ExplainPropertyInteger("Query Identifier", NULL, (int64)
-									   queryDesc->plannedstmt->queryId, es);
 			ExplainEndOutput(es);
 
 			/* Remove last line break */
