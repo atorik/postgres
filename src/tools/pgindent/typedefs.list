@@ -1090,11 +1090,13 @@ HeadlineJsonState
 HeadlineParsedText
 HeadlineWordEntry
 HeapCheckContext
+HeapPageFreeze
 HeapScanDesc
 HeapTuple
 HeapTupleData
 HeapTupleFields
 HeapTupleForceOption
+HeapTupleFreeze
 HeapTupleHeader
 HeapTupleHeaderData
 HeapTupleTableSlot
@@ -1846,7 +1848,6 @@ PROCESS_INFORMATION
 PROCLOCK
 PROCLOCKTAG
 PROC_HDR
-PROC_QUEUE
 PSID
 PSID_AND_ATTRIBUTES
 PSQL_COMP_CASE
@@ -2378,7 +2379,6 @@ SERIALIZABLEXIDTAG
 SERVICE_STATUS
 SERVICE_STATUS_HANDLE
 SERVICE_TABLE_ENTRY
-SHM_QUEUE
 SID_AND_ATTRIBUTES
 SID_IDENTIFIER_AUTHORITY
 SID_NAME_USE
@@ -3840,6 +3840,7 @@ xl_hash_vacuum_one_page
 xl_heap_confirm
 xl_heap_delete
 xl_heap_freeze_page
+xl_heap_freeze_plan
 xl_heap_freeze_tuple
 xl_heap_header
 xl_heap_inplace
