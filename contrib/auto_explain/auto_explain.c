@@ -21,7 +21,6 @@
 #include "jit/jit.h"
 #include "nodes/params.h"
 #include "utils/guc.h"
-#include "utils/queryjumble.h"
 
 PG_MODULE_MAGIC;
 
