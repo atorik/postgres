@@ -106,7 +106,7 @@ unlike(
 	qr/Query Parameters:/,
 	"query parameters not logged when disabled, text mode");
 
-# Query Identifier
+# Query Identifier.
 $log_contents = query_log(
 	$node,
 	"SELECT * FROM pg_class;",
