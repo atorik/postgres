@@ -564,6 +564,8 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 		if (jit_tuple_deforming)
 			result->jitFlags |= PGJIT_DEFORM;
 	}
+	memset(&result->bufusage, 0, sizeof(BufferUsage));
+	memset(&result->plantime, 0, sizeof(instr_time));
 
 	if (glob->partition_directory != NULL)
 		DestroyPartitionDirectory(glob->partition_directory);

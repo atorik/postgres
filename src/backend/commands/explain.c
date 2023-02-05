@@ -602,22 +602,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	ExplainOpenGroup("Query", NULL, true, es);
 
 	/* Create textual dump of plan tree */
-	ExplainPrintPlan(es, queryDesc);
-
-	/* Show buffer usage in planning */
-	if (bufusage)
-	{
-		ExplainOpenGroup("Planning", "Planning", true, es);
-		show_buffer_usage(es, bufusage, true);
-		ExplainCloseGroup("Planning", "Planning", true, es);
-	}
-
-	if (es->summary && planduration)
-	{
-		double		plantime = INSTR_TIME_GET_DOUBLE(*planduration);
-
-		ExplainPropertyFloat("Planning Time", "ms", 1000.0 * plantime, 3, es);
-	}
+	ExplainPrintPlan(es, queryDesc, planduration, bufusage);
 
 	/* Print info about runtime of triggers */
 	if (es->analyze)
@@ -738,7 +723,9 @@ ExplainPrintSettings(ExplainState *es)
  * NB: will not work on utility statements
  */
 void
-ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
+ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc,
+				 const instr_time *planduration,
+				 const BufferUsage *bufusage)
 {
 	Bitmapset  *rels_used = NULL;
 	PlanState  *ps;
@@ -790,6 +777,21 @@ ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 		 */
 		ExplainPropertyInteger("Query Identifier", NULL, (int64)
 							   queryDesc->plannedstmt->queryId, es);
+	}
+
+	/* Show buffer usage in planning */
+	if (bufusage)
+	{
+		ExplainOpenGroup("Planning", "Planning", true, es);
+		show_buffer_usage(es, bufusage, true);
+		ExplainCloseGroup("Planning", "Planning", true, es);
+	}
+
+	if (es->summary && planduration)
+	{
+		double		plantime = INSTR_TIME_GET_DOUBLE(*planduration);
+
+		ExplainPropertyFloat("Planning Time", "ms", 1000.0 * plantime, 3, es);
 	}
 }
 

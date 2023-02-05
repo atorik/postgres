@@ -20,6 +20,7 @@
 #include "executor/instrument.h"
 #include "jit/jit.h"
 #include "nodes/params.h"
+#include "optimizer/planner.h"
 #include "utils/guc.h"
 
 PG_MODULE_MAGIC;
@@ -64,20 +65,28 @@ static const struct config_enum_entry loglevel_options[] = {
 /* Current nesting depth of ExecutorRun calls */
 static int	nesting_level = 0;
 
+/* Current nesting depth of planner calls */
+static int	plan_nesting_level = 0;
+
 /* Is the current top-level query to be sampled? */
 static bool current_query_sampled = false;
 
 #define auto_explain_enabled() \
 	(auto_explain_log_min_duration >= 0 && \
-	 (nesting_level == 0 || auto_explain_log_nested_statements) && \
+	 ((nesting_level == 0 || plan_nesting_level == 0) || \
+	   auto_explain_log_nested_statements) && \
 	 current_query_sampled)
 
 /* Saved hook values in case of unload */
+static planner_hook_type prev_planner_hook = NULL;
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
 static ExecutorRun_hook_type prev_ExecutorRun = NULL;
 static ExecutorFinish_hook_type prev_ExecutorFinish = NULL;
 static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 
+static PlannedStmt *explain_Planner(Query *parse, const char *query_string,
+								int cursorOptions,
+								 ParamListInfo boundParams);
 static void explain_ExecutorStart(QueryDesc *queryDesc, int eflags);
 static void explain_ExecutorRun(QueryDesc *queryDesc,
 								ScanDirection direction,
@@ -245,6 +254,8 @@ _PG_init(void)
 	MarkGUCPrefixReserved("auto_explain");
 
 	/* Install hooks. */
+	prev_planner_hook = planner_hook;
+	planner_hook = explain_Planner;
 	prev_ExecutorStart = ExecutorStart_hook;
 	ExecutorStart_hook = explain_ExecutorStart;
 	prev_ExecutorRun = ExecutorRun_hook;
@@ -253,6 +264,72 @@ _PG_init(void)
 	ExecutorFinish_hook = explain_ExecutorFinish;
 	prev_ExecutorEnd = ExecutorEnd_hook;
 	ExecutorEnd_hook = explain_ExecutorEnd;
+}
+
+/*
+ * Planner hook: track nesting level and start up logging if needed
+ */
+static PlannedStmt *
+explain_Planner(Query *parse, const char *query_string, int cursorOptions, ParamListInfo boundParams)
+{
+	PlannedStmt *result;
+
+	if (plan_nesting_level == 0)
+	{
+		if (auto_explain_log_min_duration >= 0 && !IsParallelWorker())
+			current_query_sampled = (pg_prng_double(&pg_global_prng_state) < auto_explain_sample_rate);
+		else
+			current_query_sampled = false;
+	}
+
+	if (auto_explain_enabled())
+	{
+	// TODO: Log output concerning buffers should be toggled on/off by auto_explain.log_buffers.
+	// TODO: Log output concerning planning should be toggled on/off by auto_explain.track_planning.
+
+		instr_time	start;
+		instr_time	duration;
+		BufferUsage bufusage_start;
+
+		/* We need to track buffer usage as the planner can access them. */
+		bufusage_start = pgBufferUsage;
+
+		INSTR_TIME_SET_CURRENT(start);
+
+		plan_nesting_level++;
+		PG_TRY();
+		{
+			if (prev_planner_hook)
+				result = prev_planner_hook(parse, query_string, cursorOptions,
+										   boundParams);
+			else
+				result = standard_planner(parse, query_string, cursorOptions,
+										  boundParams);
+		}
+		PG_FINALLY();
+		{
+			plan_nesting_level--;
+		}
+		PG_END_TRY();
+
+		INSTR_TIME_SET_CURRENT(duration);
+		INSTR_TIME_SUBTRACT(duration, start);
+
+		result->plantime = duration;
+		/* calc differences of buffer counters and save it */
+		BufferUsageAccumDiff(&result->bufusage, &pgBufferUsage, &bufusage_start);
+	}
+	else
+	{
+		if (prev_planner_hook)
+			result = prev_planner_hook(parse, query_string, cursorOptions,
+									   boundParams);
+		else
+			result = standard_planner(parse, query_string, cursorOptions,
+									  boundParams);
+	}
+
+	return result;
 }
 
 /*
@@ -402,7 +479,8 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 			ExplainBeginOutput(es);
 			ExplainQueryText(es, queryDesc);
 			ExplainQueryParameters(es, queryDesc->params, auto_explain_log_parameter_max_length);
-			ExplainPrintPlan(es, queryDesc);
+			ExplainPrintPlan(es, queryDesc, &queryDesc->plannedstmt->plantime,
+							 &queryDesc->plannedstmt->bufusage);
 			if (es->analyze && auto_explain_log_triggers)
 				ExplainPrintTriggers(es, queryDesc);
 			if (es->costs)

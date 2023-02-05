@@ -759,6 +759,8 @@ _equal${n}(const $n *a, const $n *b)
 			print $eff "\tCOMPARE_BITMAPSET_FIELD($f);\n"
 			  unless $equal_ignore;
 		}
+		# temporalily change for PoC
+		elsif ($t eq 'instr_time' || $t eq 'BufferUsage') { }
 		elsif ($t eq 'int' && $f =~ 'location$')
 		{
 			print $cff "\tCOPY_LOCATION_FIELD($f);\n"    unless $copy_ignore;
@@ -1073,6 +1075,8 @@ _read${n}(void)
 			print $off "\tWRITE_BITMAPSET_FIELD($f);\n";
 			print $rff "\tREAD_BITMAPSET_FIELD($f);\n" unless $no_read;
 		}
+		# temporalily change for PoC
+		elsif ($t eq 'instr_time' || $t eq 'BufferUsage') { }
 		elsif (elem $t, @enum_types)
 		{
 			print $off "\tWRITE_ENUM_FIELD($f, $t);\n";

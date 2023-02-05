@@ -17,11 +17,13 @@
 #include "access/sdir.h"
 #include "access/stratnum.h"
 #include "common/relpath.h"
+#include "executor/instrument.h"
 #include "lib/stringinfo.h"
 #include "nodes/bitmapset.h"
 #include "nodes/lockoptions.h"
 #include "nodes/parsenodes.h"
 #include "nodes/primnodes.h"
+#include "portability/instr_time.h"
 
 
 /* ----------------------------------------------------------------
@@ -101,6 +103,10 @@ typedef struct PlannedStmt
 	/* statement location in source string (copied from Query) */
 	int			stmt_location;	/* start location, or -1 if unknown */
 	int			stmt_len;		/* length in bytes; 0 means "rest of string" */
+
+	/* These are never used by the core system, but plugins can change them */
+	instr_time	plantime;		/* planning time */
+	BufferUsage bufusage;		/* buffer usage for planning */
 } PlannedStmt;
 
 /* macro for fetching the Plan associated with a SubPlan node */

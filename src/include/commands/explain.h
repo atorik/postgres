@@ -93,7 +93,9 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 						   const instr_time *planduration,
 						   const BufferUsage *bufusage);
 
-extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);
+extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc,
+							 const instr_time *planduration,
+							 const BufferUsage *bufusage);
 extern void ExplainPrintTriggers(ExplainState *es, QueryDesc *queryDesc);
 
 extern void ExplainPrintJITSummary(ExplainState *es, QueryDesc *queryDesc);
