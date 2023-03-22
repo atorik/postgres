@@ -1629,10 +1629,6 @@ BeginCopyFrom(ParseState *pstate,
 		}
 	}
 
-	/* initialize ignored_errors */
-	if (cstate->opts.ignore_datatype_errors)
-		cstate->ignored_errors = 0;
-
 	/* initialize progress */
 	pgstat_progress_start_command(PROGRESS_COMMAND_COPY,
 								  cstate->rel ? RelationGetRelid(cstate->rel) : InvalidOid);
