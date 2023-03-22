@@ -1628,6 +1628,8 @@ BeginCopyFrom(ParseState *pstate,
 			}
 		}
 	}
+
+
 	/* initialize progress */
 	pgstat_progress_start_command(PROGRESS_COMMAND_COPY,
 								  cstate->rel ? RelationGetRelid(cstate->rel) : InvalidOid);
