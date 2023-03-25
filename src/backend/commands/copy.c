@@ -584,7 +584,7 @@ ProcessCopyOptions(ParseState *pstate,
 	}
 
 	/*
-	 * Check for incompatible options (must do these two before inserting
+	 * Check for incompatible options (must do these before inserting
 	 * defaults)
 	 */
 	if (opts_out->binary && opts_out->delim)
@@ -601,6 +601,11 @@ ProcessCopyOptions(ParseState *pstate,
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("cannot specify DEFAULT in BINARY mode")));
+
+	if (opts_out->binary && opts_out->ignore_datatype_errors)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("cannot specify IGNORE_DATATYPE_ERRORS in BINARY mode")));
 
 	/* Set defaults for omitted options */
 	if (!opts_out->delim)
