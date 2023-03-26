@@ -241,8 +241,9 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
      <para>
       Drops rows that contain malformed data while copying. These are rows
       with columns where the data type's input-function raises an error.
-      Outputs warnings about rows with incorrect data to system logfile.
       This option is not allowed when using binary format.
+      Note that this option is only supported in current
+      <command>COPY FROM</command> syntax.
      </para>
     </listitem>
    </varlistentry>

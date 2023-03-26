@@ -967,8 +967,6 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 				{
 					cstate->ignored_errors++;
 
-					ereport(WARNING,
-							errmsg("%s", cstate->escontext.error_data->message));
 					return true;
 				}
 
