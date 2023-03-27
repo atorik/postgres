@@ -2858,7 +2858,6 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH("FORMAT", "FREEZE", "DELIMITER", "NULL",
 					  "HEADER", "QUOTE", "ESCAPE", "FORCE_QUOTE",
 					  "FORCE_NOT_NULL", "FORCE_NULL", "ENCODING", "DEFAULT",
-					  "FORCE_NOT_NULL", "FORCE_NULL", "ENCODING",
 					  "IGNORE_DATATYPE_ERRORS");
 
 	/* Complete COPY <sth> FROM|TO filename WITH (FORMAT */
