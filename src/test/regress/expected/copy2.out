@@ -687,12 +687,6 @@ SELECT * FROM check_ign_err;
 COPY check_ign_err FROM STDIN WITH (IGNORE_DATATYPE_ERRORS);
 ERROR:  missing data for column "k"
 CONTEXT:  COPY check_ign_err, line 1: "1	{1}"
--- test hard error: should fail
-CREATE TABLE check_ign_err_xml (x xml);
-COPY check_ign_err_xml FROM STDIN WITH (IGNORE_DATATYPE_ERRORS);
-ERROR:  unsupported XML feature
-DETAIL:  This functionality requires the server to be built with libxml support.
-CONTEXT:  COPY check_ign_err_xml, line 1, column x: "<value>one</value>"
 -- clean up
 DROP TABLE forcetest;
 DROP TABLE vistest;
@@ -708,7 +702,6 @@ DROP VIEW instead_of_insert_tbl_view;
 DROP VIEW instead_of_insert_tbl_view_2;
 DROP FUNCTION fun_instead_of_insert_tbl();
 DROP TABLE check_ign_err;
-DROP TABLE check_ign_err_xml;
 --
 -- COPY FROM ... DEFAULT
 --

@@ -482,12 +482,6 @@ COPY check_ign_err FROM STDIN WITH (IGNORE_DATATYPE_ERRORS);
 1	{1}
 \.
 
--- test hard error: should fail
-CREATE TABLE check_ign_err_xml (x xml);
-COPY check_ign_err_xml FROM STDIN WITH (IGNORE_DATATYPE_ERRORS);
-<value>one</value>
-\.
-
 -- clean up
 DROP TABLE forcetest;
 DROP TABLE vistest;
@@ -503,7 +497,6 @@ DROP VIEW instead_of_insert_tbl_view;
 DROP VIEW instead_of_insert_tbl_view_2;
 DROP FUNCTION fun_instead_of_insert_tbl();
 DROP TABLE check_ign_err;
-DROP TABLE check_ign_err_xml;
 
 --
 -- COPY FROM ... DEFAULT
