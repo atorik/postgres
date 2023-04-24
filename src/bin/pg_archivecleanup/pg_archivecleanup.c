@@ -23,6 +23,8 @@ const char *progname;
 
 /* Options and defaults */
 bool		dryrun = false;		/* are we performing a dry-run operation? */
+bool		removeBackupHistoryFile = false;	/* remove files including
+												 * backup history files */
 char	   *additional_ext = NULL;	/* Extension to remove from filenames */
 
 char	   *archiveLocation;	/* where to find the archive? */
@@ -118,7 +120,8 @@ CleanupPriorWALFiles(void)
 			 * file. Note that this means files are not removed in the order
 			 * they were originally written, in case this worries you.
 			 */
-			if ((IsXLogFileName(walfile) || IsPartialXLogFileName(walfile)) &&
+			if (((IsXLogFileName(walfile) || IsPartialXLogFileName(walfile)) ||
+				(removeBackupHistoryFile && IsBackupHistoryFileName(walfile))) &&
 				strcmp(walfile + 8, exclusiveCleanupFileName + 8) < 0)
 			{
 				char		WALFilePath[MAXPGPATH * 2]; /* the file path
@@ -252,6 +255,7 @@ usage(void)
 	printf(_("Usage:\n"));
 	printf(_("  %s [OPTION]... ARCHIVELOCATION OLDESTKEPTWALFILE\n"), progname);
 	printf(_("\nOptions:\n"));
+	printf(_("  -b             remove files including backup history files \n"));
 	printf(_("  -d             generate debug output (verbose mode)\n"));
 	printf(_("  -n             dry run, show the names of the files that would be removed\n"));
 	printf(_("  -V, --version  output version information, then exit\n"));
@@ -294,10 +298,13 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt(argc, argv, "dnx:")) != -1)
+	while ((c = getopt(argc, argv, "bdnx:")) != -1)
 	{
 		switch (c)
 		{
+			case 'b':
+				removeBackupHistoryFile = true;
+				break;
 			case 'd':			/* Debug mode */
 				pg_logging_increase_verbosity();
 				break;
