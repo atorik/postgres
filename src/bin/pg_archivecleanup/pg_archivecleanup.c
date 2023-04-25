@@ -255,7 +255,7 @@ usage(void)
 	printf(_("Usage:\n"));
 	printf(_("  %s [OPTION]... ARCHIVELOCATION OLDESTKEPTWALFILE\n"), progname);
 	printf(_("\nOptions:\n"));
-	printf(_("  -b             remove files including backup history files \n"));
+	printf(_("  -b             remove files including backup history files\n"));
 	printf(_("  -d             generate debug output (verbose mode)\n"));
 	printf(_("  -n             dry run, show the names of the files that would be removed\n"));
 	printf(_("  -V, --version  output version information, then exit\n"));
@@ -302,7 +302,7 @@ main(int argc, char **argv)
 	{
 		switch (c)
 		{
-			case 'b':
+			case 'b': 			/* Remove backup history files too */
 				removeBackupHistoryFile = true;
 				break;
 			case 'd':			/* Debug mode */
