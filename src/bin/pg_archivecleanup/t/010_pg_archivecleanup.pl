@@ -16,9 +16,14 @@ my @walfiles = (
 	'00000001000000370000000C.gz', '00000001000000370000000D',
 	'00000001000000370000000E',    '00000001000000370000000F.partial',);
 
+my @walfiles_with_backuphistoryfile = (
+	'000000020000003800000007.00000028.backup', '000000020000003800000008',
+	'000000020000003800000009',
+	'00000002000000380000000A', '00000002000000380000000B.007C9330.backup');
+
 sub create_files
 {
-	foreach my $fn (@walfiles, 'unrelated_file')
+	foreach my $fn (@_, 'unrelated_file')
 	{
 		open my $file, '>', "$tempdir/$fn";
 		print $file 'CONTENT';
@@ -27,7 +32,7 @@ sub create_files
 	return;
 }
 
-create_files();
+create_files(@walfiles);
 
 command_fails_like(
 	['pg_archivecleanup'],
@@ -76,7 +81,7 @@ sub run_check
 
 	my ($suffix, $test_name) = @_;
 
-	create_files();
+	create_files(@walfiles);
 
 	command_ok(
 		[
@@ -98,8 +103,42 @@ sub run_check
 	return;
 }
 
+sub remove_backuphistoryfile_run_check
+{
+	local $Test::Builder::Level = $Test::Builder::Level + 1;
+
+	my ($suffix, $test_name) = @_;
+
+	create_files(@walfiles_with_backuphistoryfile);
+
+	command_ok(
+		[
+			'pg_archivecleanup', '-b', $tempdir,
+			$walfiles_with_backuphistoryfile[2] . $suffix
+		],
+		"$test_name: remove_backuphistoryfile_runs");
+
+	ok(!-f "$tempdir/$walfiles_with_backuphistoryfile[0]",
+		"$test_name: first .backup file was cleaned up");
+	ok(!-f "$tempdir/$walfiles_with_backuphistoryfile[1]",
+		"$test_name: second older WAL file was cleaned up");
+	ok(-f "$tempdir/$walfiles_with_backuphistoryfile[2]",
+		"$test_name: restartfile was not cleaned up");
+	ok(-f "$tempdir/$walfiles_with_backuphistoryfile[3]",
+		"$test_name: newer WAL file was not cleaned up");
+	ok(-f "$tempdir/$walfiles_with_backuphistoryfile[4]",
+		"$test_name: newer .backup file was not cleaned up");
+	ok(-f "$tempdir/unrelated_file",
+		"$test_name: unrelated file was not cleaned up");
+	return;
+}
+
 run_check('',                 'pg_archivecleanup');
 run_check('.partial',         'pg_archivecleanup with .partial file');
 run_check('.00000020.backup', 'pg_archivecleanup with .backup file');
+
+remove_backuphistoryfile_run_check('',				   'pg_archivecleanup -b');
+remove_backuphistoryfile_run_check('.00000020.backup',
+									'pg_archivecleanup -b with .backup file');
 
 done_testing();
