@@ -114,6 +114,19 @@ pg_archivecleanup:  removing file "archive/00000001000000370000000E"
      </varlistentry>
 
      <varlistentry>
+      <term><option>-b</option></term>
+      <term><option>--clean-backup-history</option></term>
+      <listitem>
+       <para>
+         Remove files including backup history file.
+         For details about backup history file, please refer to the <xref linkend="backup-base-backup"/>.
+         Note that when <replaceable>oldestkeptwalfile</replaceable> is a backup history file,
+         specified file is kept and only preceding WAL files and backup history files are removed.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-V</option></term>
       <term><option>--version</option></term>
       <listitem>
