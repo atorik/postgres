@@ -14,6 +14,7 @@ my $tempdir = PostgreSQL::Test::Utils::tempdir;
 
 my @walfiles = (
 	'00000001000000370000000C.gz', '00000001000000370000000D',
+	'00000001000000370000000D.00000028.backup',
 	'00000001000000370000000E',    '00000001000000370000000F.partial',);
 
 sub create_files
@@ -58,7 +59,7 @@ command_fails_like(
 	# like command_like but checking stderr
 	my $stderr;
 	my $result = IPC::Run::run [ 'pg_archivecleanup', '-d', '-n', $tempdir,
-		$walfiles[2] ], '2>', \$stderr;
+		$walfiles[3] ], '2>', \$stderr;
 	ok($result, "pg_archivecleanup dry run: exit code 0");
 	like(
 		$stderr,
@@ -74,32 +75,45 @@ sub run_check
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 
-	my ($suffix, $test_name) = @_;
+	my ($suffix, $test_name, @options) = @_;
 
 	create_files();
 
 	command_ok(
 		[
-			'pg_archivecleanup', '-x', '.gz', $tempdir,
-			$walfiles[2] . $suffix
+			'pg_archivecleanup', @options, $tempdir,
+			$walfiles[3] . $suffix
 		],
 		"$test_name: runs");
 
-	ok(!-f "$tempdir/$walfiles[0]",
-		"$test_name: first older WAL file was cleaned up");
+	if (grep {$_ eq '-x.gz'} @options) {
+		ok(!-f "$tempdir/$walfiles[0]",
+			"$test_name: first older WAL file with .gz was cleaned up");
+	} else {
+		ok(-f "$tempdir/$walfiles[0]",
+			"$test_name: first older WAL file with .gz was not cleaned up");
+	}
 	ok(!-f "$tempdir/$walfiles[1]",
 		"$test_name: second older WAL file was cleaned up");
-	ok(-f "$tempdir/$walfiles[2]",
-		"$test_name: restartfile was not cleaned up");
+	if (grep {$_ eq '--clean-backup-history'} @options) {
+		ok(!-f "$tempdir/$walfiles[2]",
+			"$test_name: Backup history file was cleaned up");
+	} else {
+		ok(-f "$tempdir/$walfiles[2]",
+			"$test_name: Backup history file was not cleaned up");
+	}
 	ok(-f "$tempdir/$walfiles[3]",
+		"$test_name: restartfile was not cleaned up");
+	ok(-f "$tempdir/$walfiles[4]",
 		"$test_name: newer WAL file was not cleaned up");
 	ok(-f "$tempdir/unrelated_file",
 		"$test_name: unrelated file was not cleaned up");
 	return;
 }
 
-run_check('',                 'pg_archivecleanup');
-run_check('.partial',         'pg_archivecleanup with .partial file');
-run_check('.00000020.backup', 'pg_archivecleanup with .backup file');
+run_check('',                 'pg_archivecleanup', '-x.gz');
+run_check('.partial',         'pg_archivecleanup with .partial file', '-x.gz');
+run_check('.00000020.backup', 'pg_archivecleanup with .backup file', '-x.gz');
+run_check('',                 'pg_archivecleanup --clean-backup-history', '--clean-backup-history');
 
 done_testing();
