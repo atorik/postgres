@@ -114,6 +114,7 @@ pg_archivecleanup:  removing file "archive/00000001000000370000000E"
      </varlistentry>
 
      <varlistentry>
+      <term><option>-b</option></term>
       <term><option>--clean-backup-history</option></term>
       <listitem>
        <para>

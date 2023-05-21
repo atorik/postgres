@@ -112,9 +112,9 @@ CleanupPriorWALFiles(void)
 			/*
 			 * Check file name.
 			 *
-			 * We do not remove backup history files when --clean-bacup-history
-			 * is not specified, as well as files which are not (partial) WAL
-			 * file.
+			 * We skip files which are not WAL file or partial WAL file.
+			 * Also we skip backup history files when --clean-backup-history
+			 * is not specified.
 			 */
 			if (!IsXLogFileName(walfile) && !IsPartialXLogFileName(walfile) &&
 				(!cleanBackupHistory || !IsBackupHistoryFileName(walfile)))
@@ -267,7 +267,7 @@ usage(void)
 	printf(_("\nOptions:\n"));
 	printf(_("  -d, --debug                 generate debug output (verbose mode)\n"));
 	printf(_("  -n, --dry-run               dry run, show the names of the files that would be removed\n"));
-	printf(_("      --clean-backup-history  clean up files including backup history files\n"));
+	printf(_("  -b, --clean-backup-history  clean up files including backup history files\n"));
 	printf(_("  -V, --version               output version information, then exit\n"));
 	printf(_("  -x --strip-extension=EXT    clean up files if they have this extension\n"));
 	printf(_("  -?, --help                  show this help, then exit\n"));
@@ -289,7 +289,7 @@ int
 main(int argc, char **argv)
 {
 	static struct option long_options[] = {
-		{"clean-backup-history", no_argument, NULL, 1},
+		{"clean-backup-history", no_argument, NULL, 'b'},
 		{"debug", no_argument, NULL, 'd'},
 		{"dry-run", no_argument, NULL, 'n'},
 		{"strip-extension", required_argument, NULL, 'x'},
@@ -315,10 +315,13 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "dnx:", long_options, NULL)) != -1)
+	while ((c = getopt_long(argc, argv, "bdnx:", long_options, NULL)) != -1)
 	{
 		switch (c)
 		{
+			case 'b': 			/* Remove backup history files too */
+				cleanBackupHistory = true;
+				break;
 			case 'd':			/* Debug mode */
 				pg_logging_increase_verbosity();
 				break;
@@ -328,9 +331,6 @@ main(int argc, char **argv)
 			case 'x':
 				additional_ext = pg_strdup(optarg); /* Extension to remove
 													 * from xlogfile names */
-				break;
-			case 1: 			/* Remove backup history files too */
-				cleanBackupHistory = true;
 				break;
 			default:
 				/* getopt already emitted a complaint */

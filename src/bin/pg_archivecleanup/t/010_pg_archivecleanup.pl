@@ -95,7 +95,7 @@ sub run_check
 	}
 	ok(!-f "$tempdir/$walfiles[1]",
 		"$test_name: second older WAL file was cleaned up");
-	if (grep {$_ eq '--clean-backup-history'} @options) {
+	if (grep {$_ eq '-b'} @options) {
 		ok(!-f "$tempdir/$walfiles[2]",
 			"$test_name: Backup history file was cleaned up");
 	} else {
@@ -114,6 +114,6 @@ sub run_check
 run_check('',                 'pg_archivecleanup', '-x.gz');
 run_check('.partial',         'pg_archivecleanup with .partial file', '-x.gz');
 run_check('.00000020.backup', 'pg_archivecleanup with .backup file', '-x.gz');
-run_check('',                 'pg_archivecleanup --clean-backup-history', '--clean-backup-history');
+run_check('',                 'pg_archivecleanup with --clean-backup-history', '-b');
 
 done_testing();
