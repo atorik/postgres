@@ -27,7 +27,6 @@
 #include "common/logging.h"
 #include "fe_utils/option_utils.h"
 #include "getopt_long.h"
-#include "pg_getopt.h"
 #include "storage/bufpage.h"
 #include "storage/checksum.h"
 #include "storage/checksum_impl.h"

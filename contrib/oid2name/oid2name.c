@@ -15,7 +15,6 @@
 #include "common/string.h"
 #include "getopt_long.h"
 #include "libpq-fe.h"
-#include "pg_getopt.h"
 
 /* an extensible array to keep track of elements to show */
 typedef struct

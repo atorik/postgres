@@ -27,7 +27,6 @@
 #include "common/string.h"
 #include "getopt_long.h"
 #include "libpq-fe.h"
-#include "pg_getopt.h"
 
 #define BUFSIZE			1024
 

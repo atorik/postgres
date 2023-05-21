@@ -27,7 +27,6 @@
 #include "common/controldata_utils.h"
 #include "common/logging.h"
 #include "getopt_long.h"
-#include "pg_getopt.h"
 
 static void
 usage(const char *progname)
