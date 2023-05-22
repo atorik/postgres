@@ -56,7 +56,6 @@
 #include "common/restricted_token.h"
 #include "common/string.h"
 #include "getopt_long.h"
-#include "pg_getopt.h"
 #include "storage/large_object.h"
 
 static ControlFileData ControlFile; /* pg_control values */
