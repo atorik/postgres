@@ -12,14 +12,18 @@ program_options_handling_ok('pg_archivecleanup');
 
 my $tempdir = PostgreSQL::Test::Utils::tempdir;
 
-my @walfiles = (
+my @walfiles_with_gz = (
 	'00000001000000370000000C.gz', '00000001000000370000000D',
+	'00000001000000370000000E',    '00000001000000370000000F.partial',);
+
+my @walfiles_with_backup = (
+	'00000001000000370000000D',
 	'00000001000000370000000D.00000028.backup',
 	'00000001000000370000000E',    '00000001000000370000000F.partial',);
 
 sub create_files
 {
-	foreach my $fn (@walfiles, 'unrelated_file')
+	foreach my $fn (@_, 'unrelated_file')
 	{
 		open my $file, '>', "$tempdir/$fn";
 		print $file 'CONTENT';
@@ -28,7 +32,7 @@ sub create_files
 	return;
 }
 
-create_files();
+create_files(@walfiles_with_gz);
 
 command_fails_like(
 	['pg_archivecleanup'],
@@ -58,14 +62,16 @@ command_fails_like(
 {
 	# like command_like but checking stderr
 	my $stderr;
-	my $result = IPC::Run::run [ 'pg_archivecleanup', '-d', '-n', $tempdir,
-		$walfiles[3] ], '2>', \$stderr;
+	my $result =
+	  IPC::Run::run [ 'pg_archivecleanup', '-d', '-n', $tempdir,
+		$walfiles_with_gz[2] ],
+	  '2>', \$stderr;
 	ok($result, "pg_archivecleanup dry run: exit code 0");
 	like(
 		$stderr,
-		qr/$walfiles[1].*would be removed/,
+		qr/$walfiles_with_gz[1].*would be removed/,
 		"pg_archivecleanup dry run: matches");
-	foreach my $fn (@walfiles)
+	foreach my $fn (@walfiles_with_gz)
 	{
 		ok(-f "$tempdir/$fn", "$fn not removed");
 	}
@@ -75,45 +81,37 @@ sub run_check
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 
-	my ($suffix, $test_name, @options) = @_;
+	my ($walfiles, $suffix, $test_name, @options) = @_;
 
-	create_files();
+	create_files(\@$walfiles);
 
 	command_ok(
 		[
 			'pg_archivecleanup', @options, $tempdir,
-			$walfiles[3] . $suffix
+			@$walfiles[2] . $suffix
 		],
 		"$test_name: runs");
 
-	if (grep {$_ eq '-x.gz'} @options) {
-		ok(!-f "$tempdir/$walfiles[0]",
-			"$test_name: first older WAL file with .gz was cleaned up");
-	} else {
-		ok(-f "$tempdir/$walfiles[0]",
-			"$test_name: first older WAL file with .gz was not cleaned up");
-	}
-	ok(!-f "$tempdir/$walfiles[1]",
-		"$test_name: second older WAL file was cleaned up");
-	if (grep {$_ eq '-b'} @options) {
-		ok(!-f "$tempdir/$walfiles[2]",
-			"$test_name: Backup history file was cleaned up");
-	} else {
-		ok(-f "$tempdir/$walfiles[2]",
-			"$test_name: Backup history file was not cleaned up");
-	}
-	ok(-f "$tempdir/$walfiles[3]",
+	ok(!-f "$tempdir/@$walfiles[0]",
+		"$test_name: first older WAL file was cleaned up");
+	ok(!-f "$tempdir/@$walfiles[1]",
+		"$test_name: second older WAL/backup history file was cleaned up");
+	ok(-f "$tempdir/@$walfiles[2]",
 		"$test_name: restartfile was not cleaned up");
-	ok(-f "$tempdir/$walfiles[4]",
+	ok(-f "$tempdir/@$walfiles[3]",
 		"$test_name: newer WAL file was not cleaned up");
 	ok(-f "$tempdir/unrelated_file",
 		"$test_name: unrelated file was not cleaned up");
 	return;
 }
 
-run_check('',                 'pg_archivecleanup', '-x.gz');
-run_check('.partial',         'pg_archivecleanup with .partial file', '-x.gz');
-run_check('.00000020.backup', 'pg_archivecleanup with .backup file', '-x.gz');
-run_check('',                 'pg_archivecleanup with --clean-backup-history', '-b');
+run_check(\@walfiles_with_gz, '',
+	'pg_archivecleanup', '-x.gz');
+run_check(\@walfiles_with_gz, '.partial',
+	'pg_archivecleanup with .partial file', '-x.gz');
+run_check(\@walfiles_with_gz, '.00000020.backup',
+	'pg_archivecleanup with .backup file', '-x.gz');
+run_check(\@walfiles_with_backup, '',
+	'pg_archivecleanup with --clean-backup-history', '-b');
 
 done_testing();
