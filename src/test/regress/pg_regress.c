@@ -85,14 +85,14 @@ typedef enum TAPtype
 	TEST_STATUS,
 	PLAN,
 	NONE
-}			TAPtype;
+} TAPtype;
 
 /* options settable from command line */
 _stringlist *dblist = NULL;
 bool		debug = false;
 char	   *inputdir = ".";
 char	   *outputdir = ".";
-char       *expecteddir = ".";
+char	   *expecteddir = ".";
 char	   *bindir = PGBINDIR;
 char	   *launcher = NULL;
 static _stringlist *loadextension = NULL;
@@ -798,6 +798,7 @@ initialize_environment(void)
 		unsetenv("PGCONNECT_TIMEOUT");
 		unsetenv("PGDATA");
 		unsetenv("PGDATABASE");
+		unsetenv("PGGSSDELEGATION");
 		unsetenv("PGGSSENCMODE");
 		unsetenv("PGGSSLIB");
 		/* PGHOSTADDR, see below */

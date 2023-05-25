@@ -1190,10 +1190,10 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
-     <varlistentry id="guc-gss-accept-deleg" xreflabel="gss_accept_deleg">
-      <term><varname>gss_accept_deleg</varname> (<type>boolean</type>)
+     <varlistentry id="guc-gss-accept-delegation" xreflabel="gss_accept_delegation">
+      <term><varname>gss_accept_delegation</varname> (<type>boolean</type>)
       <indexterm>
-       <primary><varname>gss_accept_deleg</varname> configuration parameter</primary>
+       <primary><varname>gss_accept_delegation</varname> configuration parameter</primary>
       </indexterm>
       </term>
       <listitem>
@@ -9841,7 +9841,7 @@ SET XML OPTION { DOCUMENT | CONTENT };
        <para>
         If set to <literal>DISABLED</literal>, does not report validation
         problems at all. Otherwise reports problems at the given message
-        level. The default is <literal>ERROR</literal>.
+        level. The default is <literal>WARNING</literal>.
        </para>
       </listitem>
      </varlistentry>
