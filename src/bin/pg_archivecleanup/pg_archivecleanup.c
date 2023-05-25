@@ -252,11 +252,11 @@ usage(void)
 	printf(_("Usage:\n"));
 	printf(_("  %s [OPTION]... ARCHIVELOCATION OLDESTKEPTWALFILE\n"), progname);
 	printf(_("\nOptions:\n"));
-	printf(_("  -d, --debug                 generate debug output (verbose mode)\n"));
-	printf(_("  -n, --dry-run               dry run, show the names of the files that would be removed\n"));
-	printf(_("  -V, --version               output version information, then exit\n"));
-	printf(_("  -x --strip-extension=EXT    clean up files if they have this extension\n"));
-	printf(_("  -?, --help                  show this help, then exit\n"));
+	printf(_("  -d, --debug               generate debug output (verbose mode)\n"));
+	printf(_("  -n, --dry-run             dry run, show the names of the files that would be removed\n"));
+	printf(_("  -V, --version             output version information, then exit\n"));
+	printf(_("  -x --strip-extension=EXT  clean up files if they have this extension\n"));
+	printf(_("  -?, --help                show this help, then exit\n"));
 	printf(_("\n"
 			 "For use as archive_cleanup_command in postgresql.conf:\n"
 			 "  archive_cleanup_command = 'pg_archivecleanup [OPTION]... ARCHIVELOCATION %%r'\n"
