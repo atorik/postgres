@@ -1728,11 +1728,11 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"gss_accept_deleg", PGC_SIGHUP, CONN_AUTH_AUTH,
+		{"gss_accept_delegation", PGC_SIGHUP, CONN_AUTH_AUTH,
 			gettext_noop("Sets whether GSSAPI delegation should be accepted from the client."),
 			NULL
 		},
-		&pg_gss_accept_deleg,
+		&pg_gss_accept_delegation,
 		false,
 		NULL, NULL, NULL
 	},
@@ -4685,11 +4685,11 @@ struct config_enum ConfigureNamesEnum[] =
 
 	{
 		{"icu_validation_level", PGC_USERSET, CLIENT_CONN_LOCALE,
-		 gettext_noop("Log level for reporting invalid ICU locale strings."),
-		 NULL
+			gettext_noop("Log level for reporting invalid ICU locale strings."),
+			NULL
 		},
 		&icu_validation_level,
-		ERROR, icu_validation_level_options,
+		WARNING, icu_validation_level_options,
 		NULL, NULL, NULL
 	},
 
