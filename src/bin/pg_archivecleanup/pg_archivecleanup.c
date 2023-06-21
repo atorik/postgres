@@ -23,6 +23,8 @@ const char *progname;
 
 /* Options and defaults */
 bool		dryrun = false;		/* are we performing a dry-run operation? */
+bool		cleanBackupHistory = false;	/* remove files including
+												 * backup history files */
 char	   *additional_ext = NULL;	/* Extension to remove from filenames */
 
 char	   *archiveLocation;	/* where to find the archive? */
@@ -102,9 +104,10 @@ CleanupPriorWALFiles(void)
 		char		WALFilePath[MAXPGPATH * 2]; /* the file path
 												 * including archive */
 		/*
-		 * Truncation is essentially harmless, because we skip names of
-		 * length other than XLOG_FNAME_LEN.  (In principle, one could use
-		 * a 1000-character additional_ext and get trouble.)
+		 * Truncation is essentially harmless,  because we check the file
+		 * format including the length immediately after this.
+		 * (In principle, one could use a 1000-character additional_ext
+		 * and get trouble.)
 		 */
 		strlcpy(walfile, xlde->d_name, MAXPGPATH);
 		TrimExtension(walfile, additional_ext);
@@ -113,8 +116,11 @@ CleanupPriorWALFiles(void)
 		 * Check file name.
 		 *
 		 * We skip files which are not WAL file or partial WAL file.
+		 * Also we skip backup history files when --clean-backup-history
+		 * is not specified.
 		 */
-		if (!IsXLogFileName(walfile) && !IsPartialXLogFileName(walfile))
+		if (!IsXLogFileName(walfile) && !IsPartialXLogFileName(walfile) &&
+			!(cleanBackupHistory && IsBackupHistoryFileName(walfile)))
 			continue;
 
 		/*
@@ -258,6 +264,7 @@ usage(void)
 	printf(_("Usage:\n"));
 	printf(_("  %s [OPTION]... ARCHIVELOCATION OLDESTKEPTWALFILE\n"), progname);
 	printf(_("\nOptions:\n"));
+	printf(_("  -b, --clean-backup-history  clean up files including backup history files\n"));
 	printf(_("  -d, --debug                 generate debug output (verbose mode)\n"));
 	printf(_("  -n, --dry-run               dry run, show the names of the files that would be\n"
 			 "                              removed\n"));
@@ -283,6 +290,7 @@ int
 main(int argc, char **argv)
 {
 	static struct option long_options[] = {
+		{"clean-backup-history", no_argument, NULL, 'b'},
 		{"debug", no_argument, NULL, 'd'},
 		{"dry-run", no_argument, NULL, 'n'},
 		{"strip-extension", required_argument, NULL, 'x'},
@@ -308,10 +316,13 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "dnx:", long_options, NULL)) != -1)
+	while ((c = getopt_long(argc, argv, "bdnx:", long_options, NULL)) != -1)
 	{
 		switch (c)
 		{
+			case 'b': 			/* Remove backup history files too */
+				cleanBackupHistory = true;
+				break;
 			case 'd':			/* Debug mode */
 				pg_logging_increase_verbosity();
 				break;
