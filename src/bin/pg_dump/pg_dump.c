@@ -1067,7 +1067,8 @@ help(const char *progname)
 	printf(_("  -Z, --compress=METHOD[:DETAIL]\n"
 			 "                               compress as specified\n"));
 	printf(_("  --lock-wait-timeout=TIMEOUT  fail after waiting TIMEOUT for a table lock\n"));
-	printf(_("  --no-sync                    do not wait for changes to be written safely to disk\n"));
+	printf(_("  --no-sync                    do not wait for changes to be written safely to\n"
+			 "                               disk\n"));
 	printf(_("  -?, --help                   show this help, then exit\n"));
 
 	printf(_("\nOptions controlling the output content:\n"));

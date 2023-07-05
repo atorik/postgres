@@ -1150,17 +1150,23 @@ help(const char *progname)
 	printf(_("  -S, --exclude-schema=PATTERN    do NOT check matching schema(s)\n"));
 	printf(_("  -t, --table=PATTERN             check matching table(s)\n"));
 	printf(_("  -T, --exclude-table=PATTERN     do NOT check matching table(s)\n"));
-	printf(_("      --no-dependent-indexes      do NOT expand list of relations to include indexes\n"));
-	printf(_("      --no-dependent-toast        do NOT expand list of relations to include TOAST tables\n"));
+	printf(_("      --no-dependent-indexes      do NOT expand list of relations to include\n"
+			 "                                  indexes\n"));
+	printf(_("      --no-dependent-toast        do NOT expand list of relations to include\n"
+			 "                                  TOAST tables\n"));
 	printf(_("      --no-strict-names           do NOT require patterns to match objects\n"));
 	printf(_("\nTable checking options:\n"));
 	printf(_("      --exclude-toast-pointers    do NOT follow relation TOAST pointers\n"));
 	printf(_("      --on-error-stop             stop checking at end of first corrupt page\n"));
-	printf(_("      --skip=OPTION               do NOT check \"all-frozen\" or \"all-visible\" blocks\n"));
-	printf(_("      --startblock=BLOCK          begin checking table(s) at the given block number\n"));
-	printf(_("      --endblock=BLOCK            check table(s) only up to the given block number\n"));
+	printf(_("      --skip=OPTION               do NOT check \"all-frozen\" or \"all-visible\"\n"
+			 "                                  blocks\n"));
+	printf(_("      --startblock=BLOCK          begin checking table(s) at the given block\n"
+			 "                                  number\n"));
+	printf(_("      --endblock=BLOCK            check table(s) only up to the given block\n"
+			 "                                  number\n"));
 	printf(_("\nB-tree index checking options:\n"));
-	printf(_("      --heapallindexed            check that all heap tuples are found within indexes\n"));
+	printf(_("      --heapallindexed            check that all heap tuples are found within\n"
+			 "                                  indexes\n"));
 	printf(_("      --parent-check              check index parent/child relationships\n"));
 	printf(_("      --rootdescend               search from root page to refind tuples\n"));
 	printf(_("\nConnection options:\n"));
@@ -1172,7 +1178,8 @@ help(const char *progname)
 	printf(_("      --maintenance-db=DBNAME     alternate maintenance database\n"));
 	printf(_("\nOther options:\n"));
 	printf(_("  -e, --echo                      show the commands being sent to the server\n"));
-	printf(_("  -j, --jobs=NUM                  use this many concurrent connections to the server\n"));
+	printf(_("  -j, --jobs=NUM                  use this many concurrent connections to the\n"
+			 "                                  server\n"));
 	printf(_("  -P, --progress                  show progress information\n"));
 	printf(_("  -v, --verbose                   write a lot of output\n"));
 	printf(_("  -V, --version                   output version information, then exit\n"));

@@ -275,9 +275,11 @@ usage(void)
 	printf(_("  -c, --check                   check clusters only, don't change any data\n"));
 	printf(_("  -d, --old-datadir=DATADIR     old cluster data directory\n"));
 	printf(_("  -D, --new-datadir=DATADIR     new cluster data directory\n"));
-	printf(_("  -j, --jobs=NUM                number of simultaneous processes or threads to use\n"));
+	printf(_("  -j, --jobs=NUM                number of simultaneous processes or threads to\n"
+			 "                                use\n"));
 	printf(_("  -k, --link                    link instead of copying files to new cluster\n"));
-	printf(_("  -N, --no-sync                 do not wait for changes to be written safely to disk\n"));
+	printf(_("  -N, --no-sync                 do not wait for changes to be written safely to\n"
+			 "                                disk\n"));
 	printf(_("  -o, --old-options=OPTIONS     old cluster options to pass to the server\n"));
 	printf(_("  -O, --new-options=OPTIONS     new cluster options to pass to the server\n"));
 	printf(_("  -p, --old-port=PORT           old cluster port number (default %d)\n"), old_cluster.port);
@@ -303,7 +305,8 @@ usage(void)
 			 "  the \"bin\" directory for the new version (-B BINDIR)\n"));
 	printf(_("\n"
 			 "For example:\n"
-			 "  pg_upgrade -d oldCluster/data -D newCluster/data -b oldCluster/bin -B newCluster/bin\n"
+			 "  pg_upgrade -d oldCluster/data -D newCluster/data\n"
+			 "             -b oldCluster/bin -B newCluster/bin\n"
 			 "or\n"));
 #ifndef WIN32
 	printf(_("  $ export PGDATAOLD=oldCluster/data\n"

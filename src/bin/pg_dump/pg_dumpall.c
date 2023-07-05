@@ -661,7 +661,8 @@ help(void)
 	printf(_("  --no-role-passwords          do not dump passwords for roles\n"));
 	printf(_("  --no-security-labels         do not dump security label assignments\n"));
 	printf(_("  --no-subscriptions           do not dump subscriptions\n"));
-	printf(_("  --no-sync                    do not wait for changes to be written safely to disk\n"));
+	printf(_("  --no-sync                    do not wait for changes to be written safely to\n"
+			 "                               disk\n"));
 	printf(_("  --no-table-access-method     do not dump table access methods\n"));
 	printf(_("  --no-tablespaces             do not dump tablespace assignments\n"));
 	printf(_("  --no-toast-compression       do not dump TOAST compression methods\n"));

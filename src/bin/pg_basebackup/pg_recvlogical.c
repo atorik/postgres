@@ -76,15 +76,19 @@ usage(void)
 	printf(_("Usage:\n"));
 	printf(_("  %s [OPTION]...\n"), progname);
 	printf(_("\nAction to be performed:\n"));
-	printf(_("      --create-slot      create a new replication slot (for the slot's name see --slot)\n"));
-	printf(_("      --drop-slot        drop the replication slot (for the slot's name see --slot)\n"));
-	printf(_("      --start            start streaming in a replication slot (for the slot's name see --slot)\n"));
+	printf(_("      --create-slot      create a new replication slot (for the slot's name see\n"
+			 "                         --slot)\n"));
+	printf(_("      --drop-slot        drop the replication slot (for the slot's name see\n"
+			 "                         --slot)\n"));
+	printf(_("      --start            start streaming in a replication slot (for the slot's\n"
+			 "                         name see --slot)\n"));
 	printf(_("\nOptions:\n"));
 	printf(_("  -E, --endpos=LSN       exit after receiving the specified LSN\n"));
 	printf(_("  -f, --file=FILE        receive log into this file, - for stdout\n"));
 	printf(_("  -F  --fsync-interval=SECS\n"
 			 "                         time between fsyncs to the output file (default: %d)\n"), (fsync_interval / 1000));
-	printf(_("      --if-not-exists    do not error if slot already exists when creating a slot\n"));
+	printf(_("      --if-not-exists    do not error if slot already exists when creating a\n"
+			 "                         slot\n"));
 	printf(_("  -I, --startpos=LSN     where in an existing slot should the streaming start\n"));
 	printf(_("  -n, --no-loop          do not loop on connection lost\n"));
 	printf(_("  -o, --option=NAME[=VALUE]\n"
@@ -92,9 +96,11 @@ usage(void)
 			 "                         output plugin\n"));
 	printf(_("  -P, --plugin=PLUGIN    use output plugin PLUGIN (default: %s)\n"), plugin);
 	printf(_("  -s, --status-interval=SECS\n"
-			 "                         time between status packets sent to server (default: %d)\n"), (standby_message_timeout / 1000));
+			 "                         time between status packets sent to server\n"
+			 "                         (default: %d)\n"), (standby_message_timeout / 1000));
 	printf(_("  -S, --slot=SLOTNAME    name of the logical replication slot\n"));
-	printf(_("  -t, --two-phase        enable decoding of prepared transactions when creating a slot\n"));
+	printf(_("  -t, --two-phase        enable decoding of prepared transactions when creating\n"
+			 "                         a slot\n"));
 	printf(_("  -v, --verbose          output verbose messages\n"));
 	printf(_("  -V, --version          output version information, then exit\n"));
 	printf(_("  -?, --help             show this help, then exit\n"));

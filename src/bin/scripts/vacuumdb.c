@@ -1134,19 +1134,26 @@ help(const char *progname)
 	printf(_("  -e, --echo                      show the commands being sent to the server\n"));
 	printf(_("  -f, --full                      do full vacuuming\n"));
 	printf(_("  -F, --freeze                    freeze row transaction information\n"));
-	printf(_("      --force-index-cleanup       always remove index entries that point to dead tuples\n"));
+	printf(_("      --force-index-cleanup       always remove index entries that point to dead\n"
+			 "                                  tuples\n"));
 	printf(_("  -j, --jobs=NUM                  use this many concurrent connections to vacuum\n"));
 	printf(_("      --min-mxid-age=MXID_AGE     minimum multixact ID age of tables to vacuum\n"));
 	printf(_("      --min-xid-age=XID_AGE       minimum transaction ID age of tables to vacuum\n"));
-	printf(_("      --no-index-cleanup          don't remove index entries that point to dead tuples\n"));
+	printf(_("      --no-index-cleanup          don't remove index entries that point to dead\n"
+			 "                                  tuples\n"));
 	printf(_("      --no-process-main           skip the main relation\n"));
-	printf(_("      --no-process-toast          skip the TOAST table associated with the table to vacuum\n"));
-	printf(_("      --no-truncate               don't truncate empty pages at the end of the table\n"));
+	printf(_("      --no-process-toast          skip the TOAST table associated with the table\n"
+			 "                                  to vacuum\n"));
+	printf(_("      --no-truncate               don't truncate empty pages at the end of the\n"
+			 "                                  table\n"));
 	printf(_("  -n, --schema=PATTERN            vacuum tables in the specified schema(s) only\n"));
-	printf(_("  -N, --exclude-schema=PATTERN    do not vacuum tables in the specified schema(s)\n"));
-	printf(_("  -P, --parallel=PARALLEL_WORKERS use this many background workers for vacuum, if available\n"));
+	printf(_("  -N, --exclude-schema=PATTERN    do not vacuum tables in the specified\n"
+			 "                                  schema(s)\n"));
+	printf(_("  -P, --parallel=PARALLEL_WORKERS use this many background workers for vacuum,\n"
+			 "                                  if available\n"));
 	printf(_("  -q, --quiet                     don't write any messages\n"));
-	printf(_("      --skip-locked               skip relations that cannot be immediately locked\n"));
+	printf(_("      --skip-locked               skip relations that cannot be immediately\n"
+			 "                                  locked\n"));
 	printf(_("  -t, --table='TABLE[(COLUMNS)]'  vacuum specific table(s) only\n"));
 	printf(_("  -v, --verbose                   write a lot of output\n"));
 	printf(_("  -V, --version                   output version information, then exit\n"));

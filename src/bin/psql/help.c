@@ -118,19 +118,22 @@ usage(unsigned short int pager)
 	HELP0("  -H, --html               HTML table output mode\n");
 	HELP0("  -P, --pset=VAR[=ARG]     set printing option VAR to ARG (see \\pset command)\n");
 	HELP0("  -R, --record-separator=STRING\n"
-		  "                           record separator for unaligned output (default: newline)\n");
+		  "                           record separator for unaligned output\n"
+		  "                           (default: newline)\n");
 	HELP0("  -t, --tuples-only        print rows only\n");
 	HELP0("  -T, --table-attr=TEXT    set HTML table tag attributes (e.g., width, border)\n");
 	HELP0("  -x, --expanded           turn on expanded table output\n");
 	HELP0("  -z, --field-separator-zero\n"
 		  "                           set field separator for unaligned output to zero byte\n");
 	HELP0("  -0, --record-separator-zero\n"
-		  "                           set record separator for unaligned output to zero byte\n");
+		  "                           set record separator for unaligned output to zero\n"
+		  "                           byte\n");
 
 	HELP0("\nConnection options:\n");
 	/* Display default host */
 	env = getenv("PGHOST");
-	HELPN("  -h, --host=HOSTNAME      database server host or socket directory (default: \"%s\")\n",
+	HELPN("  -h, --host=HOSTNAME      database server host or socket directory\n"
+		  "                           (default: \"%s\")\n",
 		  env ? env : _("local socket"));
 	/* Display default port */
 	env = getenv("PGPORT");

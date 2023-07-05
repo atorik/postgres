@@ -81,11 +81,13 @@ usage(void)
 	printf(_("\nOptions:\n"));
 	printf(_("  -D, --directory=DIR    receive write-ahead log files into this directory\n"));
 	printf(_("  -E, --endpos=LSN       exit after receiving the specified LSN\n"));
-	printf(_("      --if-not-exists    do not error if slot already exists when creating a slot\n"));
+	printf(_("      --if-not-exists    do not error if slot already exists when creating a\n"
+			 "                         slot\n"));
 	printf(_("  -n, --no-loop          do not loop on connection lost\n"));
 	printf(_("      --no-sync          do not wait for changes to be written safely to disk\n"));
 	printf(_("  -s, --status-interval=SECS\n"
-			 "                         time between status packets sent to server (default: %d)\n"), (standby_message_timeout / 1000));
+			 "                         time between status packets sent to server\n"
+			 "                         (default: %d)\n"), (standby_message_timeout / 1000));
 	printf(_("  -S, --slot=SLOTNAME    replication slot to use\n"));
 	printf(_("      --synchronous      flush write-ahead log immediately after writing\n"));
 	printf(_("  -v, --verbose          output verbose messages\n"));
@@ -101,8 +103,10 @@ usage(void)
 	printf(_("  -w, --no-password      never prompt for password\n"));
 	printf(_("  -W, --password         force password prompt (should happen automatically)\n"));
 	printf(_("\nOptional actions:\n"));
-	printf(_("      --create-slot      create a new replication slot (for the slot's name see --slot)\n"));
-	printf(_("      --drop-slot        drop the replication slot (for the slot's name see --slot)\n"));
+	printf(_("      --create-slot      create a new replication slot (for the slot's name see\n"
+			 "                         --slot)\n"));
+	printf(_("      --drop-slot        drop the replication slot (for the slot's name see\n"
+			 "                         --slot)\n"));
 	printf(_("\nReport bugs to <%s>.\n"), PACKAGE_BUGREPORT);
 	printf(_("%s home page: <%s>\n"), PACKAGE_NAME, PACKAGE_URL);
 }

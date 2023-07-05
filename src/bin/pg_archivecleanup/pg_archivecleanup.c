@@ -267,7 +267,7 @@ usage(void)
 	printf(_("\n"
 			 "Or for use as a standalone archive cleaner:\n"
 			 "e.g.\n"
-			 "  pg_archivecleanup /mnt/server/archiverdir 000000010000000000000010.00000020.backup\n"));
+			 "  pg_archivecleanup archiverdir 000000010000000000000010.00000020.backup\n"));
 	printf(_("\nReport bugs to <%s>.\n"), PACKAGE_BUGREPORT);
 	printf(_("%s home page: <%s>\n"), PACKAGE_NAME, PACKAGE_URL);
 }

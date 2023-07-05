@@ -459,7 +459,8 @@ usage(const char *progname)
 	printf(_("  -S, --superuser=NAME         superuser user name to use for disabling triggers\n"));
 	printf(_("  -t, --table=NAME             restore named relation (table, view, etc.)\n"));
 	printf(_("  -T, --trigger=NAME           restore named trigger\n"));
-	printf(_("  -x, --no-privileges          skip restoration of access privileges (grant/revoke)\n"));
+	printf(_("  -x, --no-privileges          skip restoration of access privileges\n"
+			 "                               (grant/revoke)\n"));
 	printf(_("  -1, --single-transaction     restore as a single transaction\n"));
 	printf(_("  --disable-triggers           disable triggers during data-only restore\n"));
 	printf(_("  --enable-row-security        enable row security\n"));
@@ -472,7 +473,8 @@ usage(const char *progname)
 	printf(_("  --no-subscriptions           do not restore subscriptions\n"));
 	printf(_("  --no-table-access-method     do not restore table access methods\n"));
 	printf(_("  --no-tablespaces             do not restore tablespace assignments\n"));
-	printf(_("  --section=SECTION            restore named section (pre-data, data, or post-data)\n"));
+	printf(_("  --section=SECTION            restore named section (pre-data, data, or\n"
+			 "                               post-data)\n"));
 	printf(_("  --strict-names               require table and/or schema include patterns to\n"
 			 "                               match at least one entity each\n"));
 	printf(_("  --use-set-session-authorization\n"
