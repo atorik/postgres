@@ -5092,6 +5092,8 @@ ProcessLogQueryPlanInterrupt(void)
 	ExplainState *es;
 	HASH_SEQ_STATUS status;
 	LOCALLOCK  *locallock;
+	MemoryContext old_cxt = CurrentMemoryContext;
+	MemoryContext cxt;
 	LogQueryPlanPending = false;
 
 	/* Cannot re-enter. */
@@ -5147,7 +5149,18 @@ ProcessLogQueryPlanInterrupt(void)
 
 	ExplainBeginOutput(es);
 	ExplainQueryText(es, ActiveQueryDesc);
+
+	cxt = AllocSetContextCreate(CurrentMemoryContext,
+											   "log_query_plan temporary context",
+											   ALLOCSET_DEFAULT_SIZES);
+
+	MemoryContextSwitchTo(cxt);
+
 	ExplainPrintPlan(es, ActiveQueryDesc);
+
+	MemoryContextSwitchTo(old_cxt);
+	MemoryContextDelete(cxt);
+
 	ExplainPrintJITSummary(es, ActiveQueryDesc);
 	ExplainEndOutput(es);
 
