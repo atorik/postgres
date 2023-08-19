@@ -1007,6 +1007,8 @@ CopyFrom(CopyFromState cstate)
 		/* Soft error occured, skip this tuple and log the reason */
 		if (cstate->escontext.error_occurred)
 		{
+			ErrorSaveContext new_escontext = {T_ErrorSaveContext};
+
 			/* Adjust elevel so we don't jump out */
 			cstate->escontext.error_data->elevel = WARNING;
 
@@ -1018,7 +1020,6 @@ CopyFrom(CopyFromState cstate)
 
 			ExecClearTuple(myslot);
 
-			ErrorSaveContext new_escontext = {T_ErrorSaveContext};
 			new_escontext.details_wanted = true;
 			cstate->escontext = new_escontext;
 
