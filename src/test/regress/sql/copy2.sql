@@ -504,6 +504,7 @@ DROP VIEW instead_of_insert_tbl_view;
 DROP VIEW instead_of_insert_tbl_view_2;
 DROP FUNCTION fun_instead_of_insert_tbl();
 DROP TABLE check_ign_err;
+DROP TABLE hard_err;
 
 --
 -- COPY FROM ... DEFAULT
