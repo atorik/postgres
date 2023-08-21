@@ -477,6 +477,13 @@ a	{2}	2
 \.
 SELECT * FROM check_ign_err;
 
+
+-- test datatype error that can't be handled as soft: should fail
+CREATE TABLE hard_err(foo widget);
+COPY hard_err FROM STDIN WITH (IGNORE_DATATYPE_ERRORS);
+1
+\.
+
 -- test missing data: should fail
 COPY check_ign_err FROM STDIN WITH (IGNORE_DATATYPE_ERRORS);
 1	{1}

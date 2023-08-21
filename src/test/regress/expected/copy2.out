@@ -683,6 +683,11 @@ SELECT * FROM check_ign_err;
  5 | {5} | 5
 (2 rows)
 
+-- test datatype error that can't be handled as soft: should fail
+CREATE TABLE hard_err(foo widget);
+COPY hard_err FROM STDIN WITH (IGNORE_DATATYPE_ERRORS);
+ERROR:  invalid input syntax for type widget: "1"
+CONTEXT:  COPY hard_err, line 1, column foo: "1"
 -- test missing data: should fail
 COPY check_ign_err FROM STDIN WITH (IGNORE_DATATYPE_ERRORS);
 ERROR:  missing data for column "k"
