@@ -1274,6 +1274,7 @@ JsonManifestWALRangeField
 JsonObjectAgg
 JsonObjectConstructor
 JsonOutput
+JsonParseExpr
 JsonParseContext
 JsonParseErrorType
 JsonPath
@@ -1295,7 +1296,9 @@ JsonPathParseResult
 JsonPathPredicateCallback
 JsonPathString
 JsonReturning
+JsonScalarExpr
 JsonSemAction
+JsonSerializeExpr
 JsonTokenType
 JsonTransformStringValuesAction
 JsonTypeCategory
@@ -1318,7 +1321,6 @@ JsonbIteratorToken
 JsonbPair
 JsonbParseState
 JsonbSubWorkspace
-JsonbTypeCategory
 JsonbValue
 JumbleState
 JunkFilter
@@ -1498,6 +1500,7 @@ LogicalRepStreamAbortData
 LogicalRepTupleData
 LogicalRepTyp
 LogicalRepWorker
+LogicalRepWorkerType
 LogicalRewriteMappingData
 LogicalTape
 LogicalTapeSet
@@ -1684,8 +1687,6 @@ OuterJoinClauseInfo
 OutputPluginCallbacks
 OutputPluginOptions
 OutputPluginOutputType
-OverrideSearchPath
-OverrideStackEntry
 OverridingKind
 PACE_HEADER
 PACL
@@ -2462,6 +2463,7 @@ ScanState
 ScanTypeControl
 ScannerCallbackState
 SchemaQuery
+SearchPathMatcher
 SecBuffer
 SecBufferDesc
 SecLabelItem
@@ -2639,6 +2641,7 @@ Step
 StopList
 StrategyNumber
 StreamCtl
+StreamStopReason
 String
 StringInfo
 StringInfoData
@@ -2989,6 +2992,9 @@ WaitEventActivity
 WaitEventBufferPin
 WaitEventClient
 WaitEventExtension
+WaitEventExtensionCounterData
+WaitEventExtensionEntryById
+WaitEventExtensionEntryByName
 WaitEventIO
 WaitEventIPC
 WaitEventSet
@@ -3859,6 +3865,7 @@ wchar2mb_with_len_converter
 wchar_t
 win32_deadchild_waitinfo
 wint_t
+worker_spi_state
 worker_state
 worktable
 wrap

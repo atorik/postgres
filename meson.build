@@ -746,8 +746,8 @@ endif
 ###############################################################
 
 llvmopt = get_option('llvm')
-if not llvmopt.disabled()
-  add_languages('cpp', required: true, native: false)
+llvm = not_found_dep
+if add_languages('cpp', required: llvmopt, native: false)
   llvm = dependency('llvm', version: '>=3.9', method: 'config-tool', required: llvmopt)
 
   if llvm.found()
@@ -761,8 +761,8 @@ if not llvmopt.disabled()
     ccache = find_program('ccache', native: true, required: false)
     clang = find_program(llvm_binpath / 'clang', required: true)
   endif
-else
-  llvm = not_found_dep
+elif llvmopt.auto()
+  message('llvm requires a C++ compiler')
 endif
 
 
@@ -773,8 +773,8 @@ endif
 
 icuopt = get_option('icu')
 if not icuopt.disabled()
-  icu = dependency('icu-uc', required: icuopt.enabled())
-  icu_i18n = dependency('icu-i18n', required: icuopt.enabled())
+  icu = dependency('icu-uc', required: icuopt)
+  icu_i18n = dependency('icu-i18n', required: icuopt)
 
   if icu.found()
     cdata.set('USE_ICU', 1)
@@ -1058,9 +1058,9 @@ endif
 pyopt = get_option('plpython')
 if not pyopt.disabled()
   pm = import('python')
-  python3_inst = pm.find_installation(required: pyopt.enabled())
-  python3_dep = python3_inst.dependency(embed: true, required: pyopt.enabled())
-  if not cc.check_header('Python.h', dependencies: python3_dep, required: pyopt.enabled())
+  python3_inst = pm.find_installation(required: pyopt)
+  python3_dep = python3_inst.dependency(embed: true, required: pyopt)
+  if not cc.check_header('Python.h', dependencies: python3_dep, required: pyopt)
     python3_dep = not_found_dep
   endif
 else
@@ -1083,7 +1083,7 @@ if not get_option('readline').disabled()
     readline = dependency(readline_dep, required: false)
     if not readline.found()
       readline = cc.find_library(readline_dep,
-        required: get_option('readline').enabled(),
+        required: get_option('readline'),
         dirs: test_lib_d)
     endif
     if readline.found()
@@ -1270,7 +1270,7 @@ if sslopt in ['auto', 'openssl']
       ['CRYPTO_new_ex_data', {'required': true}],
       ['SSL_new', {'required': true}],
 
-      # Functions introduced in OpenSSL 1.0.2, not in LibreSSL.
+      # Function introduced in OpenSSL 1.0.2, not in LibreSSL.
       ['SSL_CTX_set_cert_cb'],
 
       # Functions introduced in OpenSSL 1.1.0. We used to check for
@@ -1382,16 +1382,8 @@ if not zlibopt.disabled()
     warning('did not find zlib')
   elif not cc.has_header('zlib.h',
       args: test_c_args, include_directories: postgres_inc,
-      dependencies: [zlib_t], required: zlibopt.enabled())
+      dependencies: [zlib_t], required: zlibopt)
     warning('zlib header not found')
-  elif not cc.has_type('z_streamp',
-      dependencies: [zlib_t], prefix: '#include <zlib.h>',
-      args: test_c_args, include_directories: postgres_inc)
-    if zlibopt.enabled()
-      error('zlib version is too old')
-    else
-      warning('zlib version is too old')
-    endif
   else
     zlib = zlib_t
   endif
@@ -2073,6 +2065,30 @@ int main(void)
     cdata.set('USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK', 1)
     have_optimized_crc = true
   endif
+
+elif host_cpu == 'loongarch64'
+
+  prog = '''
+int main(void)
+{
+    unsigned int crc = 0;
+    crc = __builtin_loongarch_crcc_w_b_w(0, crc);
+    crc = __builtin_loongarch_crcc_w_h_w(0, crc);
+    crc = __builtin_loongarch_crcc_w_w_w(0, crc);
+    crc = __builtin_loongarch_crcc_w_d_w(0, crc);
+
+    /* return computed value, to prevent the above being optimized away */
+    return crc == 0;
+}
+'''
+
+  if cc.links(prog, name: '__builtin_loongarch_crcc_w_b_w, __builtin_loongarch_crcc_w_h_w, __builtin_loongarch_crcc_w_w_w, and __builtin_loongarch_crcc_w_d_w',
+      args: test_c_args)
+    # Use LoongArch CRC instruction unconditionally
+    cdata.set('USE_LOONGARCH_CRC32C', 1)
+    have_optimized_crc = true
+  endif
+
 endif
 
 if not have_optimized_crc
@@ -2283,17 +2299,13 @@ else
   cdata.set('STRERROR_R_INT', false)
 endif
 
-# Check for the locale_t type and find the right header file.  macOS
-# needs xlocale.h; standard is locale.h, but glibc also has an
-# xlocale.h file that we should not use.  MSVC has a replacement
-# defined in src/include/port/win32_port.h.
-if cc.has_type('locale_t', prefix: '#include <locale.h>')
-  cdata.set('HAVE_LOCALE_T', 1)
-elif cc.has_type('locale_t', prefix: '#include <xlocale.h>')
-  cdata.set('HAVE_LOCALE_T', 1)
+# Find the right header file for the locale_t type.  macOS needs xlocale.h;
+# standard is locale.h, but glibc <= 2.25 also had an xlocale.h file that
+# we should not use so we check the standard header first.  MSVC has a
+# replacement defined in src/include/port/win32_port.h.
+if not cc.has_type('locale_t', prefix: '#include <locale.h>') and \
+   cc.has_type('locale_t', prefix: '#include <xlocale.h>')
   cdata.set('LOCALE_T_IN_XLOCALE', 1)
-elif cc.get_id() == 'msvc'
-  cdata.set('HAVE_LOCALE_T', 1)
 endif
 
 # Check if the C compiler understands typeof or a variant.  Define
@@ -2368,7 +2380,6 @@ rt_dep = cc.find_library('rt', required: false)
 dl_dep = cc.find_library('dl', required: false)
 
 util_dep = cc.find_library('util', required: false)
-posix4_dep = cc.find_library('posix4', required: false)
 
 getopt_dep = cc.find_library('getopt', required: false)
 gnugetopt_dep = cc.find_library('gnugetopt', required: false)
@@ -2402,14 +2413,13 @@ endif
 func_checks = [
   ['_configthreadlocale', {'skip': host_system != 'windows'}],
   ['backtrace_symbols', {'dependencies': [execinfo_dep]}],
-  ['clock_gettime', {'dependencies': [rt_dep, posix4_dep], 'define': false}],
+  ['clock_gettime', {'dependencies': [rt_dep], 'define': false}],
   ['copyfile'],
   # gcc/clang's sanitizer helper library provides dlopen but not dlsym, thus
   # when enabling asan the dlopen check doesn't notice that -ldl is actually
   # required. Just checking for dlsym() ought to suffice.
   ['dlsym', {'dependencies': [dl_dep], 'define': false}],
   ['explicit_bzero'],
-  ['fdatasync', {'dependencies': [rt_dep, posix4_dep], 'define': false}], # Solaris
   ['getifaddrs'],
   ['getopt', {'dependencies': [getopt_dep, gnugetopt_dep], 'skip': always_replace_getopt}],
   ['getopt_long', {'dependencies': [getopt_dep, gnugetopt_dep], 'skip': always_replace_getopt_long}],
@@ -2489,13 +2499,6 @@ if cc.has_function('syslog', args: test_c_args) and \
 endif
 
 
-# MSVC has replacements defined in src/include/port/win32_port.h.
-if cc.get_id() == 'msvc'
-  cdata.set('HAVE_WCSTOMBS_L', 1)
-  cdata.set('HAVE_MBSTOWCS_L', 1)
-endif
-
-
 # if prerequisites for unnamed posix semas aren't fulfilled, fall back to sysv
 # semaphores
 if sema_kind == 'unnamed_posix' and \
@@ -2519,17 +2522,6 @@ cdata.set_quoted('PG_VERSION_STR',
 )
 
 
-
-###############################################################
-# Threading
-###############################################################
-
-# XXX: About to rely on thread safety in the autoconf build, so not worth
-# implementing a fallback.
-cdata.set('ENABLE_THREAD_SAFETY', 1)
-
-
-
 ###############################################################
 # NLS / Gettext
 ###############################################################
@@ -2541,7 +2533,7 @@ if not nlsopt.disabled()
   # otherwise there'd be lots of
   # "Gettext not found, all translation (po) targets will be ignored."
   # warnings if not found.
-  msgfmt = find_program('msgfmt', required: nlsopt.enabled(), native: true)
+  msgfmt = find_program('msgfmt', required: nlsopt, native: true)
 
   # meson 0.59 has this wrapped in dependency('intl')
   if (msgfmt.found() and
