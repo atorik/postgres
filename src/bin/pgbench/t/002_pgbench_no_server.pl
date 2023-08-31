@@ -235,6 +235,7 @@ for my $o (@options)
 }
 
 # Help
+program_help_ok('pgbench');
 pgbench(
 	'--help', 0,
 	[

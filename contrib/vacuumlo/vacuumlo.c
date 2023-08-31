@@ -417,7 +417,8 @@ usage(const char *progname)
 	printf("Usage:\n  %s [OPTION]... DBNAME...\n\n", progname);
 	printf("Options:\n");
 	printf("  -l, --limit=LIMIT         commit after removing each LIMIT large objects\n");
-	printf("  -n, --dry-run             don't remove large objects, just show what would be done\n");
+	printf("  -n, --dry-run             don't remove large objects, just show what would be\n"
+		   "                            done\n");
 	printf("  -v, --verbose             write a lot of progress messages\n");
 	printf("  -V, --version             output version information, then exit\n");
 	printf("  -?, --help                show this help, then exit\n");

@@ -29,3 +29,4 @@ clean distclean maintainer-clean:
 checktcp: | temp-install
 check checktcp installcheck:
 	$(MAKE) -C test $@
+	$(prove_check)

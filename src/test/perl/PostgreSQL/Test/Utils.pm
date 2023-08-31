@@ -843,6 +843,16 @@ sub program_help_ok
 	ok($result, "$cmd --help exit code 0");
 	isnt($stdout, '', "$cmd --help goes to stdout");
 	is($stderr, '', "$cmd --help nothing to stderr");
+	foreach my $line (split /\n/, $stdout)
+	{
+		if (length($line) > 80)
+		{
+			# Ignore embedded PGHOST, which can be long length
+			$line =~ s/$ENV{PGHOST}//;
+		}
+		ok(length($line) <= 80,
+			 "$cmd --help outputs fit within 80 columns per line");
+	}
 	return;
 }
 
