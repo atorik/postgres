@@ -949,6 +949,7 @@ CREATE VIEW pg_stat_subscription AS
     SELECT
             su.oid AS subid,
             su.subname,
+            st.worker_type,
             st.pid,
             st.leader_pid,
             st.relid,
@@ -1342,3 +1343,6 @@ CREATE VIEW pg_stat_subscription_stats AS
         ss.stats_reset
     FROM pg_subscription as s,
          pg_stat_get_subscription_stats(s.oid) as ss;
+
+CREATE VIEW pg_wait_events AS
+    SELECT * FROM pg_get_wait_events();

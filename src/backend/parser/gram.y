@@ -3419,9 +3419,17 @@ copy_opt_item:
 				{
 					$$ = makeDefElem("force_not_null", (Node *) $4, @1);
 				}
+			| FORCE NOT NULL_P '*'
+				{
+					$$ = makeDefElem("force_not_null", (Node *) makeNode(A_Star), @1);
+				}
 			| FORCE NULL_P columnList
 				{
 					$$ = makeDefElem("force_null", (Node *) $3, @1);
+				}
+			| FORCE NULL_P '*'
+				{
+					$$ = makeDefElem("force_null", (Node *) makeNode(A_Star), @1);
 				}
 			| ENCODING Sconst
 				{
@@ -3837,12 +3845,15 @@ ColConstraint:
  * or be part of a_expr NOT LIKE or similar constructs).
  */
 ColConstraintElem:
-			NOT NULL_P
+			NOT NULL_P opt_no_inherit
 				{
 					Constraint *n = makeNode(Constraint);
 
 					n->contype = CONSTR_NOTNULL;
 					n->location = @1;
+					n->is_no_inherit = $3;
+					n->skip_validation = false;
+					n->initially_valid = true;
 					$$ = (Node *) n;
 				}
 			| NULL_P
@@ -4077,6 +4088,20 @@ ConstraintElem:
 								   NULL, NULL, &n->skip_validation,
 								   &n->is_no_inherit, yyscanner);
 					n->initially_valid = !n->skip_validation;
+					$$ = (Node *) n;
+				}
+			| NOT NULL_P ColId ConstraintAttributeSpec
+				{
+					Constraint *n = makeNode(Constraint);
+
+					n->contype = CONSTR_NOTNULL;
+					n->location = @1;
+					n->keys = list_make1(makeString($3));
+					/* no NOT VALID support yet */
+					processCASbits($4, @4, "NOT NULL",
+								   NULL, NULL, NULL,
+								   &n->is_no_inherit, yyscanner);
+					n->initially_valid = true;
 					$$ = (Node *) n;
 				}
 			| UNIQUE opt_unique_null_treatment '(' columnList ')' opt_c_include opt_definition OptConsTableSpace
@@ -6386,6 +6411,33 @@ AlterEnumStmt:
 				n->newValIsAfter = false;
 				n->skipIfNewValExists = false;
 				$$ = (Node *) n;
+			}
+		 | ALTER TYPE_P any_name DROP VALUE_P Sconst
+			{
+				/*
+				 * The following problems must be solved before this can be
+				 * implemented:
+				 *
+				 * - There must be no instance of the target value in
+				 *   any table.
+				 *
+				 * - The value must not appear in any catalog metadata,
+				 *   such as stored view expressions or column defaults.
+				 *
+				 * - The value must not appear in any non-leaf page of a
+				 *   btree (and similar issues with other index types).
+				 *   This is problematic because a value could persist
+				 *   there long after it's gone from user-visible data.
+				 *
+				 * - Concurrent sessions must not be able to insert the
+				 *   value while the preceding conditions are being checked.
+				 *
+				 * - Possibly more...
+				 */
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("dropping an enum value is not implemented"),
+						 parser_errposition(@4)));
 			}
 		 ;
 
@@ -11936,6 +11988,8 @@ DeallocateStmt: DEALLOCATE name
 						DeallocateStmt *n = makeNode(DeallocateStmt);
 
 						n->name = $2;
+						n->isall = false;
+						n->location = @2;
 						$$ = (Node *) n;
 					}
 				| DEALLOCATE PREPARE name
@@ -11943,6 +11997,8 @@ DeallocateStmt: DEALLOCATE name
 						DeallocateStmt *n = makeNode(DeallocateStmt);
 
 						n->name = $3;
+						n->isall = false;
+						n->location = @3;
 						$$ = (Node *) n;
 					}
 				| DEALLOCATE ALL
@@ -11950,6 +12006,8 @@ DeallocateStmt: DEALLOCATE name
 						DeallocateStmt *n = makeNode(DeallocateStmt);
 
 						n->name = NULL;
+						n->isall = true;
+						n->location = -1;
 						$$ = (Node *) n;
 					}
 				| DEALLOCATE PREPARE ALL
@@ -11957,6 +12015,8 @@ DeallocateStmt: DEALLOCATE name
 						DeallocateStmt *n = makeNode(DeallocateStmt);
 
 						n->name = NULL;
+						n->isall = true;
+						n->location = -1;
 						$$ = (Node *) n;
 					}
 		;

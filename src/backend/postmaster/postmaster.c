@@ -94,6 +94,7 @@
 #include "access/xlogrecovery.h"
 #include "catalog/pg_control.h"
 #include "common/file_perm.h"
+#include "common/file_utils.h"
 #include "common/ip.h"
 #include "common/pg_prng.h"
 #include "common/string.h"
@@ -226,7 +227,8 @@ int			ReservedConnections;
 
 /* The socket(s) we're listening to. */
 #define MAXLISTEN	64
-static pgsocket ListenSocket[MAXLISTEN];
+static int	NumListenSockets = 0;
+static pgsocket *ListenSockets = NULL;
 
 /* still more option variables */
 bool		EnableSSL = false;
@@ -496,7 +498,6 @@ typedef struct
 	Port		port;
 	InheritableSocket portsocket;
 	char		DataDir[MAXPGPATH];
-	pgsocket	ListenSocket[MAXLISTEN];
 	int32		MyCancelKey;
 	int			MyPMChildSlot;
 #ifndef WIN32
@@ -588,7 +589,6 @@ PostmasterMain(int argc, char *argv[])
 	int			status;
 	char	   *userDoption = NULL;
 	bool		listen_addr_saved = false;
-	int			i;
 	char	   *output_config_variable = NULL;
 
 	InitProcessGlobals();
@@ -1177,12 +1177,10 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * Establish input sockets.
 	 *
-	 * First, mark them all closed, and set up an on_proc_exit function that's
-	 * charged with closing the sockets again at postmaster shutdown.
+	 * First set up an on_proc_exit function that's charged with closing the
+	 * sockets again at postmaster shutdown.
 	 */
-	for (i = 0; i < MAXLISTEN; i++)
-		ListenSocket[i] = PGINVALID_SOCKET;
-
+	ListenSockets = palloc(MAXLISTEN * sizeof(pgsocket));
 	on_proc_exit(CloseServerPorts, 0);
 
 	if (ListenAddresses)
@@ -1213,12 +1211,16 @@ PostmasterMain(int argc, char *argv[])
 				status = StreamServerPort(AF_UNSPEC, NULL,
 										  (unsigned short) PostPortNumber,
 										  NULL,
-										  ListenSocket, MAXLISTEN);
+										  ListenSockets,
+										  &NumListenSockets,
+										  MAXLISTEN);
 			else
 				status = StreamServerPort(AF_UNSPEC, curhost,
 										  (unsigned short) PostPortNumber,
 										  NULL,
-										  ListenSocket, MAXLISTEN);
+										  ListenSockets,
+										  &NumListenSockets,
+										  MAXLISTEN);
 
 			if (status == STATUS_OK)
 			{
@@ -1246,7 +1248,7 @@ PostmasterMain(int argc, char *argv[])
 
 #ifdef USE_BONJOUR
 	/* Register for Bonjour only if we opened TCP socket(s) */
-	if (enable_bonjour && ListenSocket[0] != PGINVALID_SOCKET)
+	if (enable_bonjour && NumListenSockets > 0)
 	{
 		DNSServiceErrorType err;
 
@@ -1310,7 +1312,9 @@ PostmasterMain(int argc, char *argv[])
 			status = StreamServerPort(AF_UNIX, NULL,
 									  (unsigned short) PostPortNumber,
 									  socketdir,
-									  ListenSocket, MAXLISTEN);
+									  ListenSockets,
+									  &NumListenSockets,
+									  MAXLISTEN);
 
 			if (status == STATUS_OK)
 			{
@@ -1336,7 +1340,7 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * check that we have some socket to listen on
 	 */
-	if (ListenSocket[0] == PGINVALID_SOCKET)
+	if (NumListenSockets == 0)
 		ereport(FATAL,
 				(errmsg("no socket created for listening")));
 
@@ -1484,14 +1488,9 @@ CloseServerPorts(int status, Datum arg)
 	 * before we remove the postmaster.pid lockfile; otherwise there's a race
 	 * condition if a new postmaster wants to re-use the TCP port number.
 	 */
-	for (i = 0; i < MAXLISTEN; i++)
-	{
-		if (ListenSocket[i] != PGINVALID_SOCKET)
-		{
-			StreamClose(ListenSocket[i]);
-			ListenSocket[i] = PGINVALID_SOCKET;
-		}
-	}
+	for (i = 0; i < NumListenSockets; i++)
+		StreamClose(ListenSockets[i]);
+	NumListenSockets = 0;
 
 	/*
 	 * Next, remove any filesystem entries for Unix sockets.  To avoid race
@@ -1692,29 +1691,19 @@ DetermineSleepTime(void)
 static void
 ConfigurePostmasterWaitSet(bool accept_connections)
 {
-	int			nsockets;
-
 	if (pm_wait_set)
 		FreeWaitEventSet(pm_wait_set);
 	pm_wait_set = NULL;
 
-	/* How many server sockets do we need to wait for? */
-	nsockets = 0;
-	if (accept_connections)
-	{
-		while (nsockets < MAXLISTEN &&
-			   ListenSocket[nsockets] != PGINVALID_SOCKET)
-			++nsockets;
-	}
-
-	pm_wait_set = CreateWaitEventSet(CurrentMemoryContext, 1 + nsockets);
+	pm_wait_set = CreateWaitEventSet(CurrentMemoryContext,
+									 accept_connections ? (1 + NumListenSockets) : 1);
 	AddWaitEventToSet(pm_wait_set, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch,
 					  NULL);
 
 	if (accept_connections)
 	{
-		for (int i = 0; i < nsockets; i++)
-			AddWaitEventToSet(pm_wait_set, WL_SOCKET_ACCEPT, ListenSocket[i],
+		for (int i = 0; i < NumListenSockets; i++)
+			AddWaitEventToSet(pm_wait_set, WL_SOCKET_ACCEPT, ListenSockets[i],
 							  NULL, NULL);
 	}
 }
@@ -2357,7 +2346,7 @@ SendNegotiateProtocolVersion(List *unrecognized_protocol_options)
 	StringInfoData buf;
 	ListCell   *lc;
 
-	pq_beginmessage(&buf, 'v'); /* NegotiateProtocolVersion */
+	pq_beginmessage(&buf, PqMsg_NegotiateProtocolVersion);
 	pq_sendint32(&buf, PG_PROTOCOL_LATEST);
 	pq_sendint32(&buf, list_length(unrecognized_protocol_options));
 	foreach(lc, unrecognized_protocol_options)
@@ -2545,8 +2534,6 @@ ConnFree(Port *port)
 void
 ClosePostmasterPorts(bool am_syslogger)
 {
-	int			i;
-
 	/* Release resources held by the postmaster's WaitEventSet. */
 	if (pm_wait_set)
 	{
@@ -2573,15 +2560,20 @@ ClosePostmasterPorts(bool am_syslogger)
 	/*
 	 * Close the postmaster's listen sockets.  These aren't tracked by fd.c,
 	 * so we don't call ReleaseExternalFD() here.
+	 *
+	 * The listen sockets are marked as FD_CLOEXEC, so this isn't needed in
+	 * EXEC_BACKEND mode.
 	 */
-	for (i = 0; i < MAXLISTEN; i++)
+#ifndef EXEC_BACKEND
+	if (ListenSockets)
 	{
-		if (ListenSocket[i] != PGINVALID_SOCKET)
-		{
-			StreamClose(ListenSocket[i]);
-			ListenSocket[i] = PGINVALID_SOCKET;
-		}
+		for (int i = 0; i < NumListenSockets; i++)
+			StreamClose(ListenSockets[i]);
+		pfree(ListenSockets);
 	}
+	NumListenSockets = 0;
+	ListenSockets = NULL;
+#endif
 
 	/*
 	 * If using syslogger, close the read side of the pipe.  We don't bother
@@ -6038,8 +6030,6 @@ save_backend_variables(BackendParameters *param, Port *port,
 
 	strlcpy(param->DataDir, DataDir, MAXPGPATH);
 
-	memcpy(&param->ListenSocket, &ListenSocket, sizeof(ListenSocket));
-
 	param->MyCancelKey = MyCancelKey;
 	param->MyPMChildSlot = MyPMChildSlot;
 
@@ -6270,8 +6260,6 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	read_inheritable_socket(&port->sock, &param->portsocket);
 
 	SetDataDir(param->DataDir);
-
-	memcpy(&ListenSocket, &param->ListenSocket, sizeof(ListenSocket));
 
 	MyCancelKey = param->MyCancelKey;
 	MyPMChildSlot = param->MyPMChildSlot;

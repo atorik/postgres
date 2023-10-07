@@ -468,38 +468,43 @@ retry:
 	bgw.bgw_start_time = BgWorkerStart_RecoveryFinished;
 	snprintf(bgw.bgw_library_name, MAXPGPATH, "postgres");
 
-	if (is_parallel_apply_worker)
+	switch (worker->type)
 	{
-		snprintf(bgw.bgw_function_name, BGW_MAXLEN, "ParallelApplyWorkerMain");
-		snprintf(bgw.bgw_name, BGW_MAXLEN,
-				 "logical replication parallel apply worker for subscription %u",
-				 subid);
-		snprintf(bgw.bgw_type, BGW_MAXLEN, "logical replication parallel worker");
-	}
-	else if (is_tablesync_worker)
-	{
-		snprintf(bgw.bgw_function_name, BGW_MAXLEN, "TablesyncWorkerMain");
-		snprintf(bgw.bgw_name, BGW_MAXLEN,
-				 "logical replication tablesync worker for subscription %u sync %u",
-				 subid,
-				 relid);
-		snprintf(bgw.bgw_type, BGW_MAXLEN, "logical replication tablesync worker");
-	}
-	else
-	{
-		snprintf(bgw.bgw_function_name, BGW_MAXLEN, "ApplyWorkerMain");
-		snprintf(bgw.bgw_name, BGW_MAXLEN,
-				 "logical replication apply worker for subscription %u",
-				 subid);
-		snprintf(bgw.bgw_type, BGW_MAXLEN, "logical replication apply worker");
+		case WORKERTYPE_APPLY:
+			snprintf(bgw.bgw_function_name, BGW_MAXLEN, "ApplyWorkerMain");
+			snprintf(bgw.bgw_name, BGW_MAXLEN,
+					 "logical replication apply worker for subscription %u",
+					 subid);
+			snprintf(bgw.bgw_type, BGW_MAXLEN, "logical replication apply worker");
+			break;
+
+		case WORKERTYPE_PARALLEL_APPLY:
+			snprintf(bgw.bgw_function_name, BGW_MAXLEN, "ParallelApplyWorkerMain");
+			snprintf(bgw.bgw_name, BGW_MAXLEN,
+					 "logical replication parallel apply worker for subscription %u",
+					 subid);
+			snprintf(bgw.bgw_type, BGW_MAXLEN, "logical replication parallel worker");
+
+			memcpy(bgw.bgw_extra, &subworker_dsm, sizeof(dsm_handle));
+			break;
+
+		case WORKERTYPE_TABLESYNC:
+			snprintf(bgw.bgw_function_name, BGW_MAXLEN, "TablesyncWorkerMain");
+			snprintf(bgw.bgw_name, BGW_MAXLEN,
+					 "logical replication tablesync worker for subscription %u sync %u",
+					 subid,
+					 relid);
+			snprintf(bgw.bgw_type, BGW_MAXLEN, "logical replication tablesync worker");
+			break;
+
+		case WORKERTYPE_UNKNOWN:
+			/* Should never happen. */
+			elog(ERROR, "unknown worker type");
 	}
 
 	bgw.bgw_restart_time = BGW_NEVER_RESTART;
 	bgw.bgw_notify_pid = MyProcPid;
 	bgw.bgw_main_arg = Int32GetDatum(slot);
-
-	if (is_parallel_apply_worker)
-		memcpy(bgw.bgw_extra, &subworker_dsm, sizeof(dsm_handle));
 
 	if (!RegisterDynamicBackgroundWorker(&bgw, &bgw_handle))
 	{
@@ -788,6 +793,7 @@ logicalrep_worker_cleanup(LogicalRepWorker *worker)
 {
 	Assert(LWLockHeldByMeInMode(LogicalRepWorkerLock, LW_EXCLUSIVE));
 
+	worker->type = WORKERTYPE_UNKNOWN;
 	worker->in_use = false;
 	worker->proc = NULL;
 	worker->dbid = InvalidOid;
@@ -857,7 +863,7 @@ logicalrep_sync_worker_count(Oid subid)
 	{
 		LogicalRepWorker *w = &LogicalRepCtx->workers[i];
 
-		if (w->subid == subid && isTablesyncWorker(w))
+		if (isTablesyncWorker(w) && w->subid == subid)
 			res++;
 	}
 
@@ -884,7 +890,7 @@ logicalrep_pa_worker_count(Oid subid)
 	{
 		LogicalRepWorker *w = &LogicalRepCtx->workers[i];
 
-		if (w->subid == subid && isParallelApplyWorker(w))
+		if (isParallelApplyWorker(w) && w->subid == subid)
 			res++;
 	}
 
@@ -1272,7 +1278,7 @@ GetLeaderApplyWorkerPid(pid_t pid)
 Datum
 pg_stat_get_subscription(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_SUBSCRIPTION_COLS	9
+#define PG_STAT_GET_SUBSCRIPTION_COLS	10
 	Oid			subid = PG_ARGISNULL(0) ? InvalidOid : PG_GETARG_OID(0);
 	int			i;
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
@@ -1332,6 +1338,22 @@ pg_stat_get_subscription(PG_FUNCTION_ARGS)
 			nulls[8] = true;
 		else
 			values[8] = TimestampTzGetDatum(worker.reply_time);
+
+		switch (worker.type)
+		{
+			case WORKERTYPE_APPLY:
+				values[9] = CStringGetTextDatum("apply");
+				break;
+			case WORKERTYPE_PARALLEL_APPLY:
+				values[9] = CStringGetTextDatum("parallel apply");
+				break;
+			case WORKERTYPE_TABLESYNC:
+				values[9] = CStringGetTextDatum("table synchronization");
+				break;
+			case WORKERTYPE_UNKNOWN:
+				/* Should never happen. */
+				elog(ERROR, "unknown worker type");
+		}
 
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,
 							 values, nulls);

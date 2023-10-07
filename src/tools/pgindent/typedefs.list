@@ -319,6 +319,7 @@ BufferDesc
 BufferDescPadded
 BufferHeapTupleTableSlot
 BufferLookupEnt
+BufferManagerRelation
 BufferStrategyControl
 BufferTag
 BufferUsage
@@ -544,6 +545,7 @@ DR_printtup
 DR_sqlfunction
 DR_transientrel
 DWORD
+DataDirSyncMethod
 DataDumperPtr
 DataPageDeleteStack
 DatabaseInfo
@@ -713,7 +715,6 @@ ExprEvalStep
 ExprSetupInfo
 ExprState
 ExprStateEvalFunc
-ExtendBufferedWhat
 ExtensibleNode
 ExtensibleNodeEntry
 ExtensibleNodeMethods
@@ -1659,8 +1660,6 @@ OffsetVarNodes_context
 Oid
 OidOptions
 OkeysState
-OldSnapshotControlData
-OldSnapshotTimeMapping
 OldToNewMapping
 OldToNewMappingData
 OnCommitAction
@@ -2152,6 +2151,7 @@ ProjectionPath
 PromptInterruptContext
 ProtocolVersion
 PrsStorage
+PruneResult
 PruneState
 PruneStepResult
 PsqlScanCallbacks
@@ -2252,6 +2252,7 @@ ReadLocalXLogPageNoWaitPrivate
 ReadReplicationSlotCmd
 ReassignOwnedStmt
 RecheckForeignScan_function
+RecordCacheArrayEntry
 RecordCacheEntry
 RecordCompareData
 RecordIOData
@@ -3198,6 +3199,7 @@ bbstreamer_tar_archiver
 bbstreamer_tar_parser
 bbstreamer_zstd_frame
 bgworker_main_type
+bh_node_type
 binaryheap
 binaryheap_comparator
 bitmapword
@@ -3479,6 +3481,7 @@ mbstr_verifier
 memoize_hash
 memoize_iterator
 metastring
+missing_cache_key
 mix_data_t
 mixedStruct
 mode_t
