@@ -1664,8 +1664,8 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 
 			/*
 			 * If the result of prechecking required keys was true, then in
-			 * assert-enabled builds we also recheck that _bt_checkkeys()
-			 * result is is the same.
+			 * assert-enabled builds we also recheck that the _bt_checkkeys()
+			 * result is the same.
 			 */
 			Assert(!requiredMatchedByPrecheck ||
 				   passes_quals == _bt_checkkeys(scan, itup, indnatts, dir,
@@ -1783,8 +1783,8 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 
 			/*
 			 * If the result of prechecking required keys was true, then in
-			 * assert-enabled builds we also recheck that _bt_checkkeys()
-			 * result is is the same.
+			 * assert-enabled builds we also recheck that the _bt_checkkeys()
+			 * result is the same.
 			 */
 			Assert(!requiredMatchedByPrecheck ||
 				   passes_quals == _bt_checkkeys(scan, itup, indnatts, dir,
