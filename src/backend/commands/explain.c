@@ -5139,13 +5139,26 @@ ProcessLogQueryPlanInterrupt(void)
 		if (LOCALLOCK_LOCKTAG(*locallock) == LOCKTAG_PAGE)
 		{
 			ereport(LOG_SERVER_ONLY,
-				errmsg("ignored request for logging query plan due to lock confilcts"),
+				errmsg("ignored request for logging query plan due to page lock confilcts"),
 				errdetail("You can try again in a moment."));
 			hash_seq_term(&status);
 
 			ProcessLogQueryPlanInterruptActive = false;
 			return;
 		}
+	}
+
+	/*
+	 * Ensure no locks already held on the lockable object.
+	 *
+	 * Otherwise EXPLAIN can be also hold on it.
+	 */
+	if (MyProc->heldLocks)
+	{
+		ereport(LOG_SERVER_ONLY,
+			errmsg("ignored request for logging query plan due to lock confilcts"),
+			errdetail("You can try again in a moment."));
+			return;
 	}
 
 	es = NewExplainState();
