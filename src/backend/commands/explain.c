@@ -32,6 +32,7 @@
 #include "storage/procarray.h"
 #include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
+#include "utils/backend_status.h"
 #include "utils/builtins.h"
 #include "utils/guc_tables.h"
 #include "utils/json.h"
@@ -5161,6 +5162,12 @@ ProcessLogQueryPlanInterrupt(void)
 			return;
 	}
 
+	cxt = AllocSetContextCreate(CurrentMemoryContext,
+								"log_query_plan temporary context",
+								ALLOCSET_DEFAULT_SIZES);
+
+	old_cxt = MemoryContextSwitchTo(cxt);
+
 	es = NewExplainState();
 
 	es->format = EXPLAIN_FORMAT_TEXT;
@@ -5171,15 +5178,7 @@ ProcessLogQueryPlanInterrupt(void)
 	ExplainBeginOutput(es);
 	ExplainQueryText(es, ActiveQueryDesc);
 
-	cxt = AllocSetContextCreate(CurrentMemoryContext,
-								"log_query_plan temporary context",
-								ALLOCSET_DEFAULT_SIZES);
-	old_cxt = MemoryContextSwitchTo(cxt);
-
 	ExplainPrintPlan(es, ActiveQueryDesc);
-
-	MemoryContextSwitchTo(old_cxt);
-	MemoryContextDelete(cxt);
 
 	ExplainPrintJITSummary(es, ActiveQueryDesc);
 	ExplainEndOutput(es);
@@ -5193,6 +5192,9 @@ ProcessLogQueryPlanInterrupt(void)
 					MyProcPid, es->str->data),
 			 errhidestmt(true),
 			 errhidecontext(true));
+
+	MemoryContextSwitchTo(old_cxt);
+	MemoryContextDelete(cxt);
 
 	ProcessLogQueryPlanInterruptActive = false;
 }
@@ -5211,6 +5213,7 @@ pg_log_query_plan(PG_FUNCTION_ARGS)
 {
 	int			pid = PG_GETARG_INT32(0);
 	PGPROC	   *proc;
+	PgBackendStatus	*be_status;
 
 	proc = BackendPidGetProc(pid);
 
@@ -5222,6 +5225,14 @@ pg_log_query_plan(PG_FUNCTION_ARGS)
 		 */
 		ereport(WARNING,
 				(errmsg("PID %d is not a PostgreSQL backend process", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
+	be_status = pgstat_get_beentry_by_backend_id(proc->backendId);
+	if (be_status->st_backendType != B_BACKEND)
+	{
+		ereport(WARNING,
+				(errmsg("PID %d is not a PostgreSQL client backend process", pid)));
 		PG_RETURN_BOOL(false);
 	}
 
