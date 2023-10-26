@@ -96,6 +96,10 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 						   const instr_time *planduration,
 						   const BufferUsage *bufusage);
 
+extern void ExplainAssembleLogOutput(ExplainState *es, QueryDesc *queryDesc,
+									 int logFormat, bool logTriggers,
+									 int logParameterMaxLength);
+
 extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);
 extern void ExplainPrintTriggers(ExplainState *es, QueryDesc *queryDesc);
 
