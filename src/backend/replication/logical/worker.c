@@ -3582,10 +3582,7 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 					/* Ensure we are reading the data into our memory context. */
 					MemoryContextSwitchTo(ApplyMessageContext);
 
-					s.data = buf;
-					s.len = len;
-					s.cursor = 0;
-					s.maxlen = -1;
+					initReadOnlyStringInfo(&s, buf, len);
 
 					c = pq_getmsgbyte(&s);
 
@@ -3962,6 +3959,24 @@ maybe_reread_subscription(void)
 			ereport(LOG,
 					(errmsg("logical replication worker for subscription \"%s\" will restart because of a parameter change",
 							MySubscription->name)));
+
+		apply_worker_exit();
+	}
+
+	/*
+	 * Exit if the subscription owner's superuser privileges have been
+	 * revoked.
+	 */
+	if (!newsub->ownersuperuser && MySubscription->ownersuperuser)
+	{
+		if (am_parallel_apply_worker())
+			ereport(LOG,
+					errmsg("logical replication parallel apply worker for subscription \"%s\" will stop because the subscription owner's superuser privileges have been revoked",
+						   MySubscription->name));
+		else
+			ereport(LOG,
+					errmsg("logical replication worker for subscription \"%s\" will restart because the subscription owner's superuser privileges have been revoked",
+						   MySubscription->name));
 
 		apply_worker_exit();
 	}
@@ -4492,13 +4507,11 @@ run_apply_worker()
 	replorigin_session_setup(originid, 0);
 	replorigin_session_origin = originid;
 	origin_startpos = replorigin_session_get_progress(false);
+	CommitTransactionCommand();
 
 	/* Is the use of a password mandatory? */
 	must_use_password = MySubscription->passwordrequired &&
-		!superuser_arg(MySubscription->owner);
-
-	/* Note that the superuser_arg call can access the DB */
-	CommitTransactionCommand();
+		!MySubscription->ownersuperuser;
 
 	LogRepWorkerWalRcvConn = walrcv_connect(MySubscription->conninfo, true,
 											must_use_password,
@@ -4621,8 +4634,15 @@ InitializeLogRepWorker(void)
 	SetConfigOption("synchronous_commit", MySubscription->synccommit,
 					PGC_BACKEND, PGC_S_OVERRIDE);
 
-	/* Keep us informed about subscription changes. */
+	/*
+	 * Keep us informed about subscription or role changes. Note that the
+	 * role's superuser privilege can be revoked.
+	 */
 	CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
+								  subscription_change_cb,
+								  (Datum) 0);
+
+	CacheRegisterSyscacheCallback(AUTHOID,
 								  subscription_change_cb,
 								  (Datum) 0);
 

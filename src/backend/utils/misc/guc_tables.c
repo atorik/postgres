@@ -485,7 +485,7 @@ static const struct config_enum_entry wal_compression_options[] = {
 extern const struct config_enum_entry wal_level_options[];
 extern const struct config_enum_entry archive_mode_options[];
 extern const struct config_enum_entry recovery_target_action_options[];
-extern const struct config_enum_entry sync_method_options[];
+extern const struct config_enum_entry wal_sync_method_options[];
 extern const struct config_enum_entry dynamic_shared_memory_options[];
 
 /*
@@ -1024,6 +1024,16 @@ struct config_bool ConfigureNamesBool[] =
 			GUC_EXPLAIN
 		},
 		&enable_async_append,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"enable_self_join_removal", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enable removal of unique self-joins."),
+			NULL,
+			GUC_EXPLAIN | GUC_NOT_IN_SAMPLE
+		},
+		&enable_self_join_removal,
 		true,
 		NULL, NULL, NULL
 	},
@@ -4843,9 +4853,9 @@ struct config_enum ConfigureNamesEnum[] =
 			gettext_noop("Selects the method used for forcing WAL updates to disk."),
 			NULL
 		},
-		&sync_method,
-		DEFAULT_SYNC_METHOD, sync_method_options,
-		NULL, assign_xlog_sync_method, NULL
+		&wal_sync_method,
+		DEFAULT_WAL_SYNC_METHOD, wal_sync_method_options,
+		NULL, assign_wal_sync_method, NULL
 	},
 
 	{

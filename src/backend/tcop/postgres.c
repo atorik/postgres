@@ -36,6 +36,7 @@
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "commands/async.h"
+#include "commands/event_trigger.h"
 #include "commands/explain.h"
 #include "commands/prepare.h"
 #include "common/pg_prng.h"
@@ -1817,23 +1818,19 @@ exec_bind_message(StringInfo input_message)
 
 			if (!isNull)
 			{
-				const char *pvalue = pq_getmsgbytes(input_message, plength);
+				char	   *pvalue;
 
 				/*
-				 * Rather than copying data around, we just set up a phony
+				 * Rather than copying data around, we just initialize a
 				 * StringInfo pointing to the correct portion of the message
-				 * buffer.  We assume we can scribble on the message buffer so
-				 * as to maintain the convention that StringInfos have a
-				 * trailing null.  This is grotty but is a big win when
-				 * dealing with very large parameter strings.
+				 * buffer.  We assume we can scribble on the message buffer to
+				 * add a trailing NUL which is required for the input function
+				 * call.
 				 */
-				pbuf.data = unconstify(char *, pvalue);
-				pbuf.maxlen = plength + 1;
-				pbuf.len = plength;
-				pbuf.cursor = 0;
-
-				csave = pbuf.data[plength];
-				pbuf.data[plength] = '\0';
+				pvalue = unconstify(char *, pq_getmsgbytes(input_message, plength));
+				csave = pvalue[plength];
+				pvalue[plength] = '\0';
+				initReadOnlyStringInfo(&pbuf, pvalue, plength);
 			}
 			else
 			{
@@ -4292,6 +4289,9 @@ PostgresMain(const char *dbname, const char *username)
 	MemoryContextSwitchTo(row_description_context);
 	initStringInfo(&row_description_buf);
 	MemoryContextSwitchTo(TopMemoryContext);
+
+	/* Fire any defined login event triggers, if appropriate */
+	EventTriggerOnLogin();
 
 	/*
 	 * POSTGRES main processing loop begins here
