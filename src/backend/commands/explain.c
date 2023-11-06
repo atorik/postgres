@@ -750,26 +750,26 @@ void
 ExplainAssembleLogOutput(ExplainState *es, QueryDesc *queryDesc, int logFormat,
 						 bool logTriggers, int logParameterMaxLength)
 {
-			ExplainBeginOutput(es);
-			ExplainQueryText(es, queryDesc);
-			ExplainQueryParameters(es, queryDesc->params, logParameterMaxLength);
-			ExplainPrintPlan(es, queryDesc);
-			if (es->analyze && logTriggers)
-				ExplainPrintTriggers(es, queryDesc);
-			if (es->costs)
-				ExplainPrintJITSummary(es, queryDesc);
-			ExplainEndOutput(es);
+	ExplainBeginOutput(es);
+	ExplainQueryText(es, queryDesc);
+	ExplainQueryParameters(es, queryDesc->params, logParameterMaxLength);
+	ExplainPrintPlan(es, queryDesc);
+	if (es->analyze && logTriggers)
+		ExplainPrintTriggers(es, queryDesc);
+	if (es->costs)
+		ExplainPrintJITSummary(es, queryDesc);
+	ExplainEndOutput(es);
 
-			/* Remove last line break */
-			if (es->str->len > 0 && es->str->data[es->str->len - 1] == '\n')
-				es->str->data[--es->str->len] = '\0';
+	/* Remove last line break */
+	if (es->str->len > 0 && es->str->data[es->str->len - 1] == '\n')
+		es->str->data[--es->str->len] = '\0';
 
-			/* Fix JSON to output an object */
-			if (logFormat == EXPLAIN_FORMAT_JSON)
-			{
-				es->str->data[0] = '{';
-				es->str->data[es->str->len - 1] = '}';
-			}
+	/* Fix JSON to output an object */
+	if (logFormat == EXPLAIN_FORMAT_JSON)
+	{
+		es->str->data[0] = '{';
+		es->str->data[es->str->len - 1] = '}';
+	}
 }
 
 /*

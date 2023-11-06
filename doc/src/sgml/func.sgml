@@ -26745,6 +26745,7 @@ LOG:  query plan running on backend with PID 201116 is:
         Seq Scan on public.pgbench_accounts  (cost=0.00..52787.00 rows=2000000 width=97)
           Output: aid, bid, abalance, filler
         Settings: work_mem = '1MB'
+        Query Identifier: 8621255546560739680
 </screen>
     Note that when statements are executed inside a function, only the
     plan of the most deeply nested query is logged.
