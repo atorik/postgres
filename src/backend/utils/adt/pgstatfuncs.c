@@ -1677,7 +1677,7 @@ pg_stat_reset(PG_FUNCTION_ARGS)
 }
 
 /*
- * Reset some shared cluster-wide counters
+ * Reset shared cluster-wide counters
  *
  * When adding a new reset target, ideally the name should match that in
  * pgstat_kind_infos, if relevant.
@@ -1685,6 +1685,19 @@ pg_stat_reset(PG_FUNCTION_ARGS)
 Datum
 pg_stat_reset_shared(PG_FUNCTION_ARGS)
 {
+	if (PG_ARGISNULL(0))
+	{
+		/* Reset all the statistics which can be specified by the argument */
+		pgstat_reset_of_kind(PGSTAT_KIND_ARCHIVER);
+		pgstat_reset_of_kind(PGSTAT_KIND_BGWRITER);
+		pgstat_reset_of_kind(PGSTAT_KIND_CHECKPOINTER);
+		pgstat_reset_of_kind(PGSTAT_KIND_IO);
+		pgstat_reset_of_kind(PGSTAT_KIND_WAL);
+		XLogPrefetchResetStats();
+
+		PG_RETURN_VOID();
+	}
+
 	char	   *target = text_to_cstring(PG_GETARG_TEXT_PP(0));
 
 	if (strcmp(target, "archiver") == 0)
