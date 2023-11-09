@@ -975,7 +975,6 @@ SELECT stats_reset > :'wal_reset_ts'::timestamptz FROM pg_stat_wal;
 (1 row)
 
 SELECT stats_reset AS wal_reset_ts FROM pg_stat_wal \gset
--- Test that reset_shared with no specified stats type doesn't reset anything
 -- Test that all shared stats are reset when no argument provided to reset function
 SELECT pg_stat_reset_shared();
  pg_stat_reset_shared 
