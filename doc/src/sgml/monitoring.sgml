@@ -4716,7 +4716,7 @@ description | Waiting for a newly initialized WAL file to reach durable storage
         <returnvalue>void</returnvalue>
        </para>
        <para>
-        Resets cluster-wide statistics counters to zero, depending on the
+        Resets some cluster-wide statistics counters to zero, depending on the
         argument.  The argument can be <literal>bgwriter</literal> to reset
         all the counters shown in
         the <structname>pg_stat_bgwriter</structname> view,
@@ -4730,8 +4730,8 @@ description | Waiting for a newly initialized WAL file to reach durable storage
         <structname>pg_stat_wal</structname> view or
         <literal>recovery_prefetch</literal> to reset all the counters shown
         in the <structname>pg_stat_recovery_prefetch</structname> view.
-        If the argument is NULL or not specified, all counters shown in all
-        of these views are reset.
+        If the argument is <literal>NULL</literal> or not specified, all
+        the counters from the views listed above are reset.
        </para>
        <para>
         This function is restricted to superusers by default, but other users
