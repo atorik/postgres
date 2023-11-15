@@ -882,7 +882,7 @@ SELECT stats_reset > :'slru_commit_ts_reset_ts'::timestamptz FROM pg_stat_slru W
 
 SELECT stats_reset AS slru_commit_ts_reset_ts FROM pg_stat_slru WHERE name = 'CommitTs' \gset
 -- Test that multiple SLRUs are reset when no specific SLRU provided to reset function
-SELECT pg_stat_reset_slru(NULL);
+SELECT pg_stat_reset_slru();
  pg_stat_reset_slru 
 --------------------
  
@@ -1051,7 +1051,7 @@ SELECT stats_reset > :'wal_reset_ts'::timestamptz FROM pg_stat_wal;
 -- Test error case for reset_shared with unknown stats type
 SELECT pg_stat_reset_shared('unknown');
 ERROR:  unrecognized reset target: "unknown"
-HINT:  Target must be "archiver", "bgwriter", "checkpointer", "io", "recovery_prefetch", or "wal".
+HINT:  Target must be "archiver", "bgwriter", "checkpointer", "io", "recovery_prefetch", "slru", or "wal".
 -- Test that reset works for pg_stat_database
 -- Since pg_stat_database stats_reset starts out as NULL, reset it once first so we have something to compare it to
 SELECT pg_stat_reset();
