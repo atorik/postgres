@@ -1311,7 +1311,7 @@ CopyFrom(CopyFromState cstate)
 
 	if (cstate->opts.save_error_to && cstate->num_errors > 0)
 		ereport(WARNING,
-				errmsg("%lu rows were skipped due to data type incompatibility",
+				errmsg("%zd rows were skipped due to data type incompatibility",
 					   cstate->num_errors));
 
 	/* Done, clean up */
