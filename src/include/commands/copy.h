@@ -62,6 +62,7 @@ typedef struct CopyFormatOptions
 	bool		force_null_all; /* FORCE_NULL *? */
 	bool	   *force_null_flags;	/* per-column CSV FN flags */
 	bool		convert_selectively;	/* do selective binary conversion? */
+	char	   *save_error_to;	/* where to save error information */
 	List	   *convert_select; /* list of column names (can be NIL) */
 } CopyFormatOptions;
 

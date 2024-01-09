@@ -42,6 +42,7 @@
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
+#include "nodes/miscnodes.h"
 #include "optimizer/optimizer.h"
 #include "pgstat.h"
 #include "rewrite/rewriteHandler.h"
@@ -752,6 +753,14 @@ CopyFrom(CopyFromState cstate)
 		ti_options |= TABLE_INSERT_FROZEN;
 	}
 
+	/* Set up soft error handler for SAVE_ERROR_TO */
+	if (cstate->opts.save_error_to)
+	{
+		ErrorSaveContext escontext = {T_ErrorSaveContext};
+		escontext.details_wanted = true;
+		cstate->escontext = escontext;
+	}
+
 	/*
 	 * We need a ResultRelInfo so we can use the regular executor's
 	 * index-entry-making machinery.  (There used to be a huge amount of code
@@ -991,6 +1000,25 @@ CopyFrom(CopyFromState cstate)
 		/* Directly store the values/nulls array in the slot */
 		if (!NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull))
 			break;
+
+		/*
+		 * Soft error occured, skip this tuple and save error information
+		 * according to SAVE_ERROR_TO.
+		 */
+		if (cstate->escontext.error_occurred)
+		{
+			ErrorSaveContext new_escontext = {T_ErrorSaveContext};
+
+			/* Currently only "none" is supported */
+			Assert(strcmp(cstate->opts.save_error_to, "none") == 0);
+
+			ExecClearTuple(myslot);
+
+			new_escontext.details_wanted = true;
+			cstate->escontext = new_escontext;
+
+			continue;
+		}
 
 		ExecStoreVirtualTuple(myslot);
 
@@ -1280,6 +1308,11 @@ CopyFrom(CopyFromState cstate)
 		if (!CopyMultiInsertInfoIsEmpty(&multiInsertInfo))
 			CopyMultiInsertInfoFlush(&multiInsertInfo, NULL, &processed);
 	}
+
+	if (cstate->opts.save_error_to && cstate->num_errors > 0)
+		ereport(WARNING,
+				errmsg("%zd rows were skipped due to data type incompatibility",
+					   cstate->num_errors));
 
 	/* Done, clean up */
 	error_context_stack = errcallback.previous;

@@ -571,6 +571,20 @@ ProcessCopyOptions(ParseState *pstate,
 								defel->defname),
 						 parser_errposition(pstate, defel->location)));
 		}
+		else if (strcmp(defel->defname, "save_error_to") == 0)
+		{
+			char	   *location = defGetString(defel);
+
+			if (opts_out->save_error_to)
+				errorConflictingDefElem(defel, pstate);
+			else if (strcmp(location, "none") == 0)
+				opts_out->save_error_to = location;
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("COPY save_error_to \"%s\" not recognized", location),
+						 parser_errposition(pstate, defel->location)));
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -597,6 +611,11 @@ ProcessCopyOptions(ParseState *pstate,
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("cannot specify DEFAULT in BINARY mode")));
+
+	if (opts_out->binary && opts_out->save_error_to)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("cannot specify SAVE_ERROR_TO in BINARY mode")));
 
 	/* Set defaults for omitted options */
 	if (!opts_out->delim)
