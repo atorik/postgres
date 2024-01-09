@@ -380,7 +380,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
      <para>
       Specifies where to save error information when there are malformed data in
       the input. If this option is specified, <command>COPY</command> skips
-      malformed data and continues copying.
+      malformed data and continues copying data.
       Currently only <literal>none</literal> is supported.
       This option is allowed only in <command>COPY FROM</command>, and only when
       not using <literal>binary</literal> format.
