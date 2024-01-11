@@ -993,18 +993,18 @@ CopyFrom(CopyFromState cstate)
 		if (!NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull))
 			break;
 
-		if (cstate->escontext->error_occurred)
+		if (cstate->opts.save_error_to && cstate->escontext->error_occurred)
 		{
 			/*
 			 * Soft error occured. Skip this tuple and save error information
 			 * according to SAVE_ERROR_TO.
 			 */
 			if (strcmp(cstate->opts.save_error_to, "none") == 0)
-			/*
-			 * Just make ErrorSaveContext ready for the next NextCopyFrom.
-			 * Since we don't set details_wanted and error_data is not to be
-			 * filled, just reset error_occurred.
-			 */
+				/*
+				 * Just make ErrorSaveContext ready for the next NextCopyFrom.
+				 * Since we don't set details_wanted and error_data is not to be
+				 * filled, just reset error_occurred.
+				 */
 				cstate->escontext->error_occurred = false;
 			else
 				elog(ERROR, "unexpected SAVE_ERROR_TO location : %s",
@@ -1452,7 +1452,7 @@ BeginCopyFrom(ParseState *pstate,
 		cstate->escontext->type = T_ErrorSaveContext;
 		cstate->escontext->error_occurred = false;
 
-		 /* Currenly we only support 'none'. We'll add other options later */
+		 /* Currently we only support 'none'. We'll add other options later */
 		if (strcmp(cstate->opts.save_error_to, "none") == 0)
 			cstate->escontext->details_wanted = false;
 	}
