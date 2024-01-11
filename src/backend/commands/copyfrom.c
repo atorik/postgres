@@ -753,14 +753,6 @@ CopyFrom(CopyFromState cstate)
 		ti_options |= TABLE_INSERT_FROZEN;
 	}
 
-	/* Set up soft error handler for SAVE_ERROR_TO */
-	if (cstate->opts.save_error_to)
-	{
-		ErrorSaveContext escontext = {T_ErrorSaveContext};
-		escontext.details_wanted = true;
-		cstate->escontext = escontext;
-	}
-
 	/*
 	 * We need a ResultRelInfo so we can use the regular executor's
 	 * index-entry-making machinery.  (There used to be a huge amount of code
@@ -1001,21 +993,22 @@ CopyFrom(CopyFromState cstate)
 		if (!NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull))
 			break;
 
-		/*
-		 * Soft error occured, skip this tuple and save error information
-		 * according to SAVE_ERROR_TO.
-		 */
-		if (cstate->escontext.error_occurred)
+		if (cstate->escontext->error_occurred)
 		{
-			ErrorSaveContext new_escontext = {T_ErrorSaveContext};
-
-			/* Currently only "none" is supported */
-			Assert(strcmp(cstate->opts.save_error_to, "none") == 0);
-
-			ExecClearTuple(myslot);
-
-			new_escontext.details_wanted = true;
-			cstate->escontext = new_escontext;
+			/*
+			 * Soft error occured. Skip this tuple and save error information
+			 * according to SAVE_ERROR_TO.
+			 */
+			if (strcmp(cstate->opts.save_error_to, "none") == 0)
+			/*
+			 * Just make ErrorSaveContext ready for the next NextCopyFrom.
+			 * Since we don't set details_wanted and error_data is not to be
+			 * filled, just reset error_occurred.
+			 */
+				cstate->escontext->error_occurred = false;
+			else
+				elog(ERROR, "unexpected SAVE_ERROR_TO location : %s",
+						cstate->opts.save_error_to);
 
 			continue;
 		}
@@ -1450,6 +1443,18 @@ BeginCopyFrom(ParseState *pstate,
 								NameStr(attr->attname))));
 			cstate->opts.force_notnull_flags[attnum - 1] = true;
 		}
+	}
+
+	/* Set up soft error handler for SAVE_ERROR_TO */
+	if (cstate->opts.save_error_to)
+	{
+		cstate->escontext = makeNode(ErrorSaveContext);
+		cstate->escontext->type = T_ErrorSaveContext;
+		cstate->escontext->error_occurred = false;
+
+		 /* Currenly we only support 'none'. We'll add other options later */
+		if (strcmp(cstate->opts.save_error_to, "none") == 0)
+			cstate->escontext->details_wanted = false;
 	}
 
 	/* Convert FORCE_NULL name list to per-column flags, check validity */

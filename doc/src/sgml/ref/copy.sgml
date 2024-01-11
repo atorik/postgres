@@ -378,14 +378,15 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
     <term><literal>SAVE_ERROR_TO</literal></term>
     <listitem>
      <para>
-      Specifies where to save error information when there are malformed data in
-      the input. If this option is specified, <command>COPY</command> skips
-      malformed data and continues copying data.
+      Specifies save error information to <replaceable class="parameter">
+      location</replaceable> when there are malformed data in the input.
+      If this option is specified, <command>COPY</command> skips malformed data
+      and continues copying data.
       Currently only <literal>none</literal> is supported.
+      If this option is omitted, <command>COPY</command> stops operation at the
+      first error.
       This option is allowed only in <command>COPY FROM</command>, and only when
       not using <literal>binary</literal> format.
-      Note that this is only supported in current <command>COPY</command>
-      syntax.
      </para>
     </listitem>
    </varlistentry>
