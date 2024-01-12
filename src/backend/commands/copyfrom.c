@@ -657,6 +657,9 @@ CopyFrom(CopyFromState cstate)
 	Assert(cstate->rel);
 	Assert(list_length(cstate->range_table) == 1);
 
+	if (cstate->opts.save_error_to)
+		Assert(cstate->escontext);
+
 	/*
 	 * The target must be a plain, foreign, or partitioned relation, or have
 	 * an INSTEAD OF INSERT row trigger.  (Currently, such triggers are only
@@ -996,14 +999,14 @@ CopyFrom(CopyFromState cstate)
 		if (cstate->opts.save_error_to && cstate->escontext->error_occurred)
 		{
 			/*
-			 * Soft error occured. Skip this tuple and save error information
+			 * Soft error occured, skip this tuple and save error information
 			 * according to SAVE_ERROR_TO.
 			 */
 			if (strcmp(cstate->opts.save_error_to, "none") == 0)
 				/*
 				 * Just make ErrorSaveContext ready for the next NextCopyFrom.
 				 * Since we don't set details_wanted and error_data is not to be
-				 * filled, just reset error_occurred.
+				 * filled, just resetting error_occurred is enough.
 				 */
 				cstate->escontext->error_occurred = false;
 			else
@@ -1452,10 +1455,12 @@ BeginCopyFrom(ParseState *pstate,
 		cstate->escontext->type = T_ErrorSaveContext;
 		cstate->escontext->error_occurred = false;
 
-		 /* Currently we only support 'none'. We'll add other options later */
+		 /* Currently we only support "none". We'll add other options later */
 		if (strcmp(cstate->opts.save_error_to, "none") == 0)
 			cstate->escontext->details_wanted = false;
 	}
+	else
+		cstate->escontext = NULL;
 
 	/* Convert FORCE_NULL name list to per-column flags, check validity */
 	cstate->opts.force_null_flags = (bool *) palloc0(num_phys_attrs * sizeof(bool));
