@@ -105,7 +105,7 @@ ERROR:  COPY FORCE_NULL requires CSV mode
 COPY x to stdin (format CSV, force_null(a));
 ERROR:  COPY FORCE_NULL cannot be used with COPY TO
 COPY x to stdin (format BINARY, save_error_to unsupported);
-ERROR:  COPY save_error_to "unsupported" not recognized
+ERROR:  COPY SAVE_ERROR_TO cannot be used with COPY TO
 LINE 1: COPY x to stdin (format BINARY, save_error_to unsupported);
                                         ^
 -- too many columns in column list: should fail
@@ -726,6 +726,9 @@ SELECT * FROM instead_of_insert_tbl;
 COMMIT;
 -- tests for SAVE_ERROR_TO option
 CREATE TABLE check_ign_err (n int, m int[], k int);
+COPY check_ign_err FROM STDIN WITH (save_error_to error);
+ERROR:  invalid input syntax for type integer: "a"
+CONTEXT:  COPY check_ign_err, line 2, column n: "a"
 COPY check_ign_err FROM STDIN WITH (save_error_to none);
 NOTICE:  4 rows were skipped due to data type incompatibility
 SELECT * FROM check_ign_err;

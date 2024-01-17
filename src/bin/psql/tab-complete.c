@@ -2907,7 +2907,7 @@ psql_completion(const char *text, int start, int end)
 
 	/* Complete COPY <sth> FROM filename WITH (SAVE_ERROR_TO */
 	else if (Matches("COPY|\\copy", MatchAny, "FROM|TO", MatchAny, "WITH", "(", "SAVE_ERROR_TO"))
-		COMPLETE_WITH("none");
+		COMPLETE_WITH("error", "none");
 
 	/* Complete COPY <sth> FROM <sth> WITH (<options>) */
 	else if (Matches("COPY|\\copy", MatchAny, "FROM", MatchAny, "WITH", MatchAny))

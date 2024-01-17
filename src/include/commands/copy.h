@@ -36,7 +36,7 @@ typedef enum CopyHeaderChoice
  */
 typedef enum CopySaveErrorToChoice
 {
-	COPY_SAVE_ERROR_TO_UNSPECIFIED = 0, /* immediately throw errors */
+	COPY_SAVE_ERROR_TO_ERROR = 0,	/* immediately throw errors */
 	COPY_SAVE_ERROR_TO_NONE,	/* ignore errors */
 } CopySaveErrorToChoice;
 

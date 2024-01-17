@@ -658,7 +658,7 @@ CopyFrom(CopyFromState cstate)
 	Assert(cstate->rel);
 	Assert(list_length(cstate->range_table) == 1);
 
-	if (cstate->opts.save_error_to != COPY_SAVE_ERROR_TO_UNSPECIFIED)
+	if (cstate->opts.save_error_to != COPY_SAVE_ERROR_TO_ERROR)
 		Assert(cstate->escontext);
 
 	/*
@@ -997,7 +997,7 @@ CopyFrom(CopyFromState cstate)
 		if (!NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull))
 			break;
 
-		if (cstate->opts.save_error_to != COPY_SAVE_ERROR_TO_UNSPECIFIED &&
+		if (cstate->opts.save_error_to != COPY_SAVE_ERROR_TO_ERROR &&
 			cstate->escontext->error_occurred)
 		{
 			/*
@@ -1312,11 +1312,13 @@ CopyFrom(CopyFromState cstate)
 	/* Done, clean up */
 	error_context_stack = errcallback.previous;
 
-	if (cstate->opts.save_error_to != COPY_SAVE_ERROR_TO_UNSPECIFIED &&
+	if (cstate->opts.save_error_to != COPY_SAVE_ERROR_TO_ERROR &&
 		cstate->num_errors > 0)
 		ereport(NOTICE,
-				errmsg("%zd rows were skipped due to data type incompatibility",
-					   cstate->num_errors));
+				errmsg_plural("%llu row were skipped due to data type incompatibility",
+							  "%llu rows were skipped due to data type incompatibility",
+							  (unsigned long long) cstate->num_errors,
+							  (unsigned long long) cstate->num_errors));
 
 	if (bistate != NULL)
 		FreeBulkInsertState(bistate);
@@ -1454,7 +1456,7 @@ BeginCopyFrom(ParseState *pstate,
 	}
 
 	/* Set up soft error handler for SAVE_ERROR_TO */
-	if (cstate->opts.save_error_to != COPY_SAVE_ERROR_TO_UNSPECIFIED)
+	if (cstate->opts.save_error_to != COPY_SAVE_ERROR_TO_ERROR)
 	{
 		cstate->escontext = makeNode(ErrorSaveContext);
 		cstate->escontext->type = T_ErrorSaveContext;

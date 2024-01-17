@@ -500,6 +500,14 @@ COMMIT;
 
 -- tests for SAVE_ERROR_TO option
 CREATE TABLE check_ign_err (n int, m int[], k int);
+COPY check_ign_err FROM STDIN WITH (save_error_to error);
+1	{1}	1
+a	{2}	2
+3	{3}	3333333333
+4	{a, 4}	4
+
+5	{5}	5
+\.
 COPY check_ign_err FROM STDIN WITH (save_error_to none);
 1	{1}	1
 a	{2}	2
