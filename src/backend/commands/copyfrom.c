@@ -1013,7 +1013,7 @@ CopyFrom(CopyFromState cstate)
 				 */
 				cstate->escontext->error_occurred = false;
 
-			/* Report that this tuple was skipped by the SAVE_ERROR_TO clause */
+			/* Report that this tuple was skipped by the ON_ERROR clause */
 			pgstat_progress_update_param(PROGRESS_COPY_TUPLES_SKIPPED,
 											 ++skipped);
 
