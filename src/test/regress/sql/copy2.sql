@@ -534,6 +534,35 @@ COPY check_ign_err FROM STDIN WITH (on_error ignore);
 1	{1}	3	abc
 \.
 
+-- tests for reject_limit option
+COPY check_ign_err FROM STDIN WITH (on_error ignore, reject_limit 3);
+6	{6}	6
+a	{7}	7
+7	{7}	7777777777
+8	{a, 8}	8
+
+9	{9}	9
+\.
+
+COPY check_ign_err FROM STDIN WITH (on_error ignore, reject_limit 4);
+6	{6}	6
+a	{7}	7
+7	{7}	7777777777
+8	{a, 8}	8
+
+9	{9}	9
+\.
+
+-- test reject_limit without on_error option: should fail
+COPY check_ign_err FROM STDIN WITH (reject_limit 3);
+
+-- test reject_limit specified string value: should fail
+COPY check_ign_err FROM STDIN WITH (on_error ignore, reject_limit foo);
+
+-- test reject_limit specified less than or equal to 0: should fail
+COPY check_ign_err FROM STDIN WITH (on_error ignore, reject_limit -3);
+COPY check_ign_err FROM STDIN WITH (on_error ignore, reject_limit 0);
+
 -- clean up
 DROP TABLE forcetest;
 DROP TABLE vistest;
