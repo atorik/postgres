@@ -1012,6 +1012,24 @@ CopyFrom(CopyFromState cstate)
 				 */
 				cstate->escontext->error_occurred = false;
 
+			else if (cstate->opts.on_error == COPY_ON_ERROR_LOG)
+			{
+				/* Adjust elevel so we don't jump out */
+				cstate->escontext->error_data->elevel = LOG;
+
+				/*
+				 * Despite the name, this won't raise an error since elevel is
+				 * LOG now.
+				 */
+				// cstate->cur_lineno
+				ThrowErrorData(cstate->escontext->error_data);
+
+				/* Initialize escontext in preparation for next soft error */
+				cstate->escontext->error_occurred = false;
+				cstate->escontext->details_wanted = true;
+				memset(cstate->escontext->error_data, 0, sizeof(ErrorData));
+			}
+
 			continue;
 		}
 
@@ -1457,12 +1475,11 @@ BeginCopyFrom(ParseState *pstate,
 		cstate->escontext->type = T_ErrorSaveContext;
 		cstate->escontext->error_occurred = false;
 
-		/*
-		 * Currently we only support COPY_ON_ERROR_IGNORE. We'll add other
-		 * options later
-		 */
+		/* Error Details are required except when "ignore" is specified */
 		if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE)
 			cstate->escontext->details_wanted = false;
+		else
+			cstate->escontext->details_wanted = true;
 	}
 	else
 		cstate->escontext = NULL;
