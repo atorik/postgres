@@ -731,12 +731,16 @@ ERROR:  invalid input syntax for type integer: "a"
 CONTEXT:  COPY check_ign_err, line 2, column n: "a"
 COPY check_ign_err FROM STDIN WITH (on_error ignore);
 NOTICE:  4 rows were skipped due to data type incompatibility
+COPY check_ign_err FROM STDIN WITH (on_error log);
+NOTICE:  4 rows were skipped due to data type incompatibility
 SELECT * FROM check_ign_err;
- n |  m  | k 
----+-----+---
- 1 | {1} | 1
- 5 | {5} | 5
-(2 rows)
+ n  |  m   | k  
+----+------+----
+  1 | {1}  |  1
+  5 | {5}  |  5
+  6 | {6}  |  6
+ 10 | {10} | 10
+(4 rows)
 
 -- test datatype error that can't be handled as soft: should fail
 CREATE TABLE hard_err(foo widget);

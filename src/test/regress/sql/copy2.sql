@@ -516,6 +516,15 @@ a	{2}	2
 
 5	{5}	5
 \.
+
+COPY check_ign_err FROM STDIN WITH (on_error log);
+6	{6}	6
+a	{7}	7
+8	{8}	8888888888
+9	{a, 9}	9
+
+10	{10}	10
+\.
 SELECT * FROM check_ign_err;
 
 -- test datatype error that can't be handled as soft: should fail
