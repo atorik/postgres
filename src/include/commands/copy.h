@@ -38,7 +38,7 @@ typedef enum CopyOnErrorChoice
 {
 	COPY_ON_ERROR_STOP = 0,		/* immediately throw errors, default */
 	COPY_ON_ERROR_IGNORE,		/* ignore errors */
-	COPY_ON_ERROR_LOG,			/* save error to PostgreSQL server log */
+	COPY_ON_ERROR_LOG,			/* save error to PostgreSQL log */
 } CopyOnErrorChoice;
 
 /*

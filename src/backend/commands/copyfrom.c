@@ -650,6 +650,7 @@ CopyFrom(CopyFromState cstate)
 	CopyMultiInsertInfo multiInsertInfo = {0};	/* pacify compiler */
 	int64		processed = 0;
 	int64		excluded = 0;
+	int64		skipped = 0;
 	bool		has_before_insert_row_trig;
 	bool		has_instead_insert_row_trig;
 	bool		leafpart_use_multi_insert = false;
@@ -1021,7 +1022,6 @@ CopyFrom(CopyFromState cstate)
 				 * Despite the name, this won't raise an error since elevel is
 				 * LOG now.
 				 */
-				// cstate->cur_lineno
 				ThrowErrorData(cstate->escontext->error_data);
 
 				/* Initialize escontext in preparation for next soft error */
@@ -1029,6 +1029,10 @@ CopyFrom(CopyFromState cstate)
 				cstate->escontext->details_wanted = true;
 				memset(cstate->escontext->error_data, 0, sizeof(ErrorData));
 			}
+
+			/* Report that this tuple was skipped by the ON_ERROR clause */
+			pgstat_progress_update_param(PROGRESS_COPY_TUPLES_SKIPPED,
+										 ++skipped);
 
 			continue;
 		}
