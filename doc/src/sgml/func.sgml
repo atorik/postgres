@@ -17728,6 +17728,38 @@ strict $.**.HR
 
       <row>
        <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>value</replaceable> <literal>.</literal> <literal>boolean()</literal>
+        <returnvalue><replaceable>boolean</replaceable></returnvalue>
+       </para>
+       <para>
+        Boolean value converted from a JSON boolean, number, or string
+       </para>
+       <para>
+        <literal>jsonb_path_query_array('[1, "yes", false]', '$[*].boolean()')</literal>
+        <returnvalue>[true, true, false]</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>value</replaceable> <literal>.</literal> <literal>string()</literal>
+        <returnvalue><replaceable>string</replaceable></returnvalue>
+       </para>
+       <para>
+        String value converted from a JSON boolean, number, string, or datetime
+       </para>
+       <para>
+        <literal>jsonb_path_query_array('[1.23, "xyz", false]', '$[*].string()')</literal>
+        <returnvalue>["1.23", "xyz", "false"]</returnvalue>
+       </para>
+       <para>
+        <literal>jsonb_path_query('"2023-08-15"', '$.datetime().string()')</literal>
+        <returnvalue>"2023-08-15"</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
         <replaceable>value</replaceable> <literal>.</literal> <literal>double()</literal>
         <returnvalue><replaceable>number</replaceable></returnvalue>
        </para>
@@ -17785,6 +17817,62 @@ strict $.**.HR
 
       <row>
        <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>value</replaceable> <literal>.</literal> <literal>bigint()</literal>
+        <returnvalue><replaceable>bigint</replaceable></returnvalue>
+       </para>
+       <para>
+        Big integer value converted from a JSON number or string
+       </para>
+       <para>
+        <literal>jsonb_path_query('{"len": "9876543219"}', '$.len.bigint()')</literal>
+        <returnvalue>9876543219</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>value</replaceable> <literal>.</literal> <literal>decimal( [ <replaceable>precision</replaceable> [ , <replaceable>scale</replaceable> ] ] )</literal>
+        <returnvalue><replaceable>decimal</replaceable></returnvalue>
+       </para>
+       <para>
+        Rounded decimal value converted from a JSON number or string. <literal>precision</literal> and <literal>scale</literal> must be integer values.
+       </para>
+       <para>
+        <literal>jsonb_path_query('1234.5678', '$.decimal(6, 2)')</literal>
+        <returnvalue>1234.57</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>value</replaceable> <literal>.</literal> <literal>integer()</literal>
+        <returnvalue><replaceable>integer</replaceable></returnvalue>
+       </para>
+       <para>
+        Integer value converted from a JSON number or string
+       </para>
+       <para>
+        <literal>jsonb_path_query('{"len": "12345"}', '$.len.integer()')</literal>
+        <returnvalue>12345</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>value</replaceable> <literal>.</literal> <literal>number()</literal>
+        <returnvalue><replaceable>numeric</replaceable></returnvalue>
+       </para>
+       <para>
+        Numeric value converted from a JSON number or string
+       </para>
+       <para>
+        <literal>jsonb_path_query('{"len": "123.45"}', '$.len.number()')</literal>
+        <returnvalue>123.45</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
         <replaceable>string</replaceable> <literal>.</literal> <literal>datetime()</literal>
         <returnvalue><replaceable>datetime_type</replaceable></returnvalue>
         (see note)
@@ -17811,6 +17899,136 @@ strict $.**.HR
        <para>
         <literal>jsonb_path_query_array('["12:30", "18:40"]', '$[*].datetime("HH24:MI")')</literal>
         <returnvalue>["12:30:00", "18:40:00"]</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>string</replaceable> <literal>.</literal> <literal>date()</literal>
+        <returnvalue><replaceable>date</replaceable></returnvalue>
+       </para>
+       <para>
+        Date value converted from a string
+       </para>
+       <para>
+        <literal>jsonb_path_query('"2023-08-15"', '$.date()')</literal>
+        <returnvalue>"2023-08-15"</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>string</replaceable> <literal>.</literal> <literal>time()</literal>
+        <returnvalue><replaceable>time without time zone</replaceable></returnvalue>
+       </para>
+       <para>
+        Time without time zone value converted from a string
+       </para>
+       <para>
+        <literal>jsonb_path_query('"12:34:56"', '$.time()')</literal>
+        <returnvalue>"12:34:56"</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>string</replaceable> <literal>.</literal> <literal>time(<replaceable>precision</replaceable>)</literal>
+        <returnvalue><replaceable>time without time zone</replaceable></returnvalue>
+       </para>
+       <para>
+        Time without time zone value converted from a string, with fractional
+        seconds adjusted to the given precision.
+       </para>
+       <para>
+        <literal>jsonb_path_query('"12:34:56.789"', '$.time(2)')</literal>
+        <returnvalue>"12:34:56.79"</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>string</replaceable> <literal>.</literal> <literal>time_tz()</literal>
+        <returnvalue><replaceable>time with time zone</replaceable></returnvalue>
+       </para>
+       <para>
+        Time with time zone value converted from a string
+       </para>
+       <para>
+        <literal>jsonb_path_query('"12:34:56 +05:30"', '$.time_tz()')</literal>
+        <returnvalue>"12:34:56+05:30"</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>string</replaceable> <literal>.</literal> <literal>time_tz(<replaceable>precision</replaceable>)</literal>
+        <returnvalue><replaceable>time with time zone</replaceable></returnvalue>
+       </para>
+       <para>
+        Time with time zone value converted from a string, with fractional
+        seconds adjusted to the given precision.
+       </para>
+       <para>
+        <literal>jsonb_path_query('"12:34:56.789 +05:30"', '$.time_tz(2)')</literal>
+        <returnvalue>"12:34:56.79+05:30"</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>string</replaceable> <literal>.</literal> <literal>timestamp()</literal>
+        <returnvalue><replaceable>timestamp without time zone</replaceable></returnvalue>
+       </para>
+       <para>
+        Timestamp without time zone value converted from a string
+       </para>
+       <para>
+        <literal>jsonb_path_query('"2023-08-15 12:34:56"', '$.timestamp()')</literal>
+        <returnvalue>"2023-08-15T12:34:56"</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>string</replaceable> <literal>.</literal> <literal>timestamp(<replaceable>precision</replaceable>)</literal>
+        <returnvalue><replaceable>timestamp without time zone</replaceable></returnvalue>
+       </para>
+       <para>
+        Timestamp without time zone value converted from a string, with
+        fractional seconds adjusted to the given precision.
+       </para>
+       <para>
+        <literal>jsonb_path_query('"2023-08-15 12:34:56.789"', '$.timestamp(2)')</literal>
+        <returnvalue>"2023-08-15T12:34:56.79"</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>string</replaceable> <literal>.</literal> <literal>timestamp_tz()</literal>
+        <returnvalue><replaceable>timestamp with time zone</replaceable></returnvalue>
+       </para>
+       <para>
+        Timestamp with time zone value converted from a string
+       </para>
+       <para>
+        <literal>jsonb_path_query('"2023-08-15 12:34:56 +05:30"', '$.timestamp_tz()')</literal>
+        <returnvalue>"2023-08-15T12:34:56+05:30"</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <replaceable>string</replaceable> <literal>.</literal> <literal>timestamp_tz(<replaceable>precision</replaceable>)</literal>
+        <returnvalue><replaceable>timestamp with time zone</replaceable></returnvalue>
+       </para>
+       <para>
+        Timestamp with time zone value converted from a string, with fractional
+        seconds adjusted to the given precision.
+       </para>
+       <para>
+        <literal>jsonb_path_query('"2023-08-15 12:34:56.789 +05:30"', '$.timestamp_tz(2)')</literal>
+        <returnvalue>"2023-08-15T12:34:56.79+05:30"</returnvalue>
        </para></entry>
       </row>
 
@@ -27707,7 +27925,7 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
         <indexterm>
          <primary>pg_create_logical_replication_slot</primary>
         </indexterm>
-        <function>pg_create_logical_replication_slot</function> ( <parameter>slot_name</parameter> <type>name</type>, <parameter>plugin</parameter> <type>name</type> <optional>, <parameter>temporary</parameter> <type>boolean</type>, <parameter>twophase</parameter> <type>boolean</type> </optional> )
+        <function>pg_create_logical_replication_slot</function> ( <parameter>slot_name</parameter> <type>name</type>, <parameter>plugin</parameter> <type>name</type> <optional>, <parameter>temporary</parameter> <type>boolean</type>, <parameter>twophase</parameter> <type>boolean</type>, <parameter>failover</parameter> <type>boolean</type> </optional> )
         <returnvalue>record</returnvalue>
         ( <parameter>slot_name</parameter> <type>name</type>,
         <parameter>lsn</parameter> <type>pg_lsn</type> )
@@ -27722,8 +27940,13 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
         released upon any error. The optional fourth parameter,
         <parameter>twophase</parameter>, when set to true, specifies
         that the decoding of prepared transactions is enabled for this
-        slot. A call to this function has the same effect as the replication
-        protocol command <literal>CREATE_REPLICATION_SLOT ... LOGICAL</literal>.
+        slot. The optional fifth parameter,
+        <parameter>failover</parameter>, when set to true,
+        specifies that this slot is enabled to be synced to the
+        standbys so that logical replication can be resumed after
+        failover. A call to this function has the same effect as
+        the replication protocol command
+        <literal>CREATE_REPLICATION_SLOT ... LOGICAL</literal>.
        </para></entry>
       </row>
 
