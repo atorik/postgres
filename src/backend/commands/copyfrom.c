@@ -1015,7 +1015,7 @@ CopyFrom(CopyFromState cstate)
 
 			/* Report that this tuple was skipped by the ON_ERROR clause */
 			pgstat_progress_update_param(PROGRESS_COPY_TUPLES_SKIPPED,
-											 ++skipped);
+										 ++skipped);
 
 			if (cstate->opts.reject_limit > 0 && skipped > cstate->opts.reject_limit)
 				ereport(ERROR,
