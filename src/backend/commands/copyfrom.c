@@ -1022,6 +1022,7 @@ CopyFrom(CopyFromState cstate)
 						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
 						 errmsg("exceeded the number specified by REJECT LIMIT \"%d\"",
 								cstate->opts.reject_limit)));
+
 			continue;
 		}
 
