@@ -18,6 +18,7 @@
 #include "parser/parse_node.h"
 
 extern PGDLLIMPORT bool ProcessLogQueryPlanInterruptActive;
+
 typedef enum ExplainFormat
 {
 	EXPLAIN_FORMAT_TEXT,

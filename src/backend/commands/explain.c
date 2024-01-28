@@ -44,6 +44,7 @@
 #include "utils/typcache.h"
 #include "utils/xml.h"
 
+bool ProcessLogQueryPlanInterruptActive = false;
 
 /* Hook for plugins to get control in ExplainOneQuery() */
 ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
@@ -5137,7 +5138,6 @@ HandleLogQueryPlanInterrupt(void)
 	/* latch will be set by procsignal_sigusr1_handler */
 }
 
-bool ProcessLogQueryPlanInterruptActive = false;
 /*
  * ProcessLogQueryPlanInterrupt
  * 		Perform logging the plan of the currently running query on this
