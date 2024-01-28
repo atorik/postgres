@@ -5193,7 +5193,7 @@ ProcessLogQueryPlanInterrupt(void)
 		if (LOCALLOCK_LOCKTAG(*locallock) == LOCKTAG_PAGE)
 		{
 			ereport(LOG_SERVER_ONLY,
-				errmsg("ignored request for logging query plan due to page lock confilcts"),
+				errmsg("ignored request for logging query plan due to page lock conflicts"),
 				errdetail("You can try again in a moment."));
 			hash_seq_term(&status);
 
@@ -5210,7 +5210,7 @@ ProcessLogQueryPlanInterrupt(void)
 	if (MyProc->heldLocks)
 	{
 		ereport(LOG_SERVER_ONLY,
-			errmsg("ignored request for logging query plan due to lock confilcts"),
+			errmsg("ignored request for logging query plan due to lock conflicts"),
 			errdetail("You can try again in a moment."));
 			return;
 	}
