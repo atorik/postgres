@@ -2752,6 +2752,7 @@ AbortTransaction(void)
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
 	/*
+	 * Reset pg_log_query_plan() related global variables.
 	 * When ActiveQueryDesc is referenced after abort, some of its elements
 	 * are freed. To avoid accessing them, reset ActiveQueryDesc here.
 	 */
@@ -5118,6 +5119,7 @@ AbortSubTransaction(void)
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
 	/*
+	 * Reset pg_log_query_plan() related global variables.
 	 * When ActiveQueryDesc is referenced after abort, some of its elements
 	 * are freed. To avoid accessing them, reset ActiveQueryDesc here.
 	 */
