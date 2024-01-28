@@ -1016,11 +1016,11 @@ CopyFrom(CopyFromState cstate)
 			else if (cstate->opts.on_error == COPY_ON_ERROR_LOG)
 			{
 				/* Adjust elevel so we don't jump out */
-				cstate->escontext->error_data->elevel = LOG;
+				cstate->escontext->error_data->elevel = NOTICE;
 
 				/*
 				 * Despite the name, this won't raise an error since elevel is
-				 * LOG now.
+				 * NOTICE now.
 				 */
 				ThrowErrorData(cstate->escontext->error_data);
 

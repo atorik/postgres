@@ -387,9 +387,10 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       If the <literal>ignore</literal> value is specified,
       <command>COPY</command> skips malformed data and continues copying data.
       If the <literal>log</literal> value is specified,
-      <command>COPY</command> behaves the same as <literal>ignore</literal>, exept that
-      it logs information that should have resulted in errors to PostgreSQL log at
-      <literal>INFO</literal> level.
+      <command>COPY</command> behaves the same as <literal>ignore</literal>,
+      except that it logs information that should have resulted in errors to
+      <productname>PostgreSQL</productname> log at <literal>NOTICE</literal>
+      level.
       The option is allowed only in <command>COPY FROM</command>.
       Only <literal>stop</literal> value is allowed when
       using <literal>binary</literal> format.

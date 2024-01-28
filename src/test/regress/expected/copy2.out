@@ -732,6 +732,10 @@ CONTEXT:  COPY check_ign_err, line 2, column n: "a"
 COPY check_ign_err FROM STDIN WITH (on_error ignore);
 NOTICE:  4 rows were skipped due to data type incompatibility
 COPY check_ign_err FROM STDIN WITH (on_error log);
+NOTICE:  invalid input syntax for type integer: "a"
+NOTICE:  value "8888888888" is out of range for type integer
+NOTICE:  invalid input syntax for type integer: "a"
+NOTICE:  invalid input syntax for type integer: ""
 NOTICE:  4 rows were skipped due to data type incompatibility
 SELECT * FROM check_ign_err;
  n  |  m   | k  
