@@ -5203,8 +5203,7 @@ ProcessLogQueryPlanInterrupt(void)
 	}
 
 	/*
-	 * Ensure no locks already held on the lockable object.
-	 *
+	 * Ensure no lock is already held on the lockable object.
 	 * Otherwise EXPLAIN can be also hold on it.
 	 */
 	if (MyProc->heldLocks)
