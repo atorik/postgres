@@ -25,6 +25,7 @@
 #include "nodes/extensible.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/print.h"
 #include "parser/analyze.h"
 #include "parser/parsetree.h"
 #include "rewrite/rewriteHandler.h"
@@ -5251,7 +5252,7 @@ HandleLogQueryPlanInterrupt(void)
 void
 ProcessLogQueryPlanInterrupt(void)
 {
-	ExplainState *es;
+//	ExplainState *es;
 	HASH_SEQ_STATUS status;
 	LOCALLOCK  *locallock;
 	MemoryContext cxt;
@@ -5320,20 +5321,22 @@ ProcessLogQueryPlanInterrupt(void)
 
 	old_cxt = MemoryContextSwitchTo(cxt);
 
-	es = NewExplainState();
+//	es = NewExplainState();
+//
+//	es->format = EXPLAIN_FORMAT_TEXT;
+//	es->settings = true;
+//	es->verbose = true;
+//	es->signaled = true;
 
-	es->format = EXPLAIN_FORMAT_TEXT;
-	es->settings = true;
-	es->verbose = true;
-	es->signaled = true;
+//	ExplainAssembleLogOutput(es, ActiveQueryDesc, EXPLAIN_FORMAT_TEXT, 0, -1);
 
-	ExplainAssembleLogOutput(es, ActiveQueryDesc, EXPLAIN_FORMAT_TEXT, 0, -1);
+	elog_node_display(LOG, "plan", ActiveQueryDesc->plannedstmt, 1);
 
-	ereport(LOG_SERVER_ONLY,
-			errmsg("query plan running on backend with PID %d is:\n%s",
-					MyProcPid, es->str->data),
-			 errhidestmt(true),
-			 errhidecontext(true));
+//	ereport(LOG_SERVER_ONLY,
+//			errmsg("query plan running on backend with PID %d is:\n%s",
+//					MyProcPid, es->str->data),
+//			 errhidestmt(true),
+//			 errhidecontext(true));
 
 	MemoryContextSwitchTo(old_cxt);
 	MemoryContextDelete(cxt);
