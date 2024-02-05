@@ -47,6 +47,7 @@ typedef struct ExplainState
 	bool		wal;			/* print WAL usage */
 	bool		timing;			/* print detailed node timing */
 	bool		summary;		/* print total planning and execution timing */
+	bool		memory;			/* print planner's memory usage information */
 	bool		settings;		/* print modified settings */
 	bool		generic;		/* generate a generic plan */
 	ExplainFormat format;		/* output format */
@@ -95,7 +96,8 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 						   ExplainState *es, const char *queryString,
 						   ParamListInfo params, QueryEnvironment *queryEnv,
 						   const instr_time *planduration,
-						   const BufferUsage *bufusage);
+						   const BufferUsage *bufusage,
+						   const MemoryContextCounters *mem_counters);
 
 extern void ExplainAssembleLogOutput(ExplainState *es, QueryDesc *queryDesc,
 									 int logFormat, bool logTriggers,
