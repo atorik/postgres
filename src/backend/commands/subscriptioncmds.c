@@ -73,7 +73,6 @@
 #define SUBOPT_LSN					0x00004000
 #define SUBOPT_ORIGIN				0x00008000
 
-
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
 
@@ -759,7 +758,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 
 		/* Try to connect to the publisher. */
 		must_use_password = !superuser_arg(owner) && opts.passwordrequired;
-		wrconn = walrcv_connect(conninfo, true, must_use_password,
+		wrconn = walrcv_connect(conninfo, true, true, must_use_password,
 								stmt->subname, &err);
 		if (!wrconn)
 			ereport(ERROR,
@@ -852,9 +851,6 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					 (opts.failover || walrcv_server_version(wrconn) >= 170000))
 			{
 				walrcv_alter_slot(wrconn, opts.slot_name, opts.failover);
-				ereport(NOTICE,
-						(errmsg("changed the failover state of replication slot \"%s\" on publisher to %s",
-								opts.slot_name, opts.failover ? "true" : "false")));
 			}
 		}
 		PG_FINALLY();
@@ -910,7 +906,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 
 	/* Try to connect to the publisher. */
 	must_use_password = sub->passwordrequired && !sub->ownersuperuser;
-	wrconn = walrcv_connect(sub->conninfo, true, must_use_password,
+	wrconn = walrcv_connect(sub->conninfo, true, true, must_use_password,
 							sub->name, &err);
 	if (!wrconn)
 		ereport(ERROR,
@@ -1537,7 +1533,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 
 		/* Try to connect to the publisher. */
 		must_use_password = sub->passwordrequired && !sub->ownersuperuser;
-		wrconn = walrcv_connect(sub->conninfo, true, must_use_password,
+		wrconn = walrcv_connect(sub->conninfo, true, true, must_use_password,
 								sub->name, &err);
 		if (!wrconn)
 			ereport(ERROR,
@@ -1547,10 +1543,6 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 		PG_TRY();
 		{
 			walrcv_alter_slot(wrconn, sub->slotname, opts.failover);
-
-			ereport(NOTICE,
-					(errmsg("changed the failover state of replication slot \"%s\" on publisher to %s",
-							sub->slotname, opts.failover ? "true" : "false")));
 		}
 		PG_FINALLY();
 		{
@@ -1788,7 +1780,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	 */
 	load_file("libpqwalreceiver", false);
 
-	wrconn = walrcv_connect(conninfo, true, must_use_password,
+	wrconn = walrcv_connect(conninfo, true, true, must_use_password,
 							subname, &err);
 	if (wrconn == NULL)
 	{
