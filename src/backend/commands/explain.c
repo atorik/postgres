@@ -5252,8 +5252,6 @@ void
 ProcessLogQueryPlanInterrupt(void)
 {
 	ExplainState *es;
-	HASH_SEQ_STATUS status;
-	LOCALLOCK  *locallock;
 	MemoryContext cxt;
 	MemoryContext old_cxt;
 	LogQueryPlanPending = false;
@@ -5274,32 +5272,6 @@ ProcessLogQueryPlanInterrupt(void)
 
 		ProcessLogQueryPlanInterruptActive = false;
 		return;
-	}
-
-	/*
-	 * Ensure no page lock is held on this process.
-	 *
-	 * If page lock is held at the time of the interrupt, we can't acquire any
-	 * other heavyweight lock, which might be necessary for explaining the plan
-	 * when retrieving column names.
-	 *
-	 * This may be overkill, but since page locks are held for a short duration
-	 * we check all the LocalLock entries and when finding even one, give up
-	 * logging the plan.
-	 */
-	hash_seq_init(&status, GetLockMethodLocalHash());
-	while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
-	{
-		if (LOCALLOCK_LOCKTAG(*locallock) == LOCKTAG_PAGE)
-		{
-			ereport(LOG_SERVER_ONLY,
-				errmsg("ignored request for logging query plan due to page lock conflicts"),
-				errdetail("You can try again in a moment."));
-			hash_seq_term(&status);
-
-			ProcessLogQueryPlanInterruptActive = false;
-			return;
-		}
 	}
 
 	/*
