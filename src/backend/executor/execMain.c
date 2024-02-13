@@ -61,6 +61,7 @@
 #include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/backend_status.h"
+#include "utils/injection_point.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/partcache.h"
@@ -314,6 +315,10 @@ ExecutorRun(QueryDesc *queryDesc,
 
 	save_ActiveQueryDesc = ActiveQueryDesc;
 	ActiveQueryDesc = queryDesc;
+
+#ifdef USE_INJECTION_POINTS
+	INJECTION_POINT("executor-run");
+#endif
 
 	if (ExecutorRun_hook)
 		(*ExecutorRun_hook) (queryDesc, direction, count, execute_once);

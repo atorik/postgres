@@ -35,6 +35,8 @@ $node->append_conf('postgresql.conf', "auto_explain.log_min_duration = 0");
 $node->append_conf('postgresql.conf', "auto_explain.log_analyze = on");
 $node->start;
 
+$node->safe_psql('postgres', 'CREATE EXTENSION injection_points');
+
 # Simple query.
 my $log_contents = query_log($node, "SELECT * FROM pg_class;");
 
@@ -211,5 +213,22 @@ $node->safe_psql(
 REVOKE SET ON PARAMETER auto_explain.log_format FROM regress_user1;
 DROP USER regress_user1;
 });
+
+# Check that using both auto_explain and pg_log_plan_query() doesn't cause
+# conflicts
+
+$node->safe_psql('postgres', q{SELECT injection_points_attach('executor-run', 'logqueryplan')});
+
+$log_contents = query_log($node, "SELECT * FROM pg_class;");
+
+like(
+	$log_contents,
+	qr/duration: .+ms  plan:/,
+	"with pg_log_plan_query(), auto_explain logged");
+
+like(
+	$log_contents,
+	qr/query plan running on backend with PID/,
+	"with pg_log_plan_query(), pg_log_plan_query() logged");
 
 done_testing();
