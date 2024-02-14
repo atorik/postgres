@@ -214,21 +214,40 @@ REVOKE SET ON PARAMETER auto_explain.log_format FROM regress_user1;
 DROP USER regress_user1;
 });
 
-# Check that using both auto_explain and pg_log_plan_query() doesn't cause
+# Check that using both auto_explain and pg_log_query_plan() doesn't cause
 # conflicts
 
 $node->safe_psql('postgres', q{SELECT injection_points_attach('executor-run', 'logqueryplan')});
 
-$log_contents = query_log($node, "SELECT * FROM pg_class;");
+#$log_contents = query_log($node, "SELECT * FROM pg_class;");
 
-like(
-	$log_contents,
-	qr/duration: .+ms  plan:/,
-	"with pg_log_plan_query(), auto_explain logged");
+$log_contents = query_log(
+	$node,
+	"SELECT * FROM pg_class;",
+	{
+		"auto_explain.log_verbose" => "on",
+		"auto_explain.log_settings" => "on",
+		"auto_explain.log_analyze" => "off",
+		"compute_query_id" => "on"
+	});
 
 like(
 	$log_contents,
 	qr/query plan running on backend with PID/,
-	"with pg_log_plan_query(), pg_log_plan_query() logged");
+	"with pg_log_query_plan(), pg_log_query_plan() logged");
+ 
+like(
+	$log_contents,
+	qr/duration: .+ms  plan:/,
+	"with pg_log_query_plan(), auto_explain logged");
+
+$log_contents =~ /(Query Text:.*Query Identifier: \d+).*(Query Text:.*Query Identifier: \d+)/s;
+my $pg_log_plan_query_output = $1;
+my $auto_explain_output = $2;
+
+cmp_ok(
+	$pg_log_plan_query_output, "eq",
+	$auto_explain_output,
+	"with pg_log_plan_query_log(), plans are same");
 
 done_testing();
