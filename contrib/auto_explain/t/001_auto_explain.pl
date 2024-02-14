@@ -247,6 +247,6 @@ my $auto_explain_output = $2;
 cmp_ok(
 	$pg_log_plan_query_output, "eq",
 	$auto_explain_output,
-	"with pg_log_plan_query_log(), plans are same");
+	"with pg_log_plan_query_log(), logged plans are the same");
 
 done_testing();
