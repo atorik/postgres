@@ -218,8 +218,6 @@ DROP USER regress_user1;
 
 $node->safe_psql('postgres', q{SELECT injection_points_attach('executor-run', 'logqueryplan')});
 
-#$log_contents = query_log($node, "SELECT * FROM pg_class;");
-
 $log_contents = query_log(
 	$node,
 	"SELECT * FROM pg_class;",
