@@ -214,8 +214,7 @@ REVOKE SET ON PARAMETER auto_explain.log_format FROM regress_user1;
 DROP USER regress_user1;
 });
 
-# Check that using both auto_explain and pg_log_query_plan() doesn't cause
-# conflicts
+# Check that using both auto_explain and pg_log_query_plan() works fine
 
 $node->safe_psql('postgres', q{SELECT injection_points_attach('executor-run', 'logqueryplan')});
 
@@ -235,7 +234,7 @@ like(
 	$log_contents,
 	qr/query plan running on backend with PID/,
 	"with pg_log_query_plan(), pg_log_query_plan() logged");
- 
+
 like(
 	$log_contents,
 	qr/duration: .+ms  plan:/,
