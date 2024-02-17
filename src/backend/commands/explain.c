@@ -5238,53 +5238,17 @@ HandleLogQueryPlanInterrupt(void)
 	/* latch will be set by procsignal_sigusr1_handler */
 }
 
-/*
- * ProcessLogQueryPlanInterrupt
- * 		Perform logging the plan of the currently running query on this
- * 		backend process.
- *
- * Any backend that participates in ProcSignal signaling must arrange to call
- * this function if we see LogQueryPlanPending set.
- * It is called from CHECK_FOR_INTERRUPTS(), which is enough because the target
- * process for logging plan is a backend.
- */
-void
-ProcessLogQueryPlanInterrupt(void)
+
+static ExecProcNodeMtd
+Wrap(PlanState *ps)
 {
 	ExplainState *es;
 	MemoryContext cxt;
 	MemoryContext old_cxt;
-	LogQueryPlanPending = false;
 
-	/* Cannot re-enter. */
-	if (ProcessLogQueryPlanInterruptActive)
-		return;
-
-	ProcessLogQueryPlanInterruptActive = true;
-
-	if (ActiveQueryDesc == NULL)
-	{
-		ereport(LOG_SERVER_ONLY,
-				errmsg("backend with PID %d is not running a query or a subtransaction is aborted",
-					MyProcPid),
-				errhidestmt(true),
-				errhidecontext(true));
-
-		ProcessLogQueryPlanInterruptActive = false;
-		return;
-	}
-
-	/*
-	 * Ensure no lock is already held on the lockable object.
-	 * Otherwise EXPLAIN can be also hold on it.
-	 */
-	if (MyProc->heldLocks)
-	{
-		ereport(LOG_SERVER_ONLY,
-			errmsg("ignored request for logging query plan due to lock conflicts"),
-			errdetail("You can try again in a moment."));
-			return;
-	}
+	/* another node has already EXPLAINed */
+	if (!ProcessLogQueryPlanInterruptActive)
+		return ps->ExecProcNode;
 
 	cxt = AllocSetContextCreate(CurrentMemoryContext,
 								"log_query_plan temporary context",
@@ -5311,6 +5275,50 @@ ProcessLogQueryPlanInterrupt(void)
 	MemoryContextDelete(cxt);
 
 	ProcessLogQueryPlanInterruptActive = false;
+
+	return ps->ExecProcNode;
+}
+
+void
+WrapExecProcNode(PlanState *ps)
+{
+	if (ps->lefttree != NULL)
+		WrapExecProcNode(ps->lefttree);
+	if (ps->righttree != NULL)
+		WrapExecProcNode(ps->righttree);
+
+	ps->ExecProcNode = Wrap(ps);
+}
+
+/*
+ * ProcessLogQueryPlanInterrupt
+ * 		Perform logging the plan of the currently running query on this
+ * 		backend process.
+ *
+ * Any backend that participates in ProcSignal signaling must arrange to call
+ * this function if we see LogQueryPlanPending set.
+ * It is called from CHECK_FOR_INTERRUPTS(), which is enough because the target
+ * process for logging plan is a backend.
+ */
+void
+ProcessLogQueryPlanInterrupt(void)
+{
+	LogQueryPlanPending = false;
+
+	if (ActiveQueryDesc == NULL)
+	{
+		ereport(LOG_SERVER_ONLY,
+				errmsg("backend with PID %d is not running a query or a subtransaction is aborted",
+					MyProcPid),
+				errhidestmt(true),
+				errhidecontext(true));
+
+		return;
+	}
+
+	ProcessLogQueryPlanInterruptActive = true;
+
+	WrapExecProcNode(ActiveQueryDesc->planstate);
 }
 
 /*
