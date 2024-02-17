@@ -15,6 +15,10 @@ use Test::More;
 # Create publisher
 my $publisher = PostgreSQL::Test::Cluster->new('publisher');
 $publisher->init(allows_streaming => 'logical');
+# Disable autovacuum to avoid generating xid during stats update as otherwise
+# the new XID could then be replicated to standby at some random point making
+# slots at primary lag behind standby during slot sync.
+$publisher->append_conf('postgresql.conf', 'autovacuum = off');
 $publisher->start;
 
 $publisher->safe_psql('postgres',
@@ -130,13 +134,19 @@ $standby1->init_from_backup(
 	has_streaming => 1,
 	has_restoring => 1);
 
+# Increase the log_min_messages setting to DEBUG2 on both the standby and
+# primary to debug test failures, if any.
 my $connstr_1 = $primary->connstr;
 $standby1->append_conf(
 	'postgresql.conf', qq(
 hot_standby_feedback = on
 primary_slot_name = 'sb1_slot'
 primary_conninfo = '$connstr_1 dbname=postgres'
+log_min_messages = 'debug2'
 ));
+
+$primary->append_conf('postgresql.conf', "log_min_messages = 'debug2'");
+$primary->reload;
 
 $primary->psql('postgres',
 	q{SELECT pg_create_logical_replication_slot('lsub2_slot', 'test_decoding', false, false, true);}
@@ -171,7 +181,7 @@ $standby1->safe_psql('postgres', "SELECT pg_sync_replication_slots();");
 # flagged as 'synced'
 is( $standby1->safe_psql(
 		'postgres',
-		q{SELECT count(*) = 2 FROM pg_replication_slots WHERE slot_name IN ('lsub1_slot', 'lsub2_slot') AND synced;}
+		q{SELECT count(*) = 2 FROM pg_replication_slots WHERE slot_name IN ('lsub1_slot', 'lsub2_slot') AND synced AND NOT temporary;}
 	),
 	"t",
 	'logical slots have synced as true on standby');
@@ -223,9 +233,13 @@ is( $standby1->safe_psql(
 $standby1->append_conf('postgresql.conf', 'max_slot_wal_keep_size = -1');
 $standby1->reload;
 
-# Enable the subscription to let it catch up to the latest wal position
-$subscriber1->safe_psql('postgres',
-	"ALTER SUBSCRIPTION regress_mysub1 ENABLE");
+# To ensure that restart_lsn has moved to a recent WAL position, we re-create
+# the subscription and the logical slot.
+$subscriber1->safe_psql(
+	'postgres', qq[
+	DROP SUBSCRIPTION regress_mysub1;
+	CREATE SUBSCRIPTION regress_mysub1 CONNECTION '$publisher_connstr' PUBLICATION regress_mypub WITH (slot_name = lsub1_slot, copy_data = false, failover = true);
+]);
 
 $primary->wait_for_catchup('regress_mysub1');
 
@@ -256,10 +270,17 @@ $standby1->wait_for_log(qr/dropped replication slot "lsub1_slot" of dbid [0-9]+/
 # flagged as 'synced'
 is( $standby1->safe_psql(
 		'postgres',
-		q{SELECT conflict_reason IS NULL AND synced FROM pg_replication_slots WHERE slot_name = 'lsub1_slot';}
+		q{SELECT conflict_reason IS NULL AND synced AND NOT temporary FROM pg_replication_slots WHERE slot_name = 'lsub1_slot';}
 	),
 	"t",
 	'logical slot is re-synced');
+
+# Reset the log_min_messages to the default value.
+$primary->append_conf('postgresql.conf', "log_min_messages = 'warning'");
+$primary->reload;
+
+$standby1->append_conf('postgresql.conf', "log_min_messages = 'warning'");
+$standby1->reload;
 
 ##################################################
 # Test that a synchronized slot can not be decoded, altered or dropped by the
