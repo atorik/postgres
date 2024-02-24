@@ -5239,8 +5239,10 @@ HandleLogQueryPlanInterrupt(void)
 }
 
 
-static ExecProcNodeMtd
-Wrap(PlanState *ps)
+// static ExecProcNodeMtd
+// Wrap(PlanState *ps)
+static void
+AddExplain(void)
 {
 	ExplainState *es;
 	MemoryContext cxt;
@@ -5248,7 +5250,8 @@ Wrap(PlanState *ps)
 
 	/* another node has already EXPLAINed */
 	if (!ProcessLogQueryPlanInterruptActive)
-		return ps->ExecProcNode;
+		//return ps->ExecProcNode;
+		return;
 
 	cxt = AllocSetContextCreate(CurrentMemoryContext,
 								"log_query_plan temporary context",
@@ -5276,7 +5279,17 @@ Wrap(PlanState *ps)
 
 	ProcessLogQueryPlanInterruptActive = false;
 
-	return ps->ExecProcNode;
+	//return ps->ExecProcNode;
+}
+
+
+static TupleTableSlot *
+ExecProcNodeWithWrapped(PlanState *ps)
+{
+	//ps->wrapped();
+	AddExplain();
+
+	return ps->ExecProcNodeOrigin(ps);
 }
 
 void
@@ -5287,7 +5300,10 @@ WrapExecProcNode(PlanState *ps)
 	if (ps->righttree != NULL)
 		WrapExecProcNode(ps->righttree);
 
-	ps->ExecProcNode = Wrap(ps);
+
+	ps->ExecProcNodeOrigin = ps->ExecProcNode;
+	ps->ExecProcNode = ExecProcNodeWithWrapped;
+
 }
 
 /*
