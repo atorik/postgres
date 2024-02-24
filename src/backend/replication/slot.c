@@ -1252,6 +1252,20 @@ restart:
 		 * concurrently being dropped by a backend connected to another DB.
 		 *
 		 * That's fairly unlikely in practice, so we'll just bail out.
+		 *
+		 * The slot sync worker holds a shared lock on the database before
+		 * operating on synced logical slots to avoid conflict with the drop
+		 * happening here. The persistent synced slots are thus safe but there
+		 * is a possibility that the slot sync worker has created a temporary
+		 * slot (which stays active even on release) and we are trying to drop
+		 * that here. In practice, the chances of hitting this scenario are
+		 * less as during slot synchronization, the temporary slot is
+		 * immediately converted to persistent and thus is safe due to the
+		 * shared lock taken on the database. So, we'll just bail out in such
+		 * a case.
+		 *
+		 * XXX: We can consider shutting down the slot sync worker before
+		 * trying to drop synced temporary slots here.
 		 */
 		if (active_pid)
 			ereport(ERROR,
@@ -2313,6 +2327,7 @@ ReplicationSlotInvalidationCause
 GetSlotInvalidationCause(const char *conflict_reason)
 {
 	ReplicationSlotInvalidationCause cause;
+	ReplicationSlotInvalidationCause result = RS_INVAL_NONE;
 	bool		found PG_USED_FOR_ASSERTS_ONLY = false;
 
 	Assert(conflict_reason);
@@ -2322,10 +2337,11 @@ GetSlotInvalidationCause(const char *conflict_reason)
 		if (strcmp(SlotInvalidationCauses[cause], conflict_reason) == 0)
 		{
 			found = true;
+			result = cause;
 			break;
 		}
 	}
 
 	Assert(found);
-	return cause;
+	return result;
 }
