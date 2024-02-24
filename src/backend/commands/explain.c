@@ -5233,7 +5233,10 @@ escape_yaml(StringInfo buf, const char *str)
 void
 HandleLogQueryPlanInterrupt(void)
 {
-	InterruptPending = true;
+	/*
+	 * Do not set InterruptPending since ProcessLogQueryPlanInterrupt() is not
+	 * called from CHECK_FOR_INTERRUPTS().
+	 */
 	LogQueryPlanPending = true;
 	/* latch will be set by procsignal_sigusr1_handler */
 }
@@ -5256,6 +5259,11 @@ ProcessLogQueryPlanInterrupt(void)
 	MemoryContext old_cxt;
 	LogQueryPlanPending = false;
 
+	ereport(LOG_SERVER_ONLY,
+			errmsg("ProcessLogQueryPlanInterrupt"),
+			 errhidestmt(true),
+			 errhidecontext(true));
+
 	/* Cannot re-enter. */
 	if (ProcessLogQueryPlanInterruptActive)
 		return;
@@ -5272,18 +5280,6 @@ ProcessLogQueryPlanInterrupt(void)
 
 		ProcessLogQueryPlanInterruptActive = false;
 		return;
-	}
-
-	/*
-	 * Ensure no lock is already held on the lockable object.
-	 * Otherwise EXPLAIN can be also hold on it.
-	 */
-	if (MyProc->heldLocks)
-	{
-		ereport(LOG_SERVER_ONLY,
-			errmsg("ignored request for logging query plan due to lock conflicts"),
-			errdetail("You can try again in a moment."));
-			return;
 	}
 
 	cxt = AllocSetContextCreate(CurrentMemoryContext,

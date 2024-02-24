@@ -2774,6 +2774,7 @@ AbortTransaction(void)
 	 */
 	ActiveQueryDesc = NULL;
 	ProcessLogQueryPlanInterruptActive = false;
+	LogQueryPlanPending = false;
 
 	/*
 	 * check the current transaction state
@@ -5141,6 +5142,7 @@ AbortSubTransaction(void)
 	 */
 	ActiveQueryDesc = NULL;
 	ProcessLogQueryPlanInterruptActive = false;
+	LogQueryPlanPending = false;
 
 	/*
 	 * check the current transaction state
