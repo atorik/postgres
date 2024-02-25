@@ -137,4 +137,11 @@ extern void ExplainCloseGroup(const char *objtype, const char *labelname,
 
 extern void HandleLogQueryPlanInterrupt(void);
 extern void ProcessLogQueryPlanInterrupt(void);
+
+#define CHECK_LOG_QUERY_PLAN_PENDING() \
+do { \
+	if (unlikely(LogQueryPlanPending)) \
+		ProcessLogQueryPlanInterrupt(); \
+} while(0)
+
 #endif							/* EXPLAIN_H */

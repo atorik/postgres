@@ -514,6 +514,7 @@ ProcessClientReadInterrupt(bool blocked)
 	{
 		/* Check for general interrupts that arrived before/while reading */
 		CHECK_FOR_INTERRUPTS();
+		CHECK_LOG_QUERY_PLAN_PENDING();
 
 		/* Process sinval catchup interrupts, if any */
 		if (catchupInterruptPending)

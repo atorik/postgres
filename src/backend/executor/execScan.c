@@ -24,12 +24,6 @@
 #include "utils/memutils.h"
 
 
-#define CHECK_LOG_QUERY_PLAN_PENDING() \
-do { \
-	if (unlikely(LogQueryPlanPending)) \
-		ProcessLogQueryPlanInterrupt(); \
-} while(0)
-
 /*
  * ExecScanFetch -- check interrupts & fetch next potential tuple
  *
