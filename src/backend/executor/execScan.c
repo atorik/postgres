@@ -24,6 +24,7 @@
 #include "utils/memutils.h"
 
 
+
 /*
  * ExecScanFetch -- check interrupts & fetch next potential tuple
  *

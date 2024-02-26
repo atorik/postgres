@@ -602,18 +602,17 @@ LockHeldByMe(const LOCKTAG *locktag, LOCKMODE lockmode)
 	return (locallock && locallock->nLocks > 0);
 }
 
+#ifdef USE_ASSERT_CHECKING
 /*
- * GetLockMethodLocalHash -- return the hash of local locks, mainly for
- *		modules that evaluate assertions based on all locks held.
- *
- * NOTE: When there are many entries in LockMethodLocalHash, calling this
- * function and looking into all of them can lead to performance problems.
+ * GetLockMethodLocalHash -- return the hash of local locks, for modules that
+ *		evaluate assertions based on all locks held.
  */
 HTAB *
 GetLockMethodLocalHash(void)
 {
 	return LockMethodLocalHash;
 }
+#endif
 
 /*
  * LockHasWaiters -- look up 'locktag' and check if releasing this
