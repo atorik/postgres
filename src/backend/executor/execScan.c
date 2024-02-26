@@ -18,10 +18,10 @@
  */
 #include "postgres.h"
 
+#include "commands/explain.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "utils/memutils.h"
-
 
 
 /*
@@ -39,6 +39,7 @@ ExecScanFetch(ScanState *node,
 	EState	   *estate = node->ps.state;
 
 	CHECK_FOR_INTERRUPTS();
+	CHECK_LOG_QUERY_PLAN_PENDING();
 
 	if (estate->es_epq_active != NULL)
 	{

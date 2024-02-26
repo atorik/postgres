@@ -17,6 +17,8 @@
 #include "lib/stringinfo.h"
 #include "parser/parse_node.h"
 
+extern PGDLLIMPORT bool ProcessLogQueryPlanInterruptActive;
+
 typedef enum ExplainFormat
 {
 	EXPLAIN_FORMAT_TEXT,
@@ -61,6 +63,7 @@ typedef struct ExplainState
 	bool		hide_workers;	/* set if we find an invisible Gather */
 	/* state related to the current plan node */
 	ExplainWorkersState *workers_state; /* needed if parallel plan */
+	bool		signaled;		/* whether explain is called by signal */
 } ExplainState;
 
 /* Hook for plugins to get control in ExplainOneQuery() */
@@ -96,6 +99,10 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 						   const BufferUsage *bufusage,
 						   const MemoryContextCounters *mem_counters);
 
+extern void ExplainAssembleLogOutput(ExplainState *es, QueryDesc *queryDesc,
+									 int logFormat, bool logTriggers,
+									 int logParameterMaxLength);
+
 extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);
 extern void ExplainPrintTriggers(ExplainState *es, QueryDesc *queryDesc);
 
@@ -127,5 +134,14 @@ extern void ExplainOpenGroup(const char *objtype, const char *labelname,
 							 bool labeled, ExplainState *es);
 extern void ExplainCloseGroup(const char *objtype, const char *labelname,
 							  bool labeled, ExplainState *es);
+
+extern void HandleLogQueryPlanInterrupt(void);
+extern void ProcessLogQueryPlanInterrupt(void);
+
+#define CHECK_LOG_QUERY_PLAN_PENDING() \
+do { \
+	if (unlikely(LogQueryPlanPending)) \
+		ProcessLogQueryPlanInterrupt(); \
+} while(0)
 
 #endif							/* EXPLAIN_H */

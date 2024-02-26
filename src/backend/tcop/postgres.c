@@ -37,6 +37,7 @@
 #include "catalog/pg_type.h"
 #include "commands/async.h"
 #include "commands/event_trigger.h"
+#include "commands/explain.h"
 #include "commands/prepare.h"
 #include "common/pg_prng.h"
 #include "jit/jit.h"
@@ -513,6 +514,7 @@ ProcessClientReadInterrupt(bool blocked)
 	{
 		/* Check for general interrupts that arrived before/while reading */
 		CHECK_FOR_INTERRUPTS();
+		CHECK_LOG_QUERY_PLAN_PENDING();
 
 		/* Process sinval catchup interrupts, if any */
 		if (catchupInterruptPending)
@@ -3459,6 +3461,9 @@ ProcessInterrupts(void)
 
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
+
+	if (LogQueryPlanPending)
+		ProcessLogQueryPlanInterrupt();
 
 	if (ParallelApplyMessagePending)
 		HandleParallelApplyMessages();

@@ -17,6 +17,7 @@
 
 #include "postgres.h"
 
+#include "commands/explain.h"
 #include "fmgr.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
@@ -28,6 +29,7 @@ PG_MODULE_MAGIC;
 
 extern PGDLLEXPORT void injection_error(const char *name);
 extern PGDLLEXPORT void injection_notice(const char *name);
+extern PGDLLEXPORT void injection_HandleLogQueryPlanInterrupt(const char *name);
 
 
 /* Set of callbacks available to be attached to an injection point. */
@@ -41,6 +43,13 @@ void
 injection_notice(const char *name)
 {
 	elog(NOTICE, "notice triggered for injection point %s", name);
+}
+
+void
+injection_HandleLogQueryPlanInterrupt(const char *name)
+{
+	HandleLogQueryPlanInterrupt();
+	elog(LOG, "triggered injection_HandleLogQueryPlanInterrupt for injection point %s", name);
 }
 
 /*
@@ -58,6 +67,8 @@ injection_points_attach(PG_FUNCTION_ARGS)
 		function = "injection_error";
 	else if (strcmp(action, "notice") == 0)
 		function = "injection_notice";
+	else if (strcmp(action, "logqueryplan") == 0)
+		function = "injection_HandleLogQueryPlanInterrupt";
 	else
 		elog(ERROR, "incorrect action \"%s\" for injection point creation", action);
 
