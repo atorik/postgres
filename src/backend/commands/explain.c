@@ -5238,11 +5238,8 @@ HandleLogQueryPlanInterrupt(void)
 	/* latch will be set by procsignal_sigusr1_handler */
 }
 
-
-// static ExecProcNodeMtd
-// Wrap(PlanState *ps)
 static void
-AddExplain(void)
+DoExplain(void)
 {
 	ExplainState *es;
 	MemoryContext cxt;
@@ -5278,16 +5275,13 @@ AddExplain(void)
 	MemoryContextDelete(cxt);
 
 	ProcessLogQueryPlanInterruptActive = false;
-
-	//return ps->ExecProcNode;
 }
 
 
 static TupleTableSlot *
 ExecProcNodeWithWrapped(PlanState *ps)
 {
-	//ps->wrapped();
-	AddExplain();
+	DoExplain();
 
 	return ps->ExecProcNodeOrigin(ps);
 }
@@ -5295,21 +5289,22 @@ ExecProcNodeWithWrapped(PlanState *ps)
 void
 WrapExecProcNode(PlanState *ps)
 {
-	if (ps->lefttree != NULL)
-		WrapExecProcNode(ps->lefttree);
-	if (ps->righttree != NULL)
-		WrapExecProcNode(ps->righttree);
-
+	// wrap should be done only once
+	if (ps->ExecProcNodeOrigin != NULL)
+		return;
 
 	ps->ExecProcNodeOrigin = ps->ExecProcNode;
 	ps->ExecProcNode = ExecProcNodeWithWrapped;
 
+	if (ps->lefttree != NULL)
+		WrapExecProcNode(ps->lefttree);
+	if (ps->righttree != NULL)
+		WrapExecProcNode(ps->righttree);
 }
 
 /*
  * ProcessLogQueryPlanInterrupt
- * 		Perform logging the plan of the currently running query on this
- * 		backend process.
+ * 		Add wrapper which logs explain of the plan to ExecProcNodes.
  *
  * Any backend that participates in ProcSignal signaling must arrange to call
  * this function if we see LogQueryPlanPending set.
@@ -5333,7 +5328,6 @@ ProcessLogQueryPlanInterrupt(void)
 	}
 
 	ProcessLogQueryPlanInterruptActive = true;
-
 	WrapExecProcNode(ActiveQueryDesc->planstate);
 }
 
