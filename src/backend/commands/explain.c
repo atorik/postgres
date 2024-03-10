@@ -44,7 +44,7 @@
 #include "utils/typcache.h"
 #include "utils/xml.h"
 
-// bool ProcessLogQueryPlanInterruptActive = false;
+bool ProcessLogQueryPlanInterruptActive = false;
 
 /* Hook for plugins to get control in ExplainOneQuery() */
 ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
@@ -5280,10 +5280,6 @@ ExecProcNodeWithExplain(PlanState *ps)
 
 	check_stack_depth();
 
-//	/* another node has already EXPLAINed */
-//	if (!ProcessLogQueryPlanInterruptActive)
-//		return ps->ExecProcNodeOriginal(ps);
-
 	cxt = AllocSetContextCreate(CurrentMemoryContext,
 								"log_query_plan temporary context",
 								ALLOCSET_DEFAULT_SIZES);
@@ -5308,8 +5304,6 @@ ExecProcNodeWithExplain(PlanState *ps)
 	MemoryContextSwitchTo(old_cxt);
 	MemoryContextDelete(cxt);
 
-//	ProcessLogQueryPlanInterruptActive = false;
-
 	UnWrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
 
 	/* Since the unwrapped has already done, call ExecProcNode() not
@@ -5332,6 +5326,12 @@ ProcessLogQueryPlanInterrupt(void)
 {
 	LogQueryPlanPending = false;
 
+	/* Cannot re-enter */
+	if (ProcessLogQueryPlanInterruptActive)
+		return;
+
+	ProcessLogQueryPlanInterruptActive = true;
+
 	if (ActiveQueryDesc == NULL)
 	{
 		ereport(LOG_SERVER_ONLY,
@@ -5340,11 +5340,12 @@ ProcessLogQueryPlanInterrupt(void)
 				errhidestmt(true),
 				errhidecontext(true));
 
+		ProcessLogQueryPlanInterruptActive = false;
 		return;
 	}
 
-//	ProcessLogQueryPlanInterruptActive = true;
 	WrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
+	ProcessLogQueryPlanInterruptActive = false;
 }
 
 /*
