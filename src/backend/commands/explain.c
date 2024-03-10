@@ -160,6 +160,9 @@ static void ExplainIndentText(ExplainState *es);
 static void ExplainJSONLineEnding(ExplainState *es);
 static void ExplainYAMLLineStarting(ExplainState *es);
 static void escape_yaml(StringInfo buf, const char *str);
+static void WrapExecProcNodeWithExplain(PlanState *ps);
+static void UnWrapExecProcNodeWithExplain(PlanState *ps);
+static TupleTableSlot *ExecProcNodeWithExplain(PlanState *ps);
 
 
 
@@ -5239,7 +5242,37 @@ HandleLogQueryPlanInterrupt(void)
 }
 
 static void
-DoExplain(void)
+WrapExecProcNodeWithExplain(PlanState *ps)
+{
+	/* wrap should be done only once */
+	if (ps->ExecProcNodeOriginal != NULL)
+		return;
+
+	ps->ExecProcNodeOriginal = ps->ExecProcNode;
+	ps->ExecProcNode = ExecProcNodeWithExplain;
+
+	if (ps->lefttree != NULL)
+		WrapExecProcNodeWithExplain(ps->lefttree);
+	if (ps->righttree != NULL)
+		WrapExecProcNodeWithExplain(ps->righttree);
+}
+
+static void
+UnWrapExecProcNodeWithExplain(PlanState *ps)
+{
+	Assert(ps->ExecProcNodeOriginal != NULL);
+
+	ps->ExecProcNode = ps->ExecProcNodeOriginal;
+	ps->ExecProcNodeOriginal = NULL;
+
+	if (ps->lefttree != NULL)
+		UnWrapExecProcNodeWithExplain(ps->lefttree);
+	if (ps->righttree != NULL)
+		UnWrapExecProcNodeWithExplain(ps->righttree);
+}
+
+static TupleTableSlot *
+ExecProcNodeWithExplain(PlanState *ps)
 {
 	ExplainState *es;
 	MemoryContext cxt;
@@ -5247,8 +5280,7 @@ DoExplain(void)
 
 	/* another node has already EXPLAINed */
 	if (!ProcessLogQueryPlanInterruptActive)
-		//return ps->ExecProcNode;
-		return;
+		return ps->ExecProcNodeOriginal(ps);
 
 	cxt = AllocSetContextCreate(CurrentMemoryContext,
 								"log_query_plan temporary context",
@@ -5275,31 +5307,10 @@ DoExplain(void)
 	MemoryContextDelete(cxt);
 
 	ProcessLogQueryPlanInterruptActive = false;
-}
 
+	UnWrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
 
-static TupleTableSlot *
-ExecProcNodeWithWrapped(PlanState *ps)
-{
-	DoExplain();
-
-	return ps->ExecProcNodeOrigin(ps);
-}
-
-void
-WrapExecProcNode(PlanState *ps)
-{
-	// wrap should be done only once
-	if (ps->ExecProcNodeOrigin != NULL)
-		return;
-
-	ps->ExecProcNodeOrigin = ps->ExecProcNode;
-	ps->ExecProcNode = ExecProcNodeWithWrapped;
-
-	if (ps->lefttree != NULL)
-		WrapExecProcNode(ps->lefttree);
-	if (ps->righttree != NULL)
-		WrapExecProcNode(ps->righttree);
+	return ps->ExecProcNode(ps);
 }
 
 /*
@@ -5328,7 +5339,7 @@ ProcessLogQueryPlanInterrupt(void)
 	}
 
 	ProcessLogQueryPlanInterruptActive = true;
-	WrapExecProcNode(ActiveQueryDesc->planstate);
+	WrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
 }
 
 /*
