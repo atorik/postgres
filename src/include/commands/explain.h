@@ -136,6 +136,5 @@ extern void ExplainCloseGroup(const char *objtype, const char *labelname,
 							  bool labeled, ExplainState *es);
 
 extern void HandleLogQueryPlanInterrupt(void);
-extern void WrapExecProcNode(PlanState *ps);
 extern void ProcessLogQueryPlanInterrupt(void);
 #endif							/* EXPLAIN_H */
