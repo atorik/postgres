@@ -2773,7 +2773,7 @@ AbortTransaction(void)
 	 * are freed. To avoid accessing them, reset ActiveQueryDesc here.
 	 */
 	ActiveQueryDesc = NULL;
-	ProcessLogQueryPlanInterruptActive = false;
+	// ProcessLogQueryPlanInterruptActive = false;
 
 	/*
 	 * check the current transaction state
@@ -5140,7 +5140,7 @@ AbortSubTransaction(void)
 	 * are freed. To avoid accessing them, reset ActiveQueryDesc here.
 	 */
 	ActiveQueryDesc = NULL;
-	ProcessLogQueryPlanInterruptActive = false;
+	// ProcessLogQueryPlanInterruptActive = false;
 
 	/*
 	 * check the current transaction state

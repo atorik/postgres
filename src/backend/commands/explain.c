@@ -44,7 +44,7 @@
 #include "utils/typcache.h"
 #include "utils/xml.h"
 
-bool ProcessLogQueryPlanInterruptActive = false;
+// bool ProcessLogQueryPlanInterruptActive = false;
 
 /* Hook for plugins to get control in ExplainOneQuery() */
 ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
@@ -5244,7 +5244,7 @@ HandleLogQueryPlanInterrupt(void)
 static void
 WrapExecProcNodeWithExplain(PlanState *ps)
 {
-	/* wrap should be done only once */
+	/* wrap can be done only once */
 	if (ps->ExecProcNodeOriginal != NULL)
 		return;
 
@@ -5278,9 +5278,11 @@ ExecProcNodeWithExplain(PlanState *ps)
 	MemoryContext cxt;
 	MemoryContext old_cxt;
 
-	/* another node has already EXPLAINed */
-	if (!ProcessLogQueryPlanInterruptActive)
-		return ps->ExecProcNodeOriginal(ps);
+	check_stack_depth();
+
+//	/* another node has already EXPLAINed */
+//	if (!ProcessLogQueryPlanInterruptActive)
+//		return ps->ExecProcNodeOriginal(ps);
 
 	cxt = AllocSetContextCreate(CurrentMemoryContext,
 								"log_query_plan temporary context",
@@ -5306,10 +5308,13 @@ ExecProcNodeWithExplain(PlanState *ps)
 	MemoryContextSwitchTo(old_cxt);
 	MemoryContextDelete(cxt);
 
-	ProcessLogQueryPlanInterruptActive = false;
+//	ProcessLogQueryPlanInterruptActive = false;
 
 	UnWrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
 
+	/* Since the unwrapped has already done, call ExecProcNode() not
+	 * ExecProcNodeOriginal().
+	 */
 	return ps->ExecProcNode(ps);
 }
 
@@ -5338,7 +5343,7 @@ ProcessLogQueryPlanInterrupt(void)
 		return;
 	}
 
-	ProcessLogQueryPlanInterruptActive = true;
+//	ProcessLogQueryPlanInterruptActive = true;
 	WrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
 }
 
