@@ -5240,10 +5240,14 @@ HandleLogQueryPlanInterrupt(void)
 	/* latch will be set by procsignal_sigusr1_handler */
 }
 
+/*
+ * WrapExecProcNodeWithExplain -
+ *	  Wrap ExecProcNode with EXPLAIN recursively
+ */
 static void
 WrapExecProcNodeWithExplain(PlanState *ps)
 {
-	/* wrap can be done only once */
+	/* wrapping can be done only once */
 	if (ps->ExecProcNodeOriginal != NULL)
 		return;
 
@@ -5256,6 +5260,10 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 		WrapExecProcNodeWithExplain(ps->righttree);
 }
 
+/*
+ * UnWrapExecProcNodeWithExplain -
+ *	  Unwrap ExecProcNode with EXPLAIN recursively
+ */
 static void
 UnWrapExecProcNodeWithExplain(PlanState *ps)
 {
@@ -5270,6 +5278,10 @@ UnWrapExecProcNodeWithExplain(PlanState *ps)
 		UnWrapExecProcNodeWithExplain(ps->righttree);
 }
 
+/*
+ * ExecProcNodeWithExplain -
+ *	  Wrap ExecProcNode with EXPLAIN
+ */
 static TupleTableSlot *
 ExecProcNodeWithExplain(PlanState *ps)
 {
@@ -5305,7 +5317,7 @@ ExecProcNodeWithExplain(PlanState *ps)
 
 	UnWrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
 
-	/* Since the unwrapped has already done, call ExecProcNode() not
+	/* Since unwrapping has already done, call ExecProcNode() not
 	 * ExecProcNodeOriginal().
 	 */
 	return ps->ExecProcNode(ps);
@@ -5313,12 +5325,12 @@ ExecProcNodeWithExplain(PlanState *ps)
 
 /*
  * ProcessLogQueryPlanInterrupt
- * 		Add wrapper which logs explain of the plan to ExecProcNodes.
+ *	  Add wrapper which logs explain of the plan to ExecProcNodes
  *
- * Any backend that participates in ProcSignal signaling must arrange to call
- * this function if we see LogQueryPlanPending set.
- * It is called from CHECK_FOR_INTERRUPTS(), which is enough because the target
- * process for logging plan is a backend.
+ * Since running EXPLAIN codes at any arbitrary CHECK_FOR_INTERRUPTS() seems
+ * unsafe, this function just wraps ExecProcNode of every node.
+ * In this way, EXPLAIN code is only executed at the timing of ExecProcNode,
+ * which is safe.
  */
 void
 ProcessLogQueryPlanInterrupt(void)
