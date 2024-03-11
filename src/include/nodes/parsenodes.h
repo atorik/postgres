@@ -178,6 +178,14 @@ typedef struct Query
 	/* whether to use outer join */
 	bool		mergeUseOuterJoin pg_node_attr(query_jumble_ignore);
 
+	/*
+	 * rtable index of target relation for MERGE to pull data. Initially, this
+	 * is the same as resultRelation, but after query rewriting, if the target
+	 * relation is a trigger-updatable view, this is the index of the expanded
+	 * view subquery, whereas resultRelation is the index of the target view.
+	 */
+	int			mergeTargetRelation pg_node_attr(query_jumble_ignore);
+
 	List	   *targetList;		/* target list (of TargetEntry) */
 
 	/* OVERRIDING clause */
@@ -981,10 +989,6 @@ typedef struct PartitionCmd
  *	  them from the joinaliasvars list, because that would affect the attnums
  *	  of Vars referencing the rest of the list.)
  *
- *	  inh is true for relation references that should be expanded to include
- *	  inheritance children, if the rel has any.  This *must* be false for
- *	  RTEs other than RTE_RELATION entries.
- *
  *	  inFromCl marks those range variables that are listed in the FROM clause.
  *	  It's false for RTEs that are added to a query behind the scenes, such
  *	  as the NEW and OLD variables for a rule, or the subqueries of a UNION.
@@ -1033,6 +1037,13 @@ typedef struct RangeTblEntry
 	/*
 	 * Fields valid for a plain relation RTE (else zero):
 	 *
+	 * inh is true for relation references that should be expanded to include
+	 * inheritance children, if the rel has any.  In the parser, this will
+	 * only be true for RTE_RELATION entries.  The planner also uses this
+	 * field to mark RTE_SUBQUERY entries that contain UNION ALL queries that
+	 * it has flattened into pulled-up subqueries (creating a structure much
+	 * like the effects of inheritance).
+	 *
 	 * rellockmode is really LOCKMODE, but it's declared int to avoid having
 	 * to include lock-related headers here.  It must be RowExclusiveLock if
 	 * the RTE is an INSERT/UPDATE/DELETE/MERGE target, else RowShareLock if
@@ -1062,10 +1073,11 @@ typedef struct RangeTblEntry
 	 * tables to be invalidated if the underlying table is altered.
 	 */
 	Oid			relid;			/* OID of the relation */
+	bool		inh;			/* inheritance requested? */
 	char		relkind;		/* relation kind (see pg_class.relkind) */
 	int			rellockmode;	/* lock level that query requires on the rel */
+	Index		perminfoindex;	/* index of RTEPermissionInfo entry, or 0 */
 	struct TableSampleClause *tablesample;	/* sampling info, or NULL */
-	Index		perminfoindex;
 
 	/*
 	 * Fields valid for a subquery RTE (else NULL):
@@ -1191,7 +1203,6 @@ typedef struct RangeTblEntry
 	Alias	   *alias;			/* user-written alias clause, if any */
 	Alias	   *eref;			/* expanded reference names */
 	bool		lateral;		/* subquery, function, or values is LATERAL? */
-	bool		inh;			/* inheritance requested? */
 	bool		inFromCl;		/* present in FROM clause? */
 	List	   *securityQuals;	/* security barrier quals to apply, if any */
 } RangeTblEntry;
@@ -2266,7 +2277,7 @@ typedef struct AlterTableCmd	/* one subcommand of an ALTER TABLE */
 	NodeTag		type;
 	AlterTableType subtype;		/* Type of table alteration to apply */
 	char	   *name;			/* column, constraint, or trigger to act on,
-								 * or tablespace */
+								 * or tablespace, access method */
 	int16		num;			/* attribute number for columns referenced by
 								 * number */
 	RoleSpec   *newowner;

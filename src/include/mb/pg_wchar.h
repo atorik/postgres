@@ -224,11 +224,10 @@ typedef unsigned int pg_wchar;
 /*
  * PostgreSQL encoding identifiers
  *
- * WARNING: the order of this enum must be same as order of entries
- *			in the pg_enc2name_tbl[] array (in src/common/encnames.c), and
- *			in the pg_wchar_table[] array (in src/common/wchar.c)!
- *
- *			If you add some encoding don't forget to check
+ * WARNING: If you add some encoding don't forget to update
+ *			the pg_enc2name_tbl[] array (in src/common/encnames.c),
+ *			the pg_enc2gettext_tbl[] array (in src/common/encnames.c) and
+ *			the pg_wchar_table[] array (in src/common/wchar.c) and to check
  *			PG_ENCODING_BE_LAST macro.
  *
  * PG_SQL_ASCII is default encoding and must be = 0.
@@ -367,13 +366,7 @@ extern PGDLLIMPORT const pg_enc2name pg_enc2name_tbl[];
 /*
  * Encoding names for gettext
  */
-typedef struct pg_enc2gettext
-{
-	pg_enc		encoding;
-	const char *name;
-} pg_enc2gettext;
-
-extern PGDLLIMPORT const pg_enc2gettext pg_enc2gettext_tbl[];
+extern PGDLLIMPORT const char *pg_enc2gettext_tbl[];
 
 /*
  * pg_wchar stuff
@@ -562,6 +555,21 @@ surrogate_pair_to_codepoint(pg_wchar first, pg_wchar second)
 	return ((first & 0x3FF) << 10) + 0x10000 + (second & 0x3FF);
 }
 
+/*
+ * Number of bytes needed to represent the given char in UTF8.
+ */
+static inline int
+unicode_utf8len(pg_wchar c)
+{
+	if (c <= 0x7F)
+		return 1;
+	else if (c <= 0x7FF)
+		return 2;
+	else if (c <= 0xFFFF)
+		return 3;
+	else
+		return 4;
+}
 
 /*
  * The functions in this list are exported by libpq, and we need to be sure

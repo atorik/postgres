@@ -25,14 +25,12 @@
 #include "access/toast_internals.h"
 #include "access/transam.h"
 #include "access/xact.h"
-#include "access/xlog.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
 #include "catalog/heap.h"
 #include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
-#include "catalog/partition.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_inherits.h"
@@ -58,7 +56,6 @@
 #include "utils/relmapper.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
-#include "utils/tuplesort.h"
 
 /*
  * This struct is used to pass around the information on tables to be
@@ -353,6 +350,7 @@ cluster_rel(Oid tableOid, Oid indexOid, ClusterParams *params)
 	SetUserIdAndSecContext(OldHeap->rd_rel->relowner,
 						   save_sec_context | SECURITY_RESTRICTED_OPERATION);
 	save_nestlevel = NewGUCNestLevel();
+	RestrictSearchPath();
 
 	/*
 	 * Since we may open a new transaction for each relation, we have to check

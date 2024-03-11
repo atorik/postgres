@@ -832,6 +832,7 @@ static const SchemaQuery Query_for_list_of_mergetargets = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition =
 	"c.relkind IN (" CppAsString2(RELKIND_RELATION) ", "
+	CppAsString2(RELKIND_VIEW) ", "
 	CppAsString2(RELKIND_PARTITIONED_TABLE) ") ",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
@@ -2562,7 +2563,8 @@ psql_completion(const char *text, int start, int end)
 	 * AMs.
 	 */
 	else if (Matches("ALTER", "TABLE", MatchAny, "SET", "ACCESS", "METHOD"))
-		COMPLETE_WITH_QUERY(Query_for_list_of_table_access_methods);
+		COMPLETE_WITH_QUERY_PLUS(Query_for_list_of_table_access_methods,
+								 "DEFAULT");
 
 	/*
 	 * If we have ALTER TABLE <sth> SET TABLESPACE provide a list of

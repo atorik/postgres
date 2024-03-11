@@ -70,7 +70,6 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
-#include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/typcache.h"
 
@@ -259,6 +258,7 @@ static const dshash_parameters srtr_record_table_params = {
 	sizeof(SharedRecordTableEntry),
 	shared_record_table_compare,
 	shared_record_table_hash,
+	dshash_memcpy,
 	LWTRANCHE_PER_SESSION_RECORD_TYPE
 };
 
@@ -268,6 +268,7 @@ static const dshash_parameters srtr_typmod_table_params = {
 	sizeof(SharedTypmodTableEntry),
 	dshash_memcmp,
 	dshash_memhash,
+	dshash_memcpy,
 	LWTRANCHE_PER_SESSION_RECORD_TYPMOD
 };
 

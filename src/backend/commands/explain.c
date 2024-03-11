@@ -18,7 +18,6 @@
 #include "commands/createas.h"
 #include "commands/defrem.h"
 #include "commands/prepare.h"
-#include "executor/nodeHash.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
 #include "miscadmin.h"
@@ -5377,7 +5376,7 @@ pg_log_query_plan(PG_FUNCTION_ARGS)
 		PG_RETURN_BOOL(false);
 	}
 
-	be_status = pgstat_get_beentry_by_backend_id(proc->backendId);
+	be_status = pgstat_get_beentry_by_proc_number(proc->vxid.procNumber);
 	if (be_status->st_backendType != B_BACKEND)
 	{
 		ereport(WARNING,
@@ -5385,7 +5384,7 @@ pg_log_query_plan(PG_FUNCTION_ARGS)
 		PG_RETURN_BOOL(false);
 	}
 
-	if (SendProcSignal(pid, PROCSIG_LOG_QUERY_PLAN, proc->backendId) < 0)
+	if (SendProcSignal(pid, PROCSIG_LOG_QUERY_PLAN, proc->vxid.procNumber) < 0)
 	{
 		/* Again, just a warning to allow loops */
 		ereport(WARNING,

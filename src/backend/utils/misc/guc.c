@@ -25,6 +25,7 @@
 #include "postgres.h"
 
 #include <limits.h>
+#include <math.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -35,6 +36,8 @@
 #include "catalog/pg_parameter_acl.h"
 #include "guc_internal.h"
 #include "libpq/pqformat.h"
+#include "libpq/protocol.h"
+#include "miscadmin.h"
 #include "parser/scansup.h"
 #include "port/pg_bitutils.h"
 #include "storage/fd.h"
@@ -42,10 +45,8 @@
 #include "storage/shmem.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
-#include "utils/backend_status.h"
 #include "utils/builtins.h"
 #include "utils/conffiles.h"
-#include "utils/float.h"
 #include "utils/guc_tables.h"
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
@@ -65,6 +66,12 @@
  * serialization.
  */
 #define REALTYPE_PRECISION 17
+
+/*
+ * Safe search path when executing code as the table owner, such as during
+ * maintenance operations.
+ */
+#define GUC_SAFE_SEARCH_PATH "pg_catalog, pg_temp"
 
 static int	GUC_check_errcode_value;
 
@@ -2231,6 +2238,19 @@ int
 NewGUCNestLevel(void)
 {
 	return ++GUCNestLevel;
+}
+
+/*
+ * Set search_path to a fixed value for maintenance operations. No effect
+ * during bootstrap, when the search_path is already set to a fixed value and
+ * cannot be changed.
+ */
+void
+RestrictSearchPath(void)
+{
+	if (!IsBootstrapProcessingMode())
+		set_config_option("search_path", GUC_SAFE_SEARCH_PATH, PGC_USERSET,
+						  PGC_S_SESSION, GUC_ACTION_SAVE, true, 0, false);
 }
 
 /*

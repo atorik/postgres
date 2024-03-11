@@ -56,7 +56,6 @@
 
 #include "access/htup_details.h"
 #include "catalog/pg_collation.h"
-#include "catalog/pg_control.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
@@ -1606,7 +1605,7 @@ pg_newlocale_from_collation(Oid collid)
 			const char *iculocstr;
 			const char *icurules;
 
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colliculocale);
+			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
 			iculocstr = TextDatumGetCString(datum);
 
 			datum = SysCacheGetAttr(COLLOID, tp, Anum_pg_collation_collicurules, &isnull);
@@ -1627,7 +1626,7 @@ pg_newlocale_from_collation(Oid collid)
 
 			collversionstr = TextDatumGetCString(datum);
 
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, collform->collprovider == COLLPROVIDER_ICU ? Anum_pg_collation_colliculocale : Anum_pg_collation_collcollate);
+			datum = SysCacheGetAttrNotNull(COLLOID, tp, collform->collprovider == COLLPROVIDER_ICU ? Anum_pg_collation_colllocale : Anum_pg_collation_collcollate);
 
 			actual_versionstr = get_collation_actual_version(collform->collprovider,
 															 TextDatumGetCString(datum));
