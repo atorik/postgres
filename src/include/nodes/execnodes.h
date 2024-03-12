@@ -1046,10 +1046,14 @@ typedef struct PlanState
 								 * nodes point to one EState for the whole
 								 * top-level plan */
 
+
 	ExecProcNodeMtd ExecProcNode;	/* function to return next tuple */
 	ExecProcNodeMtd ExecProcNodeReal;	/* actual function, if above is a
 										 * wrapper */
-	ExecProcNodeMtd ExecProcNodeOriginal;
+
+	ExecProcNodeMtd ExecProcNodeOriginal; /* temporary place when adding
+										   * process for ExecProcNode */
+
 	Instrumentation *instrument;	/* Optional runtime stats for this node */
 	WorkerInstrumentation *worker_instrument;	/* per-worker instrumentation */
 

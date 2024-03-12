@@ -5254,7 +5254,7 @@ HandleLogQueryPlanInterrupt(void)
 
 /*
  * WrapExecProcNodeWithExplain -
- *	  Wrap ExecProcNode with EXPLAIN recursively
+ *	  Wrap ExecProcNode with ExecProcNodeWithExplain recursively
  */
 static void
 WrapExecProcNodeWithExplain(PlanState *ps)
@@ -5274,7 +5274,7 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 
 /*
  * UnWrapExecProcNodeWithExplain -
- *	  Unwrap ExecProcNode with EXPLAIN recursively
+ *	  Unwrap ExecProcNode with ExecProcNodeWithExplain recursively
  */
 static void
 UnWrapExecProcNodeWithExplain(PlanState *ps)
@@ -5292,7 +5292,7 @@ UnWrapExecProcNodeWithExplain(PlanState *ps)
 
 /*
  * ExecProcNodeWithExplain -
- *	  Wrap ExecProcNode with EXPLAIN
+ *	  Wrap ExecProcNode with codes which logs currently running plan
  */
 static TupleTableSlot *
 ExecProcNodeWithExplain(PlanState *ps)
@@ -5329,7 +5329,8 @@ ExecProcNodeWithExplain(PlanState *ps)
 
 	UnWrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
 
-	/* Since unwrapping has already done, call ExecProcNode() not
+	/*
+	 * Since unwrapping has already done, call ExecProcNode() not
 	 * ExecProcNodeOriginal().
 	 */
 	return ps->ExecProcNode(ps);
