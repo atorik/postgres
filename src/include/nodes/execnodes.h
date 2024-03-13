@@ -1046,7 +1046,6 @@ typedef struct PlanState
 								 * nodes point to one EState for the whole
 								 * top-level plan */
 
-
 	ExecProcNodeMtd ExecProcNode;	/* function to return next tuple */
 	ExecProcNodeMtd ExecProcNodeReal;	/* actual function, if above is a
 										 * wrapper */
