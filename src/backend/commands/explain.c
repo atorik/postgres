@@ -5341,7 +5341,7 @@ ExecProcNodeWithExplain(PlanState *ps)
  *	  Add wrapper which logs explain of the plan to ExecProcNodes
  *
  * Since running EXPLAIN codes at any arbitrary CHECK_FOR_INTERRUPTS() seems
- * unsafe, this function just wraps ExecProcNode of every node.
+ * unsafe, this function just wraps every ExecProcNode.
  * In this way, EXPLAIN code is only executed at the timing of ExecProcNode,
  * which is safe.
  */
