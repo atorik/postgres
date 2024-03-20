@@ -36,6 +36,7 @@
 #include "catalog/pg_enum.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/explain.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"
 #include "common/pg_prng.h"
