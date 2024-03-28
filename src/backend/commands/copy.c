@@ -392,19 +392,13 @@ defGetCopyHeaderChoice(DefElem *def, bool is_from)
 static CopyOnErrorChoice
 defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 {
-	char	   *sval;
+	char	   *sval = defGetString(def);
 
 	if (!is_from)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("COPY ON_ERROR cannot be used with COPY TO"),
 				 parser_errposition(pstate, def->location)));
-
-	/*
-	 * If no parameter value given, assume the default value.
-	 */
-	if (def->arg == NULL)
-		return COPY_ON_ERROR_STOP;
 
 	/*
 	 * Allow "stop", or "ignore" values.
