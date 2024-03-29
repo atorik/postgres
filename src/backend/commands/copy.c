@@ -403,7 +403,6 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 	/*
 	 * Allow "stop", or "ignore" values.
 	 */
-	sval = defGetString(def);
 	if (pg_strcasecmp(sval, "stop") == 0)
 		return COPY_ON_ERROR_STOP;
 	if (pg_strcasecmp(sval, "ignore") == 0)
