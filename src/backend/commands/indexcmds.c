@@ -28,6 +28,7 @@
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_inherits.h"
@@ -1209,7 +1210,7 @@ DefineIndex(Oid tableId,
 					 stmt->oldNumber, indexInfo, indexColNames,
 					 accessMethodId, tablespaceId,
 					 collationIds, opclassIds, opclassOptions,
-					 coloptions, reloptions,
+					 coloptions, NULL, reloptions,
 					 flags, constr_flags,
 					 allowSystemTableMods, !check_rights,
 					 &createdConstraintId);
@@ -2184,7 +2185,7 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 				strat = RTOverlapStrategyNumber;
 			else
 				strat = RTEqualStrategyNumber;
-			GetOperatorFromWellKnownStrategy(opclassOids[attn], atttype,
+			GetOperatorFromWellKnownStrategy(opclassOids[attn], InvalidOid,
 											 &opid, &strat);
 			indexInfo->ii_ExclusionOps[attn] = opid;
 			indexInfo->ii_ExclusionProcs[attn] = get_opcode(opid);
@@ -2424,7 +2425,7 @@ GetDefaultOpClass(Oid type_id, Oid am_id)
  * GetOperatorFromWellKnownStrategy
  *
  * opclass - the opclass to use
- * atttype - the type to ask about
+ * rhstype - the type for the right-hand side, or InvalidOid to use the type of the given opclass.
  * opid - holds the operator we found
  * strat - holds the input and output strategy number
  *
@@ -2437,14 +2438,14 @@ GetDefaultOpClass(Oid type_id, Oid am_id)
  * InvalidStrategy.
  */
 void
-GetOperatorFromWellKnownStrategy(Oid opclass, Oid atttype,
+GetOperatorFromWellKnownStrategy(Oid opclass, Oid rhstype,
 								 Oid *opid, StrategyNumber *strat)
 {
 	Oid			opfamily;
 	Oid			opcintype;
 	StrategyNumber instrat = *strat;
 
-	Assert(instrat == RTEqualStrategyNumber || instrat == RTOverlapStrategyNumber);
+	Assert(instrat == RTEqualStrategyNumber || instrat == RTOverlapStrategyNumber || instrat == RTContainedByStrategyNumber);
 
 	*opid = InvalidOid;
 
@@ -2467,16 +2468,21 @@ GetOperatorFromWellKnownStrategy(Oid opclass, Oid atttype,
 
 			ereport(ERROR,
 					errcode(ERRCODE_UNDEFINED_OBJECT),
-					instrat == RTEqualStrategyNumber ?
-					errmsg("could not identify an equality operator for type %s", format_type_be(atttype)) :
-					errmsg("could not identify an overlaps operator for type %s", format_type_be(atttype)),
+					instrat == RTEqualStrategyNumber ? errmsg("could not identify an equality operator for type %s", format_type_be(opcintype)) :
+					instrat == RTOverlapStrategyNumber ? errmsg("could not identify an overlaps operator for type %s", format_type_be(opcintype)) :
+					instrat == RTContainedByStrategyNumber ? errmsg("could not identify a contained-by operator for type %s", format_type_be(opcintype)) : 0,
 					errdetail("Could not translate strategy number %d for operator class \"%s\" for access method \"%s\".",
 							  instrat, NameStr(((Form_pg_opclass) GETSTRUCT(tuple))->opcname), "gist"));
-
-			ReleaseSysCache(tuple);
 		}
 
-		*opid = get_opfamily_member(opfamily, opcintype, opcintype, *strat);
+		/*
+		 * We parameterize rhstype so foreign keys can ask for a <@ operator
+		 * whose rhs matches the aggregate function. For example range_agg
+		 * returns anymultirange.
+		 */
+		if (!OidIsValid(rhstype))
+			rhstype = opcintype;
+		*opid = get_opfamily_member(opfamily, opcintype, rhstype, *strat);
 	}
 
 	if (!OidIsValid(*opid))
@@ -2489,9 +2495,9 @@ GetOperatorFromWellKnownStrategy(Oid opclass, Oid atttype,
 
 		ereport(ERROR,
 				errcode(ERRCODE_UNDEFINED_OBJECT),
-				instrat == RTEqualStrategyNumber ?
-				errmsg("could not identify an equality operator for type %s", format_type_be(atttype)) :
-				errmsg("could not identify an overlaps operator for type %s", format_type_be(atttype)),
+				instrat == RTEqualStrategyNumber ? errmsg("could not identify an equality operator for type %s", format_type_be(opcintype)) :
+				instrat == RTOverlapStrategyNumber ? errmsg("could not identify an overlaps operator for type %s", format_type_be(opcintype)) :
+				instrat == RTContainedByStrategyNumber ? errmsg("could not identify a contained-by operator for type %s", format_type_be(opcintype)) : 0,
 				errdetail("There is no suitable operator in operator family \"%s\" for access method \"%s\".",
 						  NameStr(((Form_pg_opfamily) GETSTRUCT(tuple))->opfname), "gist"));
 	}
@@ -2947,6 +2953,7 @@ RangeVarCallbackForReindexIndex(const RangeVar *relation,
 	char		relkind;
 	struct ReindexIndexCallbackState *state = arg;
 	LOCKMODE	table_lockmode;
+	Oid			table_oid;
 
 	/*
 	 * Lock level here should match table lock in reindex_index() for
@@ -2986,14 +2993,19 @@ RangeVarCallbackForReindexIndex(const RangeVar *relation,
 				 errmsg("\"%s\" is not an index", relation->relname)));
 
 	/* Check permissions */
-	if (!object_ownercheck(RelationRelationId, relId, GetUserId()))
-		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_INDEX, relation->relname);
+	table_oid = IndexGetRelation(relId, true);
+	if (OidIsValid(table_oid))
+	{
+		AclResult	aclresult;
+
+		aclresult = pg_class_aclcheck(table_oid, GetUserId(), ACL_MAINTAIN);
+		if (aclresult != ACLCHECK_OK)
+			aclcheck_error(aclresult, OBJECT_INDEX, relation->relname);
+	}
 
 	/* Lock heap before index to avoid deadlock. */
 	if (relId != oldRelId)
 	{
-		Oid			table_oid = IndexGetRelation(relId, true);
-
 		/*
 		 * If the OID isn't valid, it means the index was concurrently
 		 * dropped, which is not a problem for us; just return normally.
@@ -3029,7 +3041,7 @@ ReindexTable(const ReindexStmt *stmt, const ReindexParams *params, bool isTopLev
 									   (params->options & REINDEXOPT_CONCURRENTLY) != 0 ?
 									   ShareUpdateExclusiveLock : ShareLock,
 									   0,
-									   RangeVarCallbackOwnsTable, NULL);
+									   RangeVarCallbackMaintainsTable, NULL);
 
 	if (get_rel_relkind(heapOid) == RELKIND_PARTITIONED_TABLE)
 		ReindexPartitions(stmt, heapOid, params, isTopLevel);
@@ -3113,7 +3125,8 @@ ReindexMultipleTables(const ReindexStmt *stmt, const ReindexParams *params)
 	{
 		objectOid = get_namespace_oid(objectName, false);
 
-		if (!object_ownercheck(NamespaceRelationId, objectOid, GetUserId()))
+		if (!object_ownercheck(NamespaceRelationId, objectOid, GetUserId()) &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_MAINTAIN))
 			aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_SCHEMA,
 						   objectName);
 	}
@@ -3125,7 +3138,8 @@ ReindexMultipleTables(const ReindexStmt *stmt, const ReindexParams *params)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("can only reindex the currently open database")));
-		if (!object_ownercheck(DatabaseRelationId, objectOid, GetUserId()))
+		if (!object_ownercheck(DatabaseRelationId, objectOid, GetUserId()) &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_MAINTAIN))
 			aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_DATABASE,
 						   get_database_name(objectOid));
 	}
@@ -3197,15 +3211,12 @@ ReindexMultipleTables(const ReindexStmt *stmt, const ReindexParams *params)
 			continue;
 
 		/*
-		 * The table can be reindexed if the user is superuser, the table
-		 * owner, or the database/schema owner (but in the latter case, only
-		 * if it's not a shared relation).  object_ownercheck includes the
-		 * superuser case, and depending on objectKind we already know that
-		 * the user has permission to run REINDEX on this database or schema
-		 * per the permission checks at the beginning of this routine.
+		 * We already checked privileges on the database or schema, but we
+		 * further restrict reindexing shared catalogs to roles with the
+		 * MAINTAIN privilege on the relation.
 		 */
 		if (classtuple->relisshared &&
-			!object_ownercheck(RelationRelationId, relid, GetUserId()))
+			pg_class_aclcheck(relid, GetUserId(), ACL_MAINTAIN) != ACLCHECK_OK)
 			continue;
 
 		/*

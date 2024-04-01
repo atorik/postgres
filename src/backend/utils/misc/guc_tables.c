@@ -82,11 +82,11 @@
 #include "utils/float.h"
 #include "utils/guc_hooks.h"
 #include "utils/guc_tables.h"
+#include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/plancache.h"
 #include "utils/ps_status.h"
-#include "utils/inval.h"
 #include "utils/xml.h"
 
 /* This value is normally passed in from the Makefile */
@@ -711,7 +711,7 @@ const char *const config_group_names[] =
 	[CLIENT_CONN_OTHER] = gettext_noop("Client Connection Defaults / Other Defaults"),
 	[LOCK_MANAGEMENT] = gettext_noop("Lock Management"),
 	[COMPAT_OPTIONS_PREVIOUS] = gettext_noop("Version and Platform Compatibility / Previous PostgreSQL Versions"),
-	[COMPAT_OPTIONS_CLIENT] = gettext_noop("Version and Platform Compatibility / Other Platforms and Clients"),
+	[COMPAT_OPTIONS_OTHER] = gettext_noop("Version and Platform Compatibility / Other Platforms and Clients"),
 	[ERROR_HANDLING_OPTIONS] = gettext_noop("Error Handling"),
 	[PRESET_OPTIONS] = gettext_noop("Preset Options"),
 	[CUSTOM_OPTIONS] = gettext_noop("Customized Options"),
@@ -1523,7 +1523,7 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"transform_null_equals", PGC_USERSET, COMPAT_OPTIONS_CLIENT,
+		{"transform_null_equals", PGC_USERSET, COMPAT_OPTIONS_OTHER,
 			gettext_noop("Treats \"expr=NULL\" as \"expr IS NULL\"."),
 			gettext_noop("When turned on, expressions of the form expr = NULL "
 						 "(or NULL = expr) are treated as expr IS NULL, that is, they "
@@ -3293,9 +3293,9 @@ struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_MIN,
 		},
 		&wal_summary_keep_time,
-		10 * 24 * 60,			/* 10 days */
+		10 * HOURS_PER_DAY * MINS_PER_HOUR, /* 10 days */
 		0,
-		INT_MAX,
+		INT_MAX / SECS_PER_MINUTE,
 		NULL, NULL, NULL
 	},
 

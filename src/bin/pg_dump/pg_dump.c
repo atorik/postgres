@@ -136,6 +136,9 @@ static SimpleOidList foreign_servers_include_oids = {NULL, NULL};
 static SimpleStringList extension_include_patterns = {NULL, NULL};
 static SimpleOidList extension_include_oids = {NULL, NULL};
 
+static SimpleStringList extension_exclude_patterns = {NULL, NULL};
+static SimpleOidList extension_exclude_oids = {NULL, NULL};
+
 static const CatalogId nilCatalogId = {0, 0};
 
 /* override for standard extra_float_digits setting */
@@ -437,6 +440,7 @@ main(int argc, char **argv)
 		{"exclude-table-data-and-children", required_argument, NULL, 14},
 		{"sync-method", required_argument, NULL, 15},
 		{"filter", required_argument, NULL, 16},
+		{"exclude-extension", required_argument, NULL, 17},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -672,6 +676,11 @@ main(int argc, char **argv)
 				read_dump_filters(optarg, &dopt);
 				break;
 
+			case 17:			/* exclude extension(s) */
+				simple_string_list_append(&extension_exclude_patterns,
+										  optarg);
+				break;
+
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -890,6 +899,10 @@ main(int argc, char **argv)
 		if (extension_include_oids.head == NULL)
 			pg_fatal("no matching extensions were found");
 	}
+	expand_extension_name_patterns(fout, &extension_exclude_patterns,
+								   &extension_exclude_oids,
+								   false);
+	/* non-matching exclusion patterns aren't an error */
 
 	/*
 	 * Dumping LOs is the default for dumps where an inclusion switch is not
@@ -1095,6 +1108,7 @@ help(const char *progname)
 	printf(_("  -c, --clean                  clean (drop) database objects before recreating\n"));
 	printf(_("  -C, --create                 include commands to create database in dump\n"));
 	printf(_("  -e, --extension=PATTERN      dump the specified extension(s) only\n"));
+	printf(_("  --exclude-extension=PATTERN  do NOT dump the specified extension(s)\n"));
 	printf(_("  -E, --encoding=ENCODING      dump the data in encoding ENCODING\n"));
 	printf(_("  -n, --schema=PATTERN         dump the specified schema(s) only\n"));
 	printf(_("  -N, --exclude-schema=PATTERN do NOT dump the specified schema(s)\n"));
@@ -2028,6 +2042,12 @@ selectDumpableExtension(ExtensionInfo *extinfo, DumpOptions *dopt)
 			extinfo->dobj.dump = extinfo->dobj.dump_contains =
 				dopt->include_everything ?
 				DUMP_COMPONENT_ALL : DUMP_COMPONENT_NONE;
+
+		/* check that the extension is not explicitly excluded */
+		if (extinfo->dobj.dump &&
+			simple_oid_list_member(&extension_exclude_oids,
+								   extinfo->dobj.catId.oid))
+			extinfo->dobj.dump = extinfo->dobj.dump_contains = DUMP_COMPONENT_NONE;
 	}
 }
 
@@ -3114,7 +3134,9 @@ dumpDatabase(Archive *fout)
 	}
 
 	appendPQExpBufferStr(creaQry, " LOCALE_PROVIDER = ");
-	if (datlocprovider[0] == 'c')
+	if (datlocprovider[0] == 'b')
+		appendPQExpBufferStr(creaQry, "builtin");
+	else if (datlocprovider[0] == 'c')
 		appendPQExpBufferStr(creaQry, "libc");
 	else if (datlocprovider[0] == 'i')
 		appendPQExpBufferStr(creaQry, "icu");
@@ -3142,7 +3164,11 @@ dumpDatabase(Archive *fout)
 	}
 	if (locale)
 	{
-		appendPQExpBufferStr(creaQry, " ICU_LOCALE = ");
+		if (datlocprovider[0] == 'b')
+			appendPQExpBufferStr(creaQry, " BUILTIN_LOCALE = ");
+		else
+			appendPQExpBufferStr(creaQry, " ICU_LOCALE = ");
+
 		appendStringLiteralAH(creaQry, locale, fout);
 	}
 
@@ -7574,7 +7600,7 @@ getExtendedStatistics(Archive *fout)
 
 	if (fout->remoteVersion < 130000)
 		appendPQExpBufferStr(query, "SELECT tableoid, oid, stxname, "
-							 "stxnamespace, stxowner, stxrelid, (-1) AS stxstattarget "
+							 "stxnamespace, stxowner, stxrelid, NULL AS stxstattarget "
 							 "FROM pg_catalog.pg_statistic_ext");
 	else
 		appendPQExpBufferStr(query, "SELECT tableoid, oid, stxname, "
@@ -7607,7 +7633,10 @@ getExtendedStatistics(Archive *fout)
 		statsextinfo[i].rolname = getRoleName(PQgetvalue(res, i, i_stxowner));
 		statsextinfo[i].stattable =
 			findTableByOid(atooid(PQgetvalue(res, i, i_stxrelid)));
-		statsextinfo[i].stattarget = atoi(PQgetvalue(res, i, i_stattarget));
+		if (PQgetisnull(res, i, i_stattarget))
+			statsextinfo[i].stattarget = -1;
+		else
+			statsextinfo[i].stattarget = atoi(PQgetvalue(res, i, i_stattarget));
 
 		/* Decide whether we want to dump it */
 		selectDumpableStatisticsObject(&(statsextinfo[i]), fout);
@@ -7836,7 +7865,7 @@ getDomainConstraints(Archive *fout, TypeInfo *tyinfo)
 							 "pg_catalog.pg_get_constraintdef(oid) AS consrc, "
 							 "convalidated "
 							 "FROM pg_catalog.pg_constraint "
-							 "WHERE contypid = $1 "
+							 "WHERE contypid = $1 AND contype = 'c' "
 							 "ORDER BY conname");
 
 		ExecuteSqlStatement(fout, query->data);
@@ -13870,7 +13899,9 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 					  fmtQualifiedDumpable(collinfo));
 
 	appendPQExpBufferStr(q, "provider = ");
-	if (collprovider[0] == 'c')
+	if (collprovider[0] == 'b')
+		appendPQExpBufferStr(q, "builtin");
+	else if (collprovider[0] == 'c')
 		appendPQExpBufferStr(q, "libc");
 	else if (collprovider[0] == 'i')
 		appendPQExpBufferStr(q, "icu");
@@ -13890,6 +13921,15 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 			pg_log_warning("invalid collation \"%s\"", qcollname);
 
 		/* no locale -- the default collation cannot be reloaded anyway */
+	}
+	else if (collprovider[0] == 'b')
+	{
+		if (collcollate || collctype || !colllocale || collicurules)
+			pg_log_warning("invalid collation \"%s\"", qcollname);
+
+		appendPQExpBufferStr(q, ", locale = ");
+		appendStringLiteralAH(q, colllocale ? colllocale : "",
+							  fout);
 	}
 	else if (collprovider[0] == 'i')
 	{
@@ -16616,7 +16656,8 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 		if (RELKIND_HAS_TABLESPACE(tbinfo->relkind))
 			tablespace = tbinfo->reltablespace;
 
-		if (RELKIND_HAS_TABLE_AM(tbinfo->relkind))
+		if (RELKIND_HAS_TABLE_AM(tbinfo->relkind) ||
+			tbinfo->relkind == RELKIND_PARTITIONED_TABLE)
 			tableam = tbinfo->amname;
 
 		ArchiveEntry(fout, tbinfo->dobj.catId, tbinfo->dobj.dumpId,
@@ -17045,8 +17086,7 @@ dumpStatisticsExt(Archive *fout, const StatsExtInfo *statsextinfo)
 
 	/*
 	 * We only issue an ALTER STATISTICS statement if the stxstattarget entry
-	 * for this statistics object is non-negative (i.e. it's not the default
-	 * value).
+	 * for this statistics object is not the default value.
 	 */
 	if (statsextinfo->stattarget >= 0)
 	{
@@ -18246,6 +18286,15 @@ processExtensionTables(Archive *fout, ExtensionInfo extinfo[],
 									curext->dobj.catId.oid))
 			continue;
 
+		/*
+		 * Check if this extension is listed as to exclude in the dump.  If
+		 * yes, any table data associated with it is discarded.
+		 */
+		if (extension_exclude_oids.head != NULL &&
+			simple_oid_list_member(&extension_exclude_oids,
+								   curext->dobj.catId.oid))
+			continue;
+
 		if (strlen(extconfig) != 0 || strlen(extcondition) != 0)
 		{
 			int			j;
@@ -18946,7 +18995,6 @@ read_dump_filters(const char *filename, DumpOptions *dopt)
 				case FILTER_OBJECT_TYPE_FUNCTION:
 				case FILTER_OBJECT_TYPE_INDEX:
 				case FILTER_OBJECT_TYPE_TRIGGER:
-				case FILTER_OBJECT_TYPE_EXTENSION:
 				case FILTER_OBJECT_TYPE_FOREIGN_DATA:
 					pg_log_filter_error(&fstate, _("%s filter for \"%s\" is not allowed"),
 										"exclude",
@@ -18954,6 +19002,9 @@ read_dump_filters(const char *filename, DumpOptions *dopt)
 					exit_nicely(1);
 					break;
 
+				case FILTER_OBJECT_TYPE_EXTENSION:
+					simple_string_list_append(&extension_exclude_patterns, objname);
+					break;
 				case FILTER_OBJECT_TYPE_TABLE_DATA:
 					simple_string_list_append(&tabledata_exclude_patterns,
 											  objname);

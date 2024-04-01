@@ -73,6 +73,7 @@
 #include "tcop/tcopprot.h"
 #include "tcop/utility.h"
 #include "utils/guc_hooks.h"
+#include "utils/injection_point.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
@@ -641,7 +642,7 @@ pg_parse_query(const char *query_string)
 	 */
 #ifdef WRITE_READ_PARSE_PLAN_TREES
 	{
-		char	   *str = nodeToString(raw_parsetree_list);
+		char	   *str = nodeToStringWithLocations(raw_parsetree_list);
 		List	   *new_list = stringToNodeWithLocations(str);
 
 		pfree(str);
@@ -849,7 +850,7 @@ pg_rewrite_query(Query *query)
 		foreach(lc, querytree_list)
 		{
 			Query	   *curr_query = lfirst_node(Query, lc);
-			char	   *str = nodeToString(curr_query);
+			char	   *str = nodeToStringWithLocations(curr_query);
 			Query	   *new_query = stringToNodeWithLocations(str);
 
 			/*
@@ -931,7 +932,7 @@ pg_plan_query(Query *querytree, const char *query_string, int cursorOptions,
 		char	   *str;
 		PlannedStmt *new_plan;
 
-		str = nodeToString(plan);
+		str = nodeToStringWithLocations(plan);
 		new_plan = stringToNodeWithLocations(str);
 		pfree(str);
 
@@ -3409,36 +3410,43 @@ ProcessInterrupts(void)
 		/*
 		 * If the GUC has been reset to zero, ignore the signal.  This is
 		 * important because the GUC update itself won't disable any pending
-		 * interrupt.
+		 * interrupt.  We need to unset the flag before the injection point,
+		 * otherwise we could loop in interrupts checking.
 		 */
+		IdleInTransactionSessionTimeoutPending = false;
 		if (IdleInTransactionSessionTimeout > 0)
+		{
+			INJECTION_POINT("idle-in-transaction-session-timeout");
 			ereport(FATAL,
 					(errcode(ERRCODE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT),
 					 errmsg("terminating connection due to idle-in-transaction timeout")));
-		else
-			IdleInTransactionSessionTimeoutPending = false;
+		}
 	}
 
 	if (TransactionTimeoutPending)
 	{
 		/* As above, ignore the signal if the GUC has been reset to zero. */
+		TransactionTimeoutPending = false;
 		if (TransactionTimeout > 0)
+		{
+			INJECTION_POINT("transaction-timeout");
 			ereport(FATAL,
 					(errcode(ERRCODE_TRANSACTION_TIMEOUT),
 					 errmsg("terminating connection due to transaction timeout")));
-		else
-			TransactionTimeoutPending = false;
+		}
 	}
 
 	if (IdleSessionTimeoutPending)
 	{
 		/* As above, ignore the signal if the GUC has been reset to zero. */
+		IdleSessionTimeoutPending = false;
 		if (IdleSessionTimeout > 0)
+		{
+			INJECTION_POINT("idle-session-timeout");
 			ereport(FATAL,
 					(errcode(ERRCODE_IDLE_SESSION_TIMEOUT),
 					 errmsg("terminating connection due to idle-session timeout")));
-		else
-			IdleSessionTimeoutPending = false;
+		}
 	}
 
 	/*

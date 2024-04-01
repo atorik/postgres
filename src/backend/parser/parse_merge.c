@@ -18,14 +18,14 @@
 #include "access/sysattr.h"
 #include "nodes/makefuncs.h"
 #include "parser/analyze.h"
-#include "parser/parse_collate.h"
-#include "parser/parsetree.h"
 #include "parser/parse_clause.h"
+#include "parser/parse_collate.h"
 #include "parser/parse_cte.h"
 #include "parser/parse_expr.h"
 #include "parser/parse_merge.h"
 #include "parser/parse_relation.h"
 #include "parser/parse_target.h"
+#include "parser/parsetree.h"
 #include "utils/rel.h"
 
 static void setNamespaceForMergeWhen(ParseState *pstate,
@@ -234,6 +234,10 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 	 */
 	qry->jointree = makeFromExpr(pstate->p_joinlist, joinExpr);
 
+	/* Transform the RETURNING list, if any */
+	qry->returningList = transformReturningList(pstate, stmt->returningList,
+												EXPR_KIND_MERGE_RETURNING);
+
 	/*
 	 * We now have a good query shape, so now look at the WHEN conditions and
 	 * action targetlists.
@@ -390,9 +394,6 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 	}
 
 	qry->mergeActionList = mergeActionList;
-
-	/* RETURNING could potentially be added in the future, but not in SQL std */
-	qry->returningList = NULL;
 
 	qry->hasTargetSRFs = false;
 	qry->hasSubLinks = pstate->p_hasSubLinks;
