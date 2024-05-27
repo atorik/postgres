@@ -1732,13 +1732,23 @@ get_collation_actual_version(char collprovider, const char *collcollate)
 
 	/*
 	 * The only two supported locales (C and C.UTF-8) are both based on memcmp
-	 * and are not expected to change.
+	 * and are not expected to change, but track the version anyway.
 	 *
 	 * Note that the character semantics may change for some locales, but the
 	 * collation version only tracks changes to sort order.
 	 */
 	if (collprovider == COLLPROVIDER_BUILTIN)
-		return NULL;
+	{
+		if (strcmp(collcollate, "C") == 0)
+			return "1";
+		else if (strcmp(collcollate, "C.UTF-8") == 0)
+			return "1";
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("invalid locale name \"%s\" for builtin provider",
+							collcollate)));
+	}
 
 #ifdef USE_ICU
 	if (collprovider == COLLPROVIDER_ICU)
@@ -2509,9 +2519,6 @@ pg_strnxfrm_prefix(char *dest, size_t destsize, const char *src,
 /*
  * Return required encoding ID for the given locale, or -1 if any encoding is
  * valid for the locale.
- *
- * The only supported locale for the builtin provider is "C", and it's
- * available for any encoding.
  */
 int
 builtin_locale_encoding(const char *locale)
@@ -2533,9 +2540,6 @@ builtin_locale_encoding(const char *locale)
 /*
  * Validate the locale and encoding combination, and return the canonical form
  * of the locale name.
- *
- * The only supported locale for the builtin provider is "C", and it's
- * available for any encoding.
  */
 const char *
 builtin_validate_locale(int encoding, const char *locale)
@@ -2996,7 +3000,7 @@ icu_validate_locale(const char *loc_str)
 		ereport(elevel,
 				(errmsg("could not get language from ICU locale \"%s\": %s",
 						loc_str, u_errorName(status)),
-				 errhint("To disable ICU locale validation, set the parameter %s to \"%s\".",
+				 errhint("To disable ICU locale validation, set the parameter \"%s\" to \"%s\".",
 						 "icu_validation_level", "disabled")));
 		return;
 	}
@@ -3025,7 +3029,7 @@ icu_validate_locale(const char *loc_str)
 		ereport(elevel,
 				(errmsg("ICU locale \"%s\" has unknown language \"%s\"",
 						loc_str, lang),
-				 errhint("To disable ICU locale validation, set the parameter %s to \"%s\".",
+				 errhint("To disable ICU locale validation, set the parameter \"%s\" to \"%s\".",
 						 "icu_validation_level", "disabled")));
 
 	/* check that it can be opened */

@@ -419,8 +419,9 @@ bininteger_junk	{bininteger}{ident_start}
 numeric_junk	{numeric}{ident_start}
 real_junk		{real}{ident_start}
 
-param			\${decinteger}
-param_junk		\${decinteger}{ident_start}
+/* Positional parameters don't accept underscores. */
+param			\${decdigit}+
+param_junk		\${decdigit}+{ident_start}
 
 other			.
 
@@ -564,7 +565,7 @@ other			.
 						ereport(ERROR,
 								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 								 errmsg("unsafe use of string constant with Unicode escapes"),
-								 errdetail("String constants with Unicode escapes cannot be used when standard_conforming_strings is off."),
+								 errdetail("String constants with Unicode escapes cannot be used when \"standard_conforming_strings\" is off."),
 								 lexer_errposition()));
 					BEGIN(xus);
 					startlit();

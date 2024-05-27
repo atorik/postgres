@@ -3471,6 +3471,7 @@ create_minmaxagg_path(PlannerInfo *root,
  * 'subpath' is the path representing the source of data
  * 'target' is the PathTarget to be computed
  * 'windowFuncs' is a list of WindowFunc structs
+ * 'runCondition' is a list of OpExprs to short-circuit WindowAgg execution
  * 'winclause' is a WindowClause that is common to all the WindowFuncs
  * 'qual' WindowClause.runconditions from lower-level WindowAggPaths.
  *		Must always be NIL when topwindow == false
@@ -3486,6 +3487,7 @@ create_windowagg_path(PlannerInfo *root,
 					  Path *subpath,
 					  PathTarget *target,
 					  List *windowFuncs,
+					  List *runCondition,
 					  WindowClause *winclause,
 					  List *qual,
 					  bool topwindow)
@@ -3510,6 +3512,7 @@ create_windowagg_path(PlannerInfo *root,
 	pathnode->subpath = subpath;
 	pathnode->winclause = winclause;
 	pathnode->qual = qual;
+	pathnode->runCondition = runCondition;
 	pathnode->topwindow = topwindow;
 
 	/*
@@ -3716,6 +3719,7 @@ create_lockrows_path(PlannerInfo *root, RelOptInfo *rel,
  * 'onconflict' is the ON CONFLICT clause, or NULL
  * 'epqParam' is the ID of Param for EvalPlanQual re-eval
  * 'mergeActionLists' is a list of lists of MERGE actions (one per rel)
+ * 'mergeJoinConditions' is a list of join conditions for MERGE (one per rel)
  */
 ModifyTablePath *
 create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
@@ -3727,7 +3731,8 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 						List *updateColnosLists,
 						List *withCheckOptionLists, List *returningLists,
 						List *rowMarks, OnConflictExpr *onconflict,
-						List *mergeActionLists, int epqParam)
+						List *mergeActionLists, List *mergeJoinConditions,
+						int epqParam)
 {
 	ModifyTablePath *pathnode = makeNode(ModifyTablePath);
 
@@ -3795,6 +3800,7 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->onconflict = onconflict;
 	pathnode->epqParam = epqParam;
 	pathnode->mergeActionLists = mergeActionLists;
+	pathnode->mergeJoinConditions = mergeJoinConditions;
 
 	return pathnode;
 }

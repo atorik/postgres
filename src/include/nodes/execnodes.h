@@ -544,9 +544,11 @@ typedef struct ResultRelInfo
 	/* ON CONFLICT evaluation state */
 	OnConflictSetState *ri_onConflict;
 
-	/* for MERGE, lists of MergeActionState */
-	List	   *ri_matchedMergeAction;
-	List	   *ri_notMatchedMergeAction;
+	/* for MERGE, lists of MergeActionState (one per MergeMatchKind) */
+	List	   *ri_MergeActions[NUM_MERGE_MATCH_KINDS];
+
+	/* for MERGE, expr state for checking the join condition */
+	ExprState  *ri_MergeJoinCondition;
 
 	/* partition check expression state (NULL if not set up yet) */
 	ExprState  *ri_PartitionCheckExpr;
@@ -1068,7 +1070,6 @@ typedef struct JsonExprState
 	 * RETURNING type input function invocation info when
 	 * JsonExpr.use_io_coercion is true.
 	 */
-	FmgrInfo   *input_finfo;
 	FunctionCallInfo input_fcinfo;
 
 	/*
@@ -1404,6 +1405,13 @@ typedef struct ModifyTableState
 	/* For MERGE, the action currently being executed */
 	MergeActionState *mt_merge_action;
 
+	/*
+	 * For MERGE, if there is a pending NOT MATCHED [BY TARGET] action to be
+	 * performed, this will be the last tuple read from the subplan; otherwise
+	 * it will be NULL --- see the comments in ExecMerge().
+	 */
+	TupleTableSlot *mt_merge_pending_not_matched;
+
 	/* tuple counters for MERGE */
 	double		mt_merge_inserted;
 	double		mt_merge_updated;
@@ -1685,6 +1693,8 @@ typedef struct IndexScanState
  *		TableSlot		   slot for holding tuples fetched from the table
  *		VMBuffer		   buffer in use for visibility map testing, if any
  *		PscanLen		   size of parallel index-only scan descriptor
+ *		NameCStringAttNums attnums of name typed columns to pad to NAMEDATALEN
+ *		NameCStringCount   number of elements in the NameCStringAttNums array
  * ----------------
  */
 typedef struct IndexOnlyScanState
@@ -1704,6 +1714,8 @@ typedef struct IndexOnlyScanState
 	TupleTableSlot *ioss_TableSlot;
 	Buffer		ioss_VMBuffer;
 	Size		ioss_PscanLen;
+	AttrNumber *ioss_NameCStringAttNums;
+	int			ioss_NameCStringCount;
 } IndexOnlyScanState;
 
 /* ----------------
@@ -1788,10 +1800,7 @@ typedef struct ParallelBitmapHeapState
  *		tbm				   bitmap obtained from child index scan(s)
  *		tbmiterator		   iterator for scanning current pages
  *		tbmres			   current-page data
- *		can_skip_fetch	   can we potentially skip tuple fetches in this scan?
- *		return_empty_tuples number of empty tuples to return
- *		vmbuffer		   buffer for visibility-map lookups
- *		pvmbuffer		   ditto, for prefetched pages
+ *		pvmbuffer		   buffer for visibility-map lookups of prefetched pages
  *		exact_pages		   total number of exact pages retrieved
  *		lossy_pages		   total number of lossy pages retrieved
  *		prefetch_iterator  iterator for prefetching ahead of current page
@@ -1811,9 +1820,6 @@ typedef struct BitmapHeapScanState
 	TIDBitmap  *tbm;
 	TBMIterator *tbmiterator;
 	TBMIterateResult *tbmres;
-	bool		can_skip_fetch;
-	int			return_empty_tuples;
-	Buffer		vmbuffer;
 	Buffer		pvmbuffer;
 	long		exact_pages;
 	long		lossy_pages;
@@ -1835,7 +1841,6 @@ typedef struct BitmapHeapScanState
  *		NumTids		   number of tids in this scan
  *		TidPtr		   index of currently fetched tid
  *		TidList		   evaluated item pointers (array of size NumTids)
- *		htup		   currently-fetched tuple, if any
  * ----------------
  */
 typedef struct TidScanState
@@ -1846,7 +1851,6 @@ typedef struct TidScanState
 	int			tss_NumTids;
 	int			tss_TidPtr;
 	ItemPointerData *tss_TidList;
-	HeapTupleData tss_htup;
 } TidScanState;
 
 /* ----------------
@@ -1957,6 +1961,8 @@ typedef struct TableFuncScanState
 	ExprState  *rowexpr;		/* state for row-generating expression */
 	List	   *colexprs;		/* state for column-generating expression */
 	List	   *coldefexprs;	/* state for column default expressions */
+	List	   *colvalexprs;	/* state for column value expressions */
+	List	   *passingvalexprs;	/* state for PASSING argument expressions */
 	List	   *ns_names;		/* same as TableFunc.ns_names */
 	List	   *ns_uris;		/* list of states of namespace URI exprs */
 	Bitmapset  *notnulls;		/* nullability flag for each output column */
@@ -2528,7 +2534,6 @@ typedef struct AggState
 #define FIELDNO_AGGSTATE_ALL_PERGROUPS 53
 	AggStatePerGroup *all_pergroups;	/* array of first ->pergroups, than
 										 * ->hash_pergroup */
-	ProjectionInfo *combinedproj;	/* projection machinery */
 	SharedAggInfo *shared_info; /* one entry per worker */
 } AggState;
 

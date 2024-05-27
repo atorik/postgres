@@ -53,9 +53,9 @@ typedef struct PlannedStmt
 
 	uint64		queryId;		/* query identifier (copied from Query) */
 
-	bool		hasReturning;	/* is it insert|update|delete RETURNING? */
+	bool		hasReturning;	/* is it insert|update|delete|merge RETURNING? */
 
-	bool		hasModifyingCTE;	/* has insert|update|delete in WITH? */
+	bool		hasModifyingCTE;	/* has insert|update|delete|merge in WITH? */
 
 	bool		canSetTag;		/* do I set the command result tag? */
 
@@ -251,6 +251,8 @@ typedef struct ModifyTable
 	List	   *exclRelTlist;	/* tlist of the EXCLUDED pseudo relation */
 	List	   *mergeActionLists;	/* per-target-table lists of actions for
 									 * MERGE */
+	List	   *mergeJoinConditions;	/* per-target-table join conditions
+										 * for MERGE */
 } ModifyTable;
 
 struct PartitionPruneInfo;		/* forward reference to struct below */

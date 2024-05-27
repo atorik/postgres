@@ -458,6 +458,8 @@ alter domain con add constraint t check (VALUE < 1); -- fails
 alter domain con add constraint t check (VALUE < 34);
 alter domain con add check (VALUE > 0);
 
+\dD con
+
 insert into domcontest values (-5); -- fails
 insert into domcontest values (42); -- fails
 insert into domcontest values (5);
@@ -477,17 +479,19 @@ create table domconnotnulltest
 );
 
 insert into domconnotnulltest default values;
-alter domain connotnull add not null value; -- fails
+alter domain connotnull add not null; -- fails
 
 update domconnotnulltest set col1 = 5;
-alter domain connotnull add not null value; -- fails
+alter domain connotnull add not null; -- fails
 
 update domconnotnulltest set col2 = 6;
 
-alter domain connotnull add constraint constr1 not null value;
+alter domain connotnull add constraint constr1 not null;
 select count(*) from pg_constraint where contypid = 'connotnull'::regtype and contype = 'n';
-alter domain connotnull add constraint constr1bis not null value;  -- redundant
+alter domain connotnull add constraint constr1bis not null;  -- redundant
 select count(*) from pg_constraint where contypid = 'connotnull'::regtype and contype = 'n';
+
+\dD connotnull
 
 update domconnotnulltest set col1 = null; -- fails
 
@@ -838,6 +842,18 @@ create domain testdomain1 as int constraint unsigned check (value > 0);
 alter domain testdomain1 rename constraint unsigned to unsigned_foo;
 alter domain testdomain1 drop constraint unsigned_foo;
 drop domain testdomain1;
+
+--
+-- Get the base type of a domain
+--
+create domain mytext as text;
+create domain mytext_child_1 as mytext;
+
+select pg_basetype('mytext'::regtype);
+select pg_basetype('mytext_child_1'::regtype);
+select pg_basetype(1);  -- expect NULL not error
+
+drop domain mytext cascade;
 
 
 --

@@ -21,6 +21,7 @@
 #include "access/sdir.h"
 #include "access/xact.h"
 #include "executor/tuptable.h"
+#include "storage/read_stream.h"
 #include "utils/rel.h"
 #include "utils/snapshot.h"
 
@@ -62,6 +63,13 @@ typedef enum ScanOptions
 
 	/* unregister snapshot at scan end? */
 	SO_TEMP_SNAPSHOT = 1 << 9,
+
+	/*
+	 * At the discretion of the table AM, bitmap table scans may be able to
+	 * skip fetching a block from the table if none of the table data is
+	 * needed. If table data may be needed, set SO_NEED_TUPLES.
+	 */
+	SO_NEED_TUPLES = 1 << 10,
 }			ScanOptions;
 
 /*
@@ -258,15 +266,6 @@ typedef struct TM_IndexDeleteOp
 #define TUPLE_LOCK_FLAG_LOCK_UPDATE_IN_PROGRESS	(1 << 0)
 /* Follow update chain and lock latest version of tuple */
 #define TUPLE_LOCK_FLAG_FIND_LAST_VERSION		(1 << 1)
-
-/*
- * "options" flag bits for table_tuple_update and table_tuple_delete,
- * Wait for any conflicting update to commit/abort */
-#define TABLE_MODIFY_WAIT			0x0001
-/* Fetch the existing tuple into a dedicated slot */
-#define TABLE_MODIFY_FETCH_OLD_TUPLE 0x0002
-/* On concurrent update, follow the update chain and lock latest version of tuple */
-#define TABLE_MODIFY_LOCK_UPDATED	0x0004
 
 
 /* Typedef for callback function for table_index_build_scan */
@@ -509,9 +508,9 @@ typedef struct TableAmRoutine
 	 */
 
 	/* see table_tuple_insert() for reference about parameters */
-	TupleTableSlot *(*tuple_insert) (Relation rel, TupleTableSlot *slot,
-									 CommandId cid, int options,
-									 struct BulkInsertStateData *bistate);
+	void		(*tuple_insert) (Relation rel, TupleTableSlot *slot,
+								 CommandId cid, int options,
+								 struct BulkInsertStateData *bistate);
 
 	/* see table_tuple_insert_speculative() for reference about parameters */
 	void		(*tuple_insert_speculative) (Relation rel,
@@ -537,10 +536,9 @@ typedef struct TableAmRoutine
 								 CommandId cid,
 								 Snapshot snapshot,
 								 Snapshot crosscheck,
-								 int options,
+								 bool wait,
 								 TM_FailureData *tmfd,
-								 bool changingPart,
-								 TupleTableSlot *oldSlot);
+								 bool changingPart);
 
 	/* see table_tuple_update() for reference about parameters */
 	TM_Result	(*tuple_update) (Relation rel,
@@ -549,11 +547,10 @@ typedef struct TableAmRoutine
 								 CommandId cid,
 								 Snapshot snapshot,
 								 Snapshot crosscheck,
-								 int options,
+								 bool wait,
 								 TM_FailureData *tmfd,
 								 LockTupleMode *lockmode,
-								 TU_UpdateIndexes *update_indexes,
-								 TupleTableSlot *oldSlot);
+								 TU_UpdateIndexes *update_indexes);
 
 	/* see table_tuple_lock() for reference about parameters */
 	TM_Result	(*tuple_lock) (Relation rel,
@@ -628,8 +625,8 @@ typedef struct TableAmRoutine
 									   const RelFileLocator *newrlocator);
 
 	/* See table_relation_copy_for_cluster() */
-	void		(*relation_copy_for_cluster) (Relation NewTable,
-											  Relation OldTable,
+	void		(*relation_copy_for_cluster) (Relation OldTable,
+											  Relation NewTable,
 											  Relation OldIndex,
 											  bool use_sort,
 											  TransactionId OldestXmin,
@@ -659,6 +656,16 @@ typedef struct TableAmRoutine
 									BufferAccessStrategy bstrategy);
 
 	/*
+	 * Prepare to analyze the next block in the read stream.  Returns false if
+	 * the stream is exhausted and true otherwise. The scan must have been
+	 * started with SO_TYPE_ANALYZE option.
+	 *
+	 * This routine holds a buffer pin and lock on the heap page.  They are
+	 * held until heapam_scan_analyze_next_tuple() returns false.  That is
+	 * until all the items of the heap page are analyzed.
+	 */
+
+	/*
 	 * Prepare to analyze block `blockno` of `scan`. The scan has been started
 	 * with table_beginscan_analyze().  See also
 	 * table_scan_analyze_next_block().
@@ -676,8 +683,7 @@ typedef struct TableAmRoutine
 	 * isn't one yet.
 	 */
 	bool		(*scan_analyze_next_block) (TableScanDesc scan,
-											BlockNumber blockno,
-											BufferAccessStrategy bstrategy);
+											ReadStream *stream);
 
 	/*
 	 * See table_scan_analyze_next_tuple().
@@ -718,14 +724,6 @@ typedef struct TableAmRoutine
 	 * Miscellaneous functions.
 	 * ------------------------------------------------------------------------
 	 */
-
-	/*
-	 * This callback frees relation private cache data stored in rd_amcache.
-	 * After the call all memory related to rd_amcache must be freed,
-	 * rd_amcache must be set to NULL. If this callback is not provided,
-	 * rd_amcache is assumed to point to a single memory chunk.
-	 */
-	void		(*free_rd_amcache) (Relation rel);
 
 	/*
 	 * See table_relation_size().
@@ -963,9 +961,12 @@ table_beginscan_strat(Relation rel, Snapshot snapshot,
  */
 static inline TableScanDesc
 table_beginscan_bm(Relation rel, Snapshot snapshot,
-				   int nkeys, struct ScanKeyData *key)
+				   int nkeys, struct ScanKeyData *key, bool need_tuple)
 {
 	uint32		flags = SO_TYPE_BITMAPSCAN | SO_ALLOW_PAGEMODE;
+
+	if (need_tuple)
+		flags |= SO_NEED_TUPLES;
 
 	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, flags);
 }
@@ -1403,19 +1404,16 @@ table_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
  * behavior) is also just passed through to RelationGetBufferForTuple. If
  * `bistate` is provided, table_finish_bulk_insert() needs to be called.
  *
- * Returns the slot containing the inserted tuple, which may differ from the
- * given slot. For instance, the source slot may be VirtualTupleTableSlot, but
- * the result slot may correspond to the table AM. On return the slot's
- * tts_tid and tts_tableOid are updated to reflect the insertion. But note
- * that any toasting of fields within the slot is NOT reflected in the slots
- * contents.
+ * On return the slot's tts_tid and tts_tableOid are updated to reflect the
+ * insertion. But note that any toasting of fields within the slot is NOT
+ * reflected in the slots contents.
  */
-static inline TupleTableSlot *
+static inline void
 table_tuple_insert(Relation rel, TupleTableSlot *slot, CommandId cid,
 				   int options, struct BulkInsertStateData *bistate)
 {
-	return rel->rd_tableam->tuple_insert(rel, slot, cid, options,
-										 bistate);
+	rel->rd_tableam->tuple_insert(rel, slot, cid, options,
+								  bistate);
 }
 
 /*
@@ -1474,7 +1472,7 @@ table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
 }
 
 /*
- * Delete a tuple (and optionally lock the last tuple version).
+ * Delete a tuple.
  *
  * NB: do not call this directly unless prepared to deal with
  * concurrent-update conditions.  Use simple_table_tuple_delete instead.
@@ -1485,21 +1483,11 @@ table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
  *	cid - delete command ID (used for visibility test, and stored into
  *		cmax if successful)
  *	crosscheck - if not InvalidSnapshot, also check tuple against this
- *	options:
- *		If TABLE_MODIFY_WAIT, wait for any conflicting update to commit/abort.
- *		If TABLE_MODIFY_FETCH_OLD_TUPLE option is given, the existing tuple is
- *		fetched into oldSlot when the update is successful.
- *		If TABLE_MODIFY_LOCK_UPDATED option is given and the tuple is
- *		concurrently updated, then the last tuple version is locked and fetched
- *		into oldSlot.
- *
+ *	wait - true if should wait for any conflicting update to commit/abort
  * Output parameters:
  *	tmfd - filled in failure cases (see below)
  *	changingPart - true iff the tuple is being moved to another partition
  *		table due to an update of the partition key. Otherwise, false.
- *	oldSlot - slot to save the deleted or locked tuple. Can be NULL if none of
- *		TABLE_MODIFY_FETCH_OLD_TUPLE or TABLE_MODIFY_LOCK_UPDATED options
- *		is specified.
  *
  * Normal, successful return value is TM_Ok, which means we did actually
  * delete it.  Failure return codes are TM_SelfModified, TM_Updated, and
@@ -1511,18 +1499,16 @@ table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
  */
 static inline TM_Result
 table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
-				   Snapshot snapshot, Snapshot crosscheck, int options,
-				   TM_FailureData *tmfd, bool changingPart,
-				   TupleTableSlot *oldSlot)
+				   Snapshot snapshot, Snapshot crosscheck, bool wait,
+				   TM_FailureData *tmfd, bool changingPart)
 {
 	return rel->rd_tableam->tuple_delete(rel, tid, cid,
 										 snapshot, crosscheck,
-										 options, tmfd, changingPart,
-										 oldSlot);
+										 wait, tmfd, changingPart);
 }
 
 /*
- * Update a tuple (and optionally lock the last tuple version).
+ * Update a tuple.
  *
  * NB: do not call this directly unless you are prepared to deal with
  * concurrent-update conditions.  Use simple_table_tuple_update instead.
@@ -1534,23 +1520,13 @@ table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
  *	cid - update command ID (used for visibility test, and stored into
  *		cmax/cmin if successful)
  *	crosscheck - if not InvalidSnapshot, also check old tuple against this
- *	options:
- *		If TABLE_MODIFY_WAIT, wait for any conflicting update to commit/abort.
- *		If TABLE_MODIFY_FETCH_OLD_TUPLE option is given, the existing tuple is
- *		fetched into oldSlot when the update is successful.
- *		If TABLE_MODIFY_LOCK_UPDATED option is given and the tuple is
- *		concurrently updated, then the last tuple version is locked and fetched
- *		into oldSlot.
- *
+ *	wait - true if should wait for any conflicting update to commit/abort
  * Output parameters:
  *	tmfd - filled in failure cases (see below)
  *	lockmode - filled with lock mode acquired on tuple
  *  update_indexes - in success cases this is set to true if new index entries
  *		are required for this tuple
- *	oldSlot - slot to save the deleted or locked tuple. Can be NULL if none of
- *		TABLE_MODIFY_FETCH_OLD_TUPLE or TABLE_MODIFY_LOCK_UPDATED options
- *		is specified.
-
+ *
  * Normal, successful return value is TM_Ok, which means we did actually
  * update it.  Failure return codes are TM_SelfModified, TM_Updated, and
  * TM_BeingModified (the last only possible if wait == false).
@@ -1568,15 +1544,13 @@ table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
 static inline TM_Result
 table_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slot,
 				   CommandId cid, Snapshot snapshot, Snapshot crosscheck,
-				   int options, TM_FailureData *tmfd, LockTupleMode *lockmode,
-				   TU_UpdateIndexes *update_indexes,
-				   TupleTableSlot *oldSlot)
+				   bool wait, TM_FailureData *tmfd, LockTupleMode *lockmode,
+				   TU_UpdateIndexes *update_indexes)
 {
 	return rel->rd_tableam->tuple_update(rel, otid, slot,
 										 cid, snapshot, crosscheck,
-										 options, tmfd,
-										 lockmode, update_indexes,
-										 oldSlot);
+										 wait, tmfd,
+										 lockmode, update_indexes);
 }
 
 /*
@@ -1747,19 +1721,17 @@ table_relation_vacuum(Relation rel, struct VacuumParams *params,
 }
 
 /*
- * Prepare to analyze block `blockno` of `scan`. The scan needs to have been
- * started with table_beginscan_analyze().  Note that this routine might
- * acquire resources like locks that are held until
+ * Prepare to analyze the next block in the read stream. The scan needs to
+ * have been  started with table_beginscan_analyze().  Note that this routine
+ * might acquire resources like locks that are held until
  * table_scan_analyze_next_tuple() returns false.
  *
  * Returns false if block is unsuitable for sampling, true otherwise.
  */
 static inline bool
-table_scan_analyze_next_block(TableScanDesc scan, BlockNumber blockno,
-							  BufferAccessStrategy bstrategy)
+table_scan_analyze_next_block(TableScanDesc scan, ReadStream *stream)
 {
-	return scan->rs_rd->rd_tableam->scan_analyze_next_block(scan, blockno,
-															bstrategy);
+	return scan->rs_rd->rd_tableam->scan_analyze_next_block(scan, stream);
 }
 
 /*
@@ -1892,32 +1864,6 @@ table_index_validate_scan(Relation table_rel,
  * Miscellaneous functionality
  * ----------------------------------------------------------------------------
  */
-
-/*
- * Frees relation private cache data stored in rd_amcache.  Uses
- * free_rd_amcache method if provided.  Assumes rd_amcache to point to single
- * memory chunk otherwise.
- */
-static inline void
-table_free_rd_amcache(Relation rel)
-{
-	if (rel->rd_tableam && rel->rd_tableam->free_rd_amcache)
-	{
-		rel->rd_tableam->free_rd_amcache(rel);
-
-		/*
-		 * We are assuming free_rd_amcache() did clear the cache and left NULL
-		 * in rd_amcache.
-		 */
-		Assert(rel->rd_amcache == NULL);
-	}
-	else
-	{
-		if (rel->rd_amcache)
-			pfree(rel->rd_amcache);
-		rel->rd_amcache = NULL;
-	}
-}
 
 /*
  * Return the current size of `rel` in bytes. If `forkNumber` is
@@ -2118,12 +2064,10 @@ table_scan_sample_next_tuple(TableScanDesc scan,
 
 extern void simple_table_tuple_insert(Relation rel, TupleTableSlot *slot);
 extern void simple_table_tuple_delete(Relation rel, ItemPointer tid,
-									  Snapshot snapshot,
-									  TupleTableSlot *oldSlot);
+									  Snapshot snapshot);
 extern void simple_table_tuple_update(Relation rel, ItemPointer otid,
 									  TupleTableSlot *slot, Snapshot snapshot,
-									  TU_UpdateIndexes *update_indexes,
-									  TupleTableSlot *oldSlot);
+									  TU_UpdateIndexes *update_indexes);
 
 
 /* ----------------------------------------------------------------------------
