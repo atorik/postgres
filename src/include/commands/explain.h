@@ -150,4 +150,5 @@ extern void ExplainCloseGroup(const char *objtype, const char *labelname,
 extern void HandleLogQueryPlanInterrupt(void);
 extern void ProcessLogQueryPlanInterrupt(void);
 extern DestReceiver *CreateExplainSerializeDestReceiver(ExplainState *es);
+
 #endif							/* EXPLAIN_H */
