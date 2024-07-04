@@ -757,7 +757,6 @@ fileIterateForeignScan(ForeignScanState *node)
 	 */
 	oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
 
-	/* on_error ignore指定時にsoft error発生しなくなるまでNextCopyFromを繰り返す */
 	for(;;)
 	{
 		if (!NextCopyFrom(cstate, econtext,
@@ -783,10 +782,11 @@ fileIterateForeignScan(ForeignScanState *node)
 			/* Report that this tuple was skipped by the ON_ERROR clause */
 			pgstat_progress_update_param(PROGRESS_COPY_TUPLES_SKIPPED,
 										 ++skipped);
+
+			/* Repeat NextCopyFrom() until no soft error occurs */
 			continue;
 		}
 
-		/* 正常にTupleが取得できた */
 		ExecStoreVirtualTuple(slot);
 		break;
 	}
@@ -830,6 +830,10 @@ fileEndForeignScan(ForeignScanState *node)
 {
 	FileFdwExecutionState *festate = (FileFdwExecutionState *) node->fdw_state;
 
+	/* if festate is NULL, we are in EXPLAIN; nothing to do */
+	if (!festate)
+		return;
+
 	if (festate->cstate->opts.on_error != COPY_ON_ERROR_STOP &&
 		festate->cstate->num_errors > 0)
 		ereport(NOTICE,
@@ -838,8 +842,6 @@ fileEndForeignScan(ForeignScanState *node)
 							  (unsigned long long) festate->cstate->num_errors,
 							  (unsigned long long) festate->cstate->num_errors));
 
-	/* if festate is NULL, we are in EXPLAIN; nothing to do */
-	if (festate)
 		EndCopyFrom(festate->cstate);
 }
 
