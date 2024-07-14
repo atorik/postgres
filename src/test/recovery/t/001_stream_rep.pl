@@ -95,6 +95,16 @@ $result = $node_standby_2->safe_psql('postgres', "SELECT * FROM seq1");
 print "standby 2: $result\n";
 is($result, qq(33|0|t), 'check streamed sequence content on standby 2');
 
+# Check pg_sequence_last_value() returns NULL for unlogged sequence on standby
+$node_primary->safe_psql('postgres',
+	"CREATE UNLOGGED SEQUENCE ulseq; SELECT nextval('ulseq')");
+$node_primary->wait_for_replay_catchup($node_standby_1);
+is( $node_standby_1->safe_psql(
+		'postgres',
+		"SELECT pg_sequence_last_value('ulseq'::regclass) IS NULL"),
+	't',
+	'pg_sequence_last_value() on unlogged sequence on standby 1');
+
 # Check that only READ-only queries can run on standbys
 is($node_standby_1->psql('postgres', 'INSERT INTO tab_int VALUES (1)'),
 	3, 'read-only queries on standby 1');
@@ -601,7 +611,7 @@ is( $node_primary->poll_query_until(
 ok( pump_until(
 		$sigchld_bb, $sigchld_bb_timeout,
 		\$sigchld_bb_stderr, qr/backup is not in progress/),
-	'base backup cleanly cancelled');
+	'base backup cleanly canceled');
 $sigchld_bb->finish();
 
 done_testing();

@@ -22,7 +22,8 @@
 #include "libpq/libpq-be.h"
 #include "libpq/pqcomm.h"
 #include "miscadmin.h"
-#include "storage/backendid.h"
+#include "postmaster/postmaster.h"
+#include "storage/procnumber.h"
 
 
 ProtocolVersion FrontendProtocol;
@@ -33,6 +34,7 @@ volatile sig_atomic_t ProcDiePending = false;
 volatile sig_atomic_t CheckClientConnectionPending = false;
 volatile sig_atomic_t ClientConnectionLost = false;
 volatile sig_atomic_t IdleInTransactionSessionTimeoutPending = false;
+volatile sig_atomic_t TransactionTimeoutPending = false;
 volatile sig_atomic_t IdleSessionTimeoutPending = false;
 volatile sig_atomic_t ProcSignalBarrierPending = false;
 volatile sig_atomic_t LogMemoryContextPending = false;
@@ -44,6 +46,7 @@ volatile uint32 CritSectionCount = 0;
 int			MyProcPid;
 pg_time_t	MyStartTime;
 TimestampTz MyStartTimestamp;
+struct ClientSocket *MyClientSocket;
 struct Port *MyProcPort;
 int32		MyCancelKey;
 int			MyPMChildSlot;
@@ -82,9 +85,9 @@ char		postgres_exec_path[MAXPGPATH];	/* full path to backend */
 /* note: currently this is not valid in backend processes */
 #endif
 
-BackendId	MyBackendId = InvalidBackendId;
+ProcNumber	MyProcNumber = INVALID_PROC_NUMBER;
 
-BackendId	ParallelLeaderBackendId = InvalidBackendId;
+ProcNumber	ParallelLeaderProcNumber = INVALID_PROC_NUMBER;
 
 Oid			MyDatabaseId = InvalidOid;
 
@@ -114,7 +117,6 @@ pid_t		PostmasterPid = 0;
 bool		IsPostmasterEnvironment = false;
 bool		IsUnderPostmaster = false;
 bool		IsBinaryUpgrade = false;
-bool		IsBackgroundWorker = false;
 
 bool		ExitOnAnyError = false;
 
@@ -142,7 +144,7 @@ int			max_parallel_workers = 8;
 int			MaxBackends = 0;
 
 /* GUC parameters for vacuum */
-int			VacuumBufferUsageLimit = 256;
+int			VacuumBufferUsageLimit = 2048;
 
 int			VacuumCostPageHit = 1;
 int			VacuumCostPageMiss = 2;
@@ -156,3 +158,12 @@ int64		VacuumPageDirty = 0;
 
 int			VacuumCostBalance = 0;	/* working state for vacuum */
 bool		VacuumCostActive = false;
+
+/* configurable SLRU buffer sizes */
+int			commit_timestamp_buffers = 0;
+int			multixact_member_buffers = 32;
+int			multixact_offset_buffers = 16;
+int			notify_buffers = 16;
+int			serializable_buffers = 32;
+int			subtransaction_buffers = 0;
+int			transaction_buffers = 0;

@@ -62,12 +62,10 @@ all: submake-libpgport submake-catalog-headers submake-utils-headers postgres $(
 
 ifneq ($(PORTNAME), cygwin)
 ifneq ($(PORTNAME), win32)
-ifneq ($(PORTNAME), aix)
 
 postgres: $(OBJS)
 	$(CC) $(CFLAGS) $(call expand_subsys,$^) $(LDFLAGS) $(LIBS) -o $@
 
-endif
 endif
 endif
 
@@ -96,24 +94,6 @@ libpostgres.a: postgres
 
 endif # win32
 
-ifeq ($(PORTNAME), aix)
-
-postgres: $(POSTGRES_IMP)
-	$(CC) $(CFLAGS) $(call expand_subsys,$(OBJS)) $(LDFLAGS) -Wl,-bE:$(top_builddir)/src/backend/$(POSTGRES_IMP) $(LIBS) -Wl,-brtllib -o $@
-
-# Linking to a single .o with -r is a lot faster than building a .a or passing
-# all objects to MKLDEXPORT.
-#
-# It looks alluring to use $(CC) -r instead of ld -r, but that doesn't
-# trivially work with gcc, due to gcc specific static libraries linked in with
-# -r.
-$(POSTGRES_IMP): $(OBJS)
-	ld -r -o SUBSYS.o $(call expand_subsys,$^)
-	$(MKLDEXPORT) SUBSYS.o . > $@
-	@rm -f SUBSYS.o
-
-endif # aix
-
 $(top_builddir)/src/port/libpgport_srv.a: | submake-libpgport
 
 
@@ -130,15 +110,15 @@ $(top_builddir)/src/port/libpgport_srv.a: | submake-libpgport
 parser/gram.h: parser/gram.y
 	$(MAKE) -C parser gram.h
 
-storage/lmgr/lwlocknames.h: storage/lmgr/generate-lwlocknames.pl storage/lmgr/lwlocknames.txt utils/activity/wait_event_names.txt
-	$(MAKE) -C storage/lmgr lwlocknames.h lwlocknames.c
+storage/lmgr/lwlocknames.h: storage/lmgr/generate-lwlocknames.pl ../include/storage/lwlocklist.h utils/activity/wait_event_names.txt
+	$(MAKE) -C storage/lmgr lwlocknames.h
 
 utils/activity/wait_event_types.h: utils/activity/generate-wait_event_types.pl utils/activity/wait_event_names.txt
 	$(MAKE) -C utils/activity wait_event_types.h pgstat_wait_event.c wait_event_funcs_data.c
 
 # run this unconditionally to avoid needing to know its dependencies here:
 submake-catalog-headers:
-	$(MAKE) -C catalog generated-header-symlinks
+	$(MAKE) -C ../include/catalog generated-headers
 
 # run this unconditionally to avoid needing to know its dependencies here:
 submake-nodes-headers:
@@ -153,18 +133,24 @@ submake-utils-headers:
 # Make symlinks for these headers in the include directory. That way
 # we can cut down on the -I options. Also, a symlink is automatically
 # up to date when we update the base file.
+#
+# The point of the prereqdir incantation in some of the rules below is to
+# force the symlink to use an absolute path rather than a relative path.
+# This is needed to support platforms without ln -s.
 
 .PHONY: generated-headers
 
 generated-headers: $(top_builddir)/src/include/storage/lwlocknames.h $(top_builddir)/src/include/utils/wait_event_types.h submake-catalog-headers submake-nodes-headers submake-utils-headers parser/gram.h
 
 $(top_builddir)/src/include/storage/lwlocknames.h: storage/lmgr/lwlocknames.h
-	rm -f '$@'
-	$(LN_S) ../../backend/$< '$@'
+	prereqdir=`cd '$(dir $<)' >/dev/null && pwd` && \
+	  cd '$(dir $@)' && rm -f $(notdir $@) && \
+	  $(LN_S) "$$prereqdir/$(notdir $<)" .
 
 $(top_builddir)/src/include/utils/wait_event_types.h: utils/activity/wait_event_types.h
-	rm -f '$@'
-	$(LN_S) ../../backend/$< '$@'
+	prereqdir=`cd '$(dir $<)' >/dev/null && pwd` && \
+	  cd '$(dir $@)' && rm -f $(notdir $@) && \
+	  $(LN_S) "$$prereqdir/$(notdir $<)" .
 
 utils/probes.o: utils/probes.d $(SUBDIROBJS)
 	$(DTRACE) $(DTRACEFLAGS) -C -G -s $(call expand_subsys,$^) -o $@

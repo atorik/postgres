@@ -46,6 +46,7 @@
 #include "postgres.h"
 
 #include "common/hashfn.h"
+#include "common/int.h"
 #include "storage/ipc.h"
 #include "storage/predicate.h"
 #include "storage/proc.h"
@@ -106,7 +107,7 @@ StaticAssertDecl(RESOWNER_HASH_MAX_ITEMS(RESOWNER_HASH_INIT_SIZE) >= RESOWNER_AR
 /*
  * ResourceOwner objects look like this
  */
-typedef struct ResourceOwnerData
+struct ResourceOwnerData
 {
 	ResourceOwner parent;		/* NULL if no parent (toplevel owner) */
 	ResourceOwner firstchild;	/* head of linked list of children */
@@ -154,7 +155,7 @@ typedef struct ResourceOwnerData
 
 	/* The local locks cache. */
 	LOCALLOCK  *locks[MAX_RESOWNER_LOCKS];	/* list of owned locks */
-} ResourceOwnerData;
+};
 
 
 /*****************************************************************************
@@ -264,14 +265,7 @@ resource_priority_cmp(const void *a, const void *b)
 
 	/* Note: reverse order */
 	if (ra->kind->release_phase == rb->kind->release_phase)
-	{
-		if (ra->kind->release_priority == rb->kind->release_priority)
-			return 0;
-		else if (ra->kind->release_priority > rb->kind->release_priority)
-			return -1;
-		else
-			return 1;
-	}
+		return pg_cmp_u32(rb->kind->release_priority, ra->kind->release_priority);
 	else if (ra->kind->release_phase > rb->kind->release_phase)
 		return -1;
 	else
@@ -421,7 +415,7 @@ ResourceOwnerCreate(ResourceOwner parent, const char *name)
 	ResourceOwner owner;
 
 	owner = (ResourceOwner) MemoryContextAllocZero(TopMemoryContext,
-												   sizeof(ResourceOwnerData));
+												   sizeof(struct ResourceOwnerData));
 	owner->name = name;
 
 	if (parent)
@@ -548,8 +542,13 @@ ResourceOwnerRemember(ResourceOwner owner, Datum value, const ResourceOwnerDesc 
 /*
  * Forget that an object is owned by a ResourceOwner
  *
- * Note: if same resource ID is associated with the ResourceOwner more than
+ * Note: If same resource ID is associated with the ResourceOwner more than
  * once, one instance is removed.
+ *
+ * Note: Forgetting a resource does not guarantee that there is room to
+ * remember a new resource.  One exception is when you forget the most
+ * recently remembered resource; that does make room for a new remember call.
+ * Some code callers rely on that exception.
  */
 void
 ResourceOwnerForget(ResourceOwner owner, Datum value, const ResourceOwnerDesc *kind)

@@ -82,6 +82,7 @@ OBJS = \
 	pg_lsn.o \
 	pg_upgrade_support.o \
 	pgstatfuncs.o \
+	pseudorandomfuncs.o \
 	pseudotypes.o \
 	quote.o \
 	rangetypes.o \
@@ -115,6 +116,7 @@ OBJS = \
 	varchar.o \
 	varlena.o \
 	version.o \
+	waitfuncs.o \
 	windowfuncs.o \
 	xid.o \
 	xid8funcs.o \

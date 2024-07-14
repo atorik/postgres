@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2023, PostgreSQL Global Development Group
+# Copyright (c) 2022-2024, PostgreSQL Global Development Group
 
 pg_walsummary_sources = files(
   'pg_walsummary.c',
@@ -28,3 +28,5 @@ tests += {
     ],
   }
 }
+
+subdir('po', if_found: libintl)

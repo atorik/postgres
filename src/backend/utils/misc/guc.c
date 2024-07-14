@@ -25,6 +25,7 @@
 #include "postgres.h"
 
 #include <limits.h>
+#include <math.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -35,6 +36,8 @@
 #include "catalog/pg_parameter_acl.h"
 #include "guc_internal.h"
 #include "libpq/pqformat.h"
+#include "libpq/protocol.h"
+#include "miscadmin.h"
 #include "parser/scansup.h"
 #include "port/pg_bitutils.h"
 #include "storage/fd.h"
@@ -42,10 +45,8 @@
 #include "storage/shmem.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
-#include "utils/backend_status.h"
 #include "utils/builtins.h"
 #include "utils/conffiles.h"
-#include "utils/float.h"
 #include "utils/guc_tables.h"
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
@@ -65,6 +66,12 @@
  * serialization.
  */
 #define REALTYPE_PRECISION 17
+
+/*
+ * Safe search path when executing code as the table owner, such as during
+ * maintenance operations.
+ */
+#define GUC_SAFE_SEARCH_PATH "pg_catalog, pg_temp"
 
 static int	GUC_check_errcode_value;
 
@@ -1792,10 +1799,9 @@ SelectConfigFiles(const char *userDoption, const char *progname)
 
 	if (configdir && stat(configdir, &stat_buf) != 0)
 	{
-		write_stderr("%s: could not access directory \"%s\": %s\n",
+		write_stderr("%s: could not access directory \"%s\": %m\n",
 					 progname,
-					 configdir,
-					 strerror(errno));
+					 configdir);
 		if (errno == ENOENT)
 			write_stderr("Run initdb or pg_basebackup to initialize a PostgreSQL data directory.\n");
 		return false;
@@ -1844,8 +1850,8 @@ SelectConfigFiles(const char *userDoption, const char *progname)
 	 */
 	if (stat(ConfigFileName, &stat_buf) != 0)
 	{
-		write_stderr("%s: could not access the server configuration file \"%s\": %s\n",
-					 progname, ConfigFileName, strerror(errno));
+		write_stderr("%s: could not access the server configuration file \"%s\": %m\n",
+					 progname, ConfigFileName);
 		free(configdir);
 		return false;
 	}
@@ -1873,7 +1879,7 @@ SelectConfigFiles(const char *userDoption, const char *progname)
 	else
 	{
 		write_stderr("%s does not know where to find the database system data.\n"
-					 "This can be specified as data_directory in \"%s\", "
+					 "This can be specified as \"data_directory\" in \"%s\", "
 					 "or by the -D invocation option, or by the "
 					 "PGDATA environment variable.\n",
 					 progname, ConfigFileName);
@@ -2231,6 +2237,19 @@ int
 NewGUCNestLevel(void)
 {
 	return ++GUCNestLevel;
+}
+
+/*
+ * Set search_path to a fixed value for maintenance operations. No effect
+ * during bootstrap, when the search_path is already set to a fixed value and
+ * cannot be changed.
+ */
+void
+RestrictSearchPath(void)
+{
+	if (!IsBootstrapProcessingMode())
+		set_config_option("search_path", GUC_SAFE_SEARCH_PATH, PGC_USERSET,
+						  PGC_S_SESSION, GUC_ACTION_SAVE, true, 0, false);
 }
 
 /*
@@ -3154,15 +3173,20 @@ parse_and_validate_value(struct config_generic *record,
 				if (newval->intval < conf->min || newval->intval > conf->max)
 				{
 					const char *unit = get_config_unit_name(conf->gen.flags);
+					const char *unitspace;
+
+					if (unit)
+						unitspace = " ";
+					else
+						unit = unitspace = "";
 
 					ereport(elevel,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							 errmsg("%d%s%s is outside the valid range for parameter \"%s\" (%d .. %d)",
-									newval->intval,
-									unit ? " " : "",
-									unit ? unit : "",
+							 errmsg("%d%s%s is outside the valid range for parameter \"%s\" (%d%s%s .. %d%s%s)",
+									newval->intval, unitspace, unit,
 									name,
-									conf->min, conf->max)));
+									conf->min, unitspace, unit,
+									conf->max, unitspace, unit)));
 					return false;
 				}
 
@@ -3190,15 +3214,20 @@ parse_and_validate_value(struct config_generic *record,
 				if (newval->realval < conf->min || newval->realval > conf->max)
 				{
 					const char *unit = get_config_unit_name(conf->gen.flags);
+					const char *unitspace;
+
+					if (unit)
+						unitspace = " ";
+					else
+						unit = unitspace = "";
 
 					ereport(elevel,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							 errmsg("%g%s%s is outside the valid range for parameter \"%s\" (%g .. %g)",
-									newval->realval,
-									unit ? " " : "",
-									unit ? unit : "",
+							 errmsg("%g%s%s is outside the valid range for parameter \"%s\" (%g%s%s .. %g%s%s)",
+									newval->realval, unitspace, unit,
 									name,
-									conf->min, conf->max)));
+									conf->min, unitspace, unit,
+									conf->max, unitspace, unit)));
 					return false;
 				}
 
@@ -4543,6 +4572,11 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 	 * Extract statement arguments
 	 */
 	name = altersysstmt->setstmt->name;
+
+	if (!AllowAlterSystem)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("ALTER SYSTEM is not allowed in this environment")));
 
 	switch (altersysstmt->setstmt->kind)
 	{

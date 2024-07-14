@@ -31,7 +31,8 @@ $newpub->init(allows_streaming => 'logical');
 # completely till it is open. The probability of seeing this behavior is
 # higher in this test because we use wal_level as logical via
 # allows_streaming => 'logical' which in turn set shared_buffers as 1MB.
-$newpub->append_conf('postgresql.conf', q{
+$newpub->append_conf(
+	'postgresql.conf', q{
 bgwriter_lru_maxpages = 0
 checkpoint_timeout = 1h
 });
@@ -76,12 +77,12 @@ command_checks_all(
 	[@pg_upgrade_cmd],
 	1,
 	[
-		qr/max_replication_slots \(1\) must be greater than or equal to the number of logical replication slots \(2\) on the old cluster/
+		qr/"max_replication_slots" \(1\) must be greater than or equal to the number of logical replication slots \(2\) on the old cluster/
 	],
 	[qr//],
-	'run of pg_upgrade where the new cluster has insufficient max_replication_slots'
+	'run of pg_upgrade where the new cluster has insufficient "max_replication_slots"'
 );
-ok( -d $newpub->data_dir . "/pg_upgrade_output.d",
+ok(-d $newpub->data_dir . "/pg_upgrade_output.d",
 	"pg_upgrade_output.d/ not removed after pg_upgrade failure");
 
 # Set 'max_replication_slots' to match the number of slots (2) present on the
@@ -172,7 +173,7 @@ $sub->start;
 $sub->safe_psql(
 	'postgres', qq[
 	CREATE TABLE tbl (a int);
-	CREATE SUBSCRIPTION regress_sub CONNECTION '$old_connstr' PUBLICATION regress_pub WITH (two_phase = 'true')
+	CREATE SUBSCRIPTION regress_sub CONNECTION '$old_connstr' PUBLICATION regress_pub WITH (two_phase = 'true', failover = 'true')
 ]);
 $sub->wait_for_subscription_sync($oldpub, 'regress_sub');
 
@@ -192,8 +193,8 @@ command_ok([@pg_upgrade_cmd], 'run of pg_upgrade of old cluster');
 # Check that the slot 'regress_sub' has migrated to the new cluster
 $newpub->start;
 my $result = $newpub->safe_psql('postgres',
-	"SELECT slot_name, two_phase FROM pg_replication_slots");
-is($result, qq(regress_sub|t), 'check the slot exists on new cluster');
+	"SELECT slot_name, two_phase, failover FROM pg_replication_slots");
+is($result, qq(regress_sub|t|t), 'check the slot exists on new cluster');
 
 # Update the connection
 my $new_connstr = $newpub->connstr . ' dbname=postgres';

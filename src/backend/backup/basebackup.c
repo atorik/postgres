@@ -48,7 +48,6 @@
 #include "utils/ps_status.h"
 #include "utils/relcache.h"
 #include "utils/resowner.h"
-#include "utils/timestamp.h"
 
 /*
  * How much data do we want to send in one CopyData message? Note that
@@ -398,8 +397,7 @@ perform_base_backup(basebackup_options *opt, bbsink *sink,
 		endtli = backup_state->stoptli;
 
 		/* Deallocate backup-related variables. */
-		pfree(tablespace_map->data);
-		pfree(tablespace_map);
+		destroyStringInfo(tablespace_map);
 		pfree(backup_state);
 	}
 	PG_END_ENSURE_ERROR_CLEANUP(do_pg_abort_backup, BoolGetDatum(false));
@@ -793,7 +791,6 @@ parse_basebackup_options(List *options, basebackup_options *opt)
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 						 errmsg("incremental backups cannot be taken unless WAL summarization is enabled")));
-			opt->incremental = defGetBoolean(defel);
 			o_incremental = true;
 		}
 		else if (strcmp(defel->defname, "max_rate") == 0)
@@ -1265,6 +1262,10 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 					strlen(PG_TEMP_FILE_PREFIX)) == 0)
 			continue;
 
+		/* Skip macOS system files */
+		if (strcmp(de->d_name, ".DS_Store") == 0)
+			continue;
+
 		/*
 		 * Check if the postmaster has signaled us to exit, and abort with an
 		 * error in that case. The error handler further up will call
@@ -1621,6 +1622,8 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 	{
 		unsigned	magic = INCREMENTAL_MAGIC;
 		size_t		header_bytes_done = 0;
+		char		padding[BLCKSZ];
+		size_t		paddinglen;
 
 		/* Emit header data. */
 		push_to_sink(sink, &checksum_ctx, &header_bytes_done,
@@ -1632,6 +1635,24 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 		push_to_sink(sink, &checksum_ctx, &header_bytes_done,
 					 incremental_blocks,
 					 sizeof(BlockNumber) * num_incremental_blocks);
+
+		/*
+		 * Add padding to align header to a multiple of BLCKSZ, but only if
+		 * the incremental file has some blocks, and the alignment is actually
+		 * needed (i.e. header is not already a multiple of BLCKSZ). If there
+		 * are no blocks we don't want to make the file unnecessarily large,
+		 * as that might make some filesystem optimizations impossible.
+		 */
+		if ((num_incremental_blocks > 0) && (header_bytes_done % BLCKSZ != 0))
+		{
+			paddinglen = (BLCKSZ - (header_bytes_done % BLCKSZ));
+
+			memset(padding, 0, paddinglen);
+			bytes_done += paddinglen;
+
+			push_to_sink(sink, &checksum_ctx, &header_bytes_done,
+						 padding, paddinglen);
+		}
 
 		/* Flush out any data still in the buffer so it's again empty. */
 		if (header_bytes_done > 0)
@@ -1745,6 +1766,13 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 		/* Update block number and # of bytes done for next loop iteration. */
 		blkno += cnt / BLCKSZ;
 		bytes_done += cnt;
+
+		/*
+		 * Make sure incremental files with block data are properly aligned
+		 * (header is a multiple of BLCKSZ, blocks are BLCKSZ too).
+		 */
+		Assert(!((incremental_blocks != NULL && num_incremental_blocks > 0) &&
+				 (bytes_done % BLCKSZ != 0)));
 
 		/* Archive the data we just read. */
 		bbsink_archive_contents(sink, cnt);
@@ -2017,12 +2045,14 @@ _tarWriteHeader(bbsink *sink, const char *filename, const char *linktarget,
 				break;
 			case TAR_NAME_TOO_LONG:
 				ereport(ERROR,
-						(errmsg("file name too long for tar format: \"%s\"",
+						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+						 errmsg("file name too long for tar format: \"%s\"",
 								filename)));
 				break;
 			case TAR_SYMLINK_TOO_LONG:
 				ereport(ERROR,
-						(errmsg("symbolic link target too long for tar format: "
+						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+						 errmsg("symbolic link target too long for tar format: "
 								"file name \"%s\", target \"%s\"",
 								filename, linktarget)));
 				break;

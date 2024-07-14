@@ -45,7 +45,7 @@ static size_t hex_encode(const uint8 *src, size_t len, char *dst);
  * in the specified directory.
  */
 manifest_writer *
-create_manifest_writer(char *directory)
+create_manifest_writer(char *directory, uint64 system_identifier)
 {
 	manifest_writer *mwriter = pg_malloc(sizeof(manifest_writer));
 
@@ -57,8 +57,10 @@ create_manifest_writer(char *directory)
 	pg_checksum_init(&mwriter->manifest_ctx, CHECKSUM_TYPE_SHA256);
 
 	appendStringInfo(&mwriter->buf,
-					 "{ \"PostgreSQL-Backup-Manifest-Version\": 1,\n"
-					 "\"Files\": [");
+					 "{ \"PostgreSQL-Backup-Manifest-Version\": 2,\n"
+					 "\"System-Identifier\": " UINT64_FORMAT ",\n"
+					 "\"Files\": [",
+					 system_identifier);
 
 	return mwriter;
 }
@@ -182,7 +184,7 @@ finalize_manifest(manifest_writer *mwriter,
 
 	/* Close the file. */
 	if (close(mwriter->fd) != 0)
-		pg_fatal("could not close \"%s\": %m", mwriter->pathname);
+		pg_fatal("could not close file \"%s\": %m", mwriter->pathname);
 	mwriter->fd = -1;
 }
 
@@ -255,9 +257,9 @@ flush_manifest(manifest_writer *mwriter)
 		if (wb != mwriter->buf.len)
 		{
 			if (wb < 0)
-				pg_fatal("could not write \"%s\": %m", mwriter->pathname);
+				pg_fatal("could not write file \"%s\": %m", mwriter->pathname);
 			else
-				pg_fatal("could not write file \"%s\": wrote only %d of %d bytes",
+				pg_fatal("could not write file \"%s\": wrote %d of %d",
 						 mwriter->pathname, (int) wb, mwriter->buf.len);
 		}
 

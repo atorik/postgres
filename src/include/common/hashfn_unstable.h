@@ -53,27 +53,40 @@
  * fasthash as implemented here has two interfaces:
  *
  * 1) Standalone functions, e.g. fasthash32() for a single value with a
- * known length.
+ * known length. These return the same hash code as the original, at
+ * least on little-endian machines.
  *
  * 2) Incremental interface. This can used for incorporating multiple
- * inputs. The standalone functions use this internally, so see fasthash64()
- * for an an example of how this works.
- *
- * The incremental interface is especially useful if any of the inputs
- * are NUL-terminated C strings, since the length is not needed ahead
- * of time. This avoids needing to call strlen(). This case is optimized
- * in fasthash_accum_cstring() :
+ * inputs. First, initialize the hash state (here with a zero seed):
  *
  * fasthash_state hs;
- * fasthash_init(&hs, FH_UNKNOWN_LENGTH, 0);
- * len = fasthash_accum_cstring(&hs, *str);
- * ...
- * return fasthash_final32(&hs, len);
+ * fasthash_init(&hs, 0);
  *
- * Here we pass FH_UNKNOWN_LENGTH as a convention, since passing zero
- * would zero out the internal seed as well. fasthash_accum_cstring()
- * returns the length of the string, which is computed on-the-fly while
- * mixing the string into the hash. Experimentation has found that
+ * If the inputs are of types that can be trivially cast to uint64, it's
+ * sufficient to do:
+ *
+ * hs.accum = value1;
+ * fasthash_combine(&hs);
+ * hs.accum = value2;
+ * fasthash_combine(&hs);
+ * ...
+ *
+ * For longer or variable-length input, fasthash_accum() is a more
+ * flexible, but more verbose method. The standalone functions use this
+ * internally, so see fasthash64() for an example of this.
+ *
+ * After all inputs have been mixed in, finalize the hash:
+ *
+ * hashcode = fasthash_final32(&hs, 0);
+ *
+ * The incremental interface allows an optimization for NUL-terminated
+ * C strings:
+ *
+ * len = fasthash_accum_cstring(&hs, str);
+ * hashcode = fasthash_final32(&hs, len);
+ *
+ * By handling the terminator on-the-fly, we can avoid needing a strlen()
+ * call to tell us how many bytes to hash. Experimentation has found that
  * SMHasher fails unless we incorporate the length, so it is passed to
  * the finalizer as a tweak.
  */
@@ -89,20 +102,17 @@ typedef struct fasthash_state
 
 #define FH_SIZEOF_ACCUM sizeof(uint64)
 
-#define FH_UNKNOWN_LENGTH 1
 
 /*
  * Initialize the hash state.
  *
- * 'len' is the length of the input, if known ahead of time.
- * If that is not known, pass FH_UNKNOWN_LENGTH.
  * 'seed' can be zero.
  */
 static inline void
-fasthash_init(fasthash_state *hs, int len, uint64 seed)
+fasthash_init(fasthash_state *hs, uint64 seed)
 {
 	memset(hs, 0, sizeof(fasthash_state));
-	hs->hash = seed ^ (len * 0x880355f21e6d1965);
+	hs->hash = seed ^ 0x880355f21e6d1965;
 }
 
 /* both the finalizer and part of the combining step */
@@ -121,20 +131,52 @@ fasthash_combine(fasthash_state *hs)
 {
 	hs->hash ^= fasthash_mix(hs->accum, 0);
 	hs->hash *= 0x880355f21e6d1965;
-
-	/* reset hash state for next input */
-	hs->accum = 0;
 }
 
 /* accumulate up to 8 bytes of input and combine it into the hash */
 static inline void
-fasthash_accum(fasthash_state *hs, const char *k, int len)
+fasthash_accum(fasthash_state *hs, const char *k, size_t len)
 {
 	uint32		lower_four;
 
-	Assert(hs->accum == 0);
 	Assert(len <= FH_SIZEOF_ACCUM);
+	hs->accum = 0;
 
+	/*
+	 * For consistency, bytewise loads must match the platform's endianness.
+	 */
+#ifdef WORDS_BIGENDIAN
+	switch (len)
+	{
+		case 8:
+			memcpy(&hs->accum, k, 8);
+			break;
+		case 7:
+			hs->accum |= (uint64) k[6] << 8;
+			/* FALLTHROUGH */
+		case 6:
+			hs->accum |= (uint64) k[5] << 16;
+			/* FALLTHROUGH */
+		case 5:
+			hs->accum |= (uint64) k[4] << 24;
+			/* FALLTHROUGH */
+		case 4:
+			memcpy(&lower_four, k, sizeof(lower_four));
+			hs->accum |= (uint64) lower_four << 32;
+			break;
+		case 3:
+			hs->accum |= (uint64) k[2] << 40;
+			/* FALLTHROUGH */
+		case 2:
+			hs->accum |= (uint64) k[1] << 48;
+			/* FALLTHROUGH */
+		case 1:
+			hs->accum |= (uint64) k[0] << 56;
+			break;
+		case 0:
+			return;
+	}
+#else
 	switch (len)
 	{
 		case 8:
@@ -165,6 +207,7 @@ fasthash_accum(fasthash_state *hs, const char *k, int len)
 		case 0:
 			return;
 	}
+#endif
 
 	fasthash_combine(hs);
 }
@@ -176,17 +219,24 @@ fasthash_accum(fasthash_state *hs, const char *k, int len)
 #define haszero64(v) \
 	(((v) - 0x0101010101010101) & ~(v) & 0x8080808080808080)
 
+/* get first byte in memory order */
+#ifdef WORDS_BIGENDIAN
+#define firstbyte64(v) ((v) >> 56)
+#else
+#define firstbyte64(v) ((v) & 0xFF)
+#endif
+
 /*
  * all-purpose workhorse for fasthash_accum_cstring
  */
-static inline int
+static inline size_t
 fasthash_accum_cstring_unaligned(fasthash_state *hs, const char *str)
 {
 	const char *const start = str;
 
 	while (*str)
 	{
-		int			chunk_len = 0;
+		size_t		chunk_len = 0;
 
 		while (chunk_len < FH_SIZEOF_ACCUM && str[chunk_len] != '\0')
 			chunk_len++;
@@ -203,33 +253,43 @@ fasthash_accum_cstring_unaligned(fasthash_state *hs, const char *str)
  *
  * With an aligned pointer, we consume the string a word at a time.
  * Loading the word containing the NUL terminator cannot segfault since
- * allocation boundaries are suitably aligned.
+ * allocation boundaries are suitably aligned. To keep from setting
+ * off alarms with address sanitizers, exclude this function from
+ * such testing.
  */
-static inline int
+pg_attribute_no_sanitize_address()
+static inline size_t
 fasthash_accum_cstring_aligned(fasthash_state *hs, const char *str)
 {
 	const char *const start = str;
-	int			remainder;
-	uint64		zero_bytes_le;
+	uint64		chunk;
+	uint64		zero_byte_low;
 
 	Assert(PointerIsAligned(start, uint64));
+
+	/*
+	 * For every chunk of input, check for zero bytes before mixing into the
+	 * hash. The chunk with zeros must contain the NUL terminator. We arrange
+	 * so that zero_byte_low tells us not only that a zero exists, but also
+	 * where it is, so we can hash the remainder of the string.
+	 *
+	 * The haszero64 calculation will set bits corresponding to the lowest
+	 * byte where a zero exists, so that suffices for little-endian machines.
+	 * For big-endian machines, we would need bits set for the highest zero
+	 * byte in the chunk, since the trailing junk past the terminator could
+	 * contain additional zeros. haszero64 does not give us that, so we
+	 * byteswap the chunk first.
+	 */
 	for (;;)
 	{
-		uint64		chunk = *(uint64 *) str;
+		chunk = *(uint64 *) str;
 
-		/*
-		 * With little-endian representation, we can use this calculation,
-		 * which sets bits in the first byte in the result word that
-		 * corresponds to a zero byte in the original word. The rest of the
-		 * bytes are indeterminate, so cannot be used on big-endian machines
-		 * without either swapping or a bytewise check.
-		 */
 #ifdef WORDS_BIGENDIAN
-		zero_bytes_le = haszero64(pg_bswap64(chunk));
+		zero_byte_low = haszero64(pg_bswap64(chunk));
 #else
-		zero_bytes_le = haszero64(chunk);
+		zero_byte_low = haszero64(chunk);
 #endif
-		if (zero_bytes_le)
+		if (zero_byte_low)
 			break;
 
 		hs->accum = chunk;
@@ -237,15 +297,33 @@ fasthash_accum_cstring_aligned(fasthash_state *hs, const char *str)
 		str += FH_SIZEOF_ACCUM;
 	}
 
-	/*
-	 * For the last word, only use bytes up to the NUL for the hash. Bytes
-	 * with set bits will be 0x80, so calculate the first occurrence of a zero
-	 * byte within the input word by counting the number of trailing (because
-	 * little-endian) zeros and dividing the result by 8.
-	 */
-	remainder = pg_rightmost_one_pos64(zero_bytes_le) / BITS_PER_BYTE;
-	fasthash_accum(hs, str, remainder);
-	str += remainder;
+	if (firstbyte64(chunk) != 0)
+	{
+		size_t		remainder;
+		uint64		mask;
+
+		/*
+		 * The byte corresponding to the NUL will be 0x80, so the rightmost
+		 * bit position will be in the range 15, 23, ..., 63. Turn this into
+		 * byte position by dividing by 8.
+		 */
+		remainder = pg_rightmost_one_pos64(zero_byte_low) / BITS_PER_BYTE;
+
+		/*
+		 * Create a mask for the remaining bytes so we can combine them into
+		 * the hash. This must have the same result as mixing the remaining
+		 * bytes with fasthash_accum().
+		 */
+#ifdef WORDS_BIGENDIAN
+		mask = ~UINT64CONST(0) << BITS_PER_BYTE * (FH_SIZEOF_ACCUM - remainder);
+#else
+		mask = ~UINT64CONST(0) >> BITS_PER_BYTE * (FH_SIZEOF_ACCUM - remainder);
+#endif
+		hs->accum = chunk & mask;
+		fasthash_combine(hs);
+
+		str += remainder;
+	}
 
 	return str - start;
 }
@@ -253,14 +331,14 @@ fasthash_accum_cstring_aligned(fasthash_state *hs, const char *str)
 /*
  * Mix 'str' into the hash state and return the length of the string.
  */
-static inline int
+static inline size_t
 fasthash_accum_cstring(fasthash_state *hs, const char *str)
 {
 #if SIZEOF_VOID_P >= 8
 
-	int			len;
+	size_t		len;
 #ifdef USE_ASSERT_CHECKING
-	int			len_check;
+	size_t		len_check;
 	fasthash_state hs_check;
 
 	memcpy(&hs_check, hs, sizeof(fasthash_state));
@@ -269,7 +347,8 @@ fasthash_accum_cstring(fasthash_state *hs, const char *str)
 	if (PointerIsAligned(str, uint64))
 	{
 		len = fasthash_accum_cstring_aligned(hs, str);
-		Assert(hs_check.hash == hs->hash && len_check == len);
+		Assert(len_check == len);
+		Assert(hs_check.hash == hs->hash);
 		return len;
 	}
 #endif							/* SIZEOF_VOID_P */
@@ -324,11 +403,14 @@ fasthash_final32(fasthash_state *hs, uint64 tweak)
  * 'seed' can be zero.
  */
 static inline uint64
-fasthash64(const char *k, int len, uint64 seed)
+fasthash64(const char *k, size_t len, uint64 seed)
 {
 	fasthash_state hs;
 
-	fasthash_init(&hs, len, seed);
+	fasthash_init(&hs, 0);
+
+	/* re-initialize the seed according to input length */
+	hs.hash = seed ^ (len * 0x880355f21e6d1965);
 
 	while (len >= FH_SIZEOF_ACCUM)
 	{
@@ -342,10 +424,30 @@ fasthash64(const char *k, int len, uint64 seed)
 }
 
 /* like fasthash64, but returns a 32-bit hashcode */
-static inline uint64
-fasthash32(const char *k, int len, uint64 seed)
+static inline uint32
+fasthash32(const char *k, size_t len, uint64 seed)
 {
 	return fasthash_reduce32(fasthash64(k, len, seed));
+}
+
+/*
+ * Convenience function for hashing NUL-terminated strings
+ */
+static inline uint32
+hash_string(const char *s)
+{
+	fasthash_state hs;
+	size_t		s_len;
+
+	fasthash_init(&hs, 0);
+
+	/*
+	 * Combine string into the hash and save the length for tweaking the final
+	 * mix.
+	 */
+	s_len = fasthash_accum_cstring(&hs, s);
+
+	return fasthash_final32(&hs, s_len);
 }
 
 #endif							/* HASHFN_UNSTABLE_H */

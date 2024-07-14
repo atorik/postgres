@@ -50,7 +50,7 @@ static void bbstreamer_tar_parser_finalize(bbstreamer *streamer);
 static void bbstreamer_tar_parser_free(bbstreamer *streamer);
 static bool bbstreamer_tar_header(bbstreamer_tar_parser *mystreamer);
 
-const bbstreamer_ops bbstreamer_tar_parser_ops = {
+static const bbstreamer_ops bbstreamer_tar_parser_ops = {
 	.content = bbstreamer_tar_parser_content,
 	.finalize = bbstreamer_tar_parser_finalize,
 	.free = bbstreamer_tar_parser_free
@@ -63,7 +63,7 @@ static void bbstreamer_tar_archiver_content(bbstreamer *streamer,
 static void bbstreamer_tar_archiver_finalize(bbstreamer *streamer);
 static void bbstreamer_tar_archiver_free(bbstreamer *streamer);
 
-const bbstreamer_ops bbstreamer_tar_archiver_ops = {
+static const bbstreamer_ops bbstreamer_tar_archiver_ops = {
 	.content = bbstreamer_tar_archiver_content,
 	.finalize = bbstreamer_tar_archiver_finalize,
 	.free = bbstreamer_tar_archiver_free
@@ -76,7 +76,7 @@ static void bbstreamer_tar_terminator_content(bbstreamer *streamer,
 static void bbstreamer_tar_terminator_finalize(bbstreamer *streamer);
 static void bbstreamer_tar_terminator_free(bbstreamer *streamer);
 
-const bbstreamer_ops bbstreamer_tar_terminator_ops = {
+static const bbstreamer_ops bbstreamer_tar_terminator_ops = {
 	.content = bbstreamer_tar_terminator_content,
 	.finalize = bbstreamer_tar_terminator_finalize,
 	.free = bbstreamer_tar_terminator_free
@@ -89,7 +89,7 @@ const bbstreamer_ops bbstreamer_tar_terminator_ops = {
  * specified by 'next' will receive a series of typed chunks, as per the
  * conventions described in bbstreamer.h.
  */
-extern bbstreamer *
+bbstreamer *
 bbstreamer_tar_parser_new(bbstreamer *next)
 {
 	bbstreamer_tar_parser *streamer;
@@ -345,14 +345,14 @@ bbstreamer_tar_parser_free(bbstreamer *streamer)
 }
 
 /*
- * Create an bbstreamer that can generate a tar archive.
+ * Create a bbstreamer that can generate a tar archive.
  *
  * This is intended to be usable either for generating a brand-new tar archive
  * or for modifying one on the fly. The input should be a series of typed
  * chunks (i.e. not BBSTREAMER_UNKNOWN). See also the comments for
  * bbstreamer_tar_parser_content.
  */
-extern bbstreamer *
+bbstreamer *
 bbstreamer_tar_archiver_new(bbstreamer *next)
 {
 	bbstreamer_tar_archiver *streamer;

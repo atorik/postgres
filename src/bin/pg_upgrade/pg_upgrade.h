@@ -208,7 +208,7 @@ typedef struct
 	char	   *db_collate;
 	char	   *db_ctype;
 	char		db_collprovider;
-	char	   *db_iculocale;
+	char	   *db_locale;
 	int			db_encoding;
 } DbLocaleInfo;
 
@@ -256,6 +256,7 @@ typedef enum
 {
 	TRANSFER_MODE_CLONE,
 	TRANSFER_MODE_COPY,
+	TRANSFER_MODE_COPY_FILE_RANGE,
 	TRANSFER_MODE_LINK,
 } transferMode;
 
@@ -320,8 +321,7 @@ typedef struct
 */
 typedef struct
 {
-	bool		check;			/* true -> ask user for permission to make
-								 * changes */
+	bool		check;			/* check clusters only, don't change any data */
 	bool		do_sync;		/* flush changes to disk */
 	transferMode transfer_mode; /* copy files or link them? */
 	int			jobs;			/* number of processes/threads to use */
@@ -350,6 +350,9 @@ typedef struct
 	ClusterInfo *running_cluster;
 } OSInfo;
 
+
+/* Function signature for data type check version hook */
+typedef bool (*DataTypesUsageVersionCheck) (ClusterInfo *cluster);
 
 /*
  * Global variables
@@ -402,11 +405,14 @@ void		cloneFile(const char *src, const char *dst,
 					  const char *schemaName, const char *relName);
 void		copyFile(const char *src, const char *dst,
 					 const char *schemaName, const char *relName);
+void		copyFileByRange(const char *src, const char *dst,
+							const char *schemaName, const char *relName);
 void		linkFile(const char *src, const char *dst,
 					 const char *schemaName, const char *relName);
 void		rewriteVisibilityMap(const char *fromfile, const char *tofile,
 								 const char *schemaName, const char *relName);
 void		check_file_clone(void);
+void		check_copy_file_range(void);
 void		check_hard_link(void);
 
 /* fopen_priv() is no longer different from fopen() */
@@ -475,18 +481,10 @@ unsigned int str2uint(const char *str);
 
 /* version.c */
 
-bool		check_for_data_types_usage(ClusterInfo *cluster,
-									   const char *base_query,
-									   const char *output_path);
-bool		check_for_data_type_usage(ClusterInfo *cluster,
-									  const char *type_name,
-									  const char *output_path);
-void		old_9_3_check_for_line_data_type_usage(ClusterInfo *cluster);
-void		old_9_6_check_for_unknown_data_type_usage(ClusterInfo *cluster);
+bool		jsonb_9_4_check_applicable(ClusterInfo *cluster);
 void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
 											bool check_mode);
 
-void		old_11_check_for_sql_identifier_data_type_usage(ClusterInfo *cluster);
 void		report_extension_updates(ClusterInfo *cluster);
 
 /* parallel.c */

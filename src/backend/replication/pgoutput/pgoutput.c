@@ -22,7 +22,6 @@
 #include "executor/executor.h"
 #include "fmgr.h"
 #include "nodes/makefuncs.h"
-#include "optimizer/optimizer.h"
 #include "parser/parse_relation.h"
 #include "replication/logical.h"
 #include "replication/logicalproto.h"
@@ -1473,7 +1472,7 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	if (change->data.tp.oldtuple)
 	{
 		old_slot = relentry->old_slot;
-		ExecStoreHeapTuple(&change->data.tp.oldtuple->tuple, old_slot, false);
+		ExecStoreHeapTuple(change->data.tp.oldtuple, old_slot, false);
 
 		/* Convert tuple if needed. */
 		if (relentry->attrmap)
@@ -1488,7 +1487,7 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	if (change->data.tp.newtuple)
 	{
 		new_slot = relentry->new_slot;
-		ExecStoreHeapTuple(&change->data.tp.newtuple->tuple, new_slot, false);
+		ExecStoreHeapTuple(change->data.tp.newtuple, new_slot, false);
 
 		/* Convert tuple if needed. */
 		if (relentry->attrmap)
@@ -1553,6 +1552,16 @@ cleanup:
 	{
 		RelationClose(ancestor);
 		ancestor = NULL;
+	}
+
+	/* Drop the new slots that were used to store the converted tuples. */
+	if (relentry->attrmap)
+	{
+		if (old_slot)
+			ExecDropSingleTupleTableSlot(old_slot);
+
+		if (new_slot)
+			ExecDropSingleTupleTableSlot(new_slot);
 	}
 
 	MemoryContextSwitchTo(old);

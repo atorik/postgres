@@ -1064,6 +1064,14 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       </entry>
      </row>
      <row>
+      <entry><literal>InjectionPoint</literal></entry>
+      <entry>The server process is waiting for an injection point to reach an
+       outcome defined in a test.  See
+       <xref linkend="xfunc-addin-injection-points"/> for more details.  This
+       type has no predefined wait points.
+      </entry>
+     </row>
+     <row>
       <entry><literal>IO</literal></entry>
       <entry>The server process is waiting for an I/O operation to complete.
        <literal>wait_event</literal> will identify the specific wait point;
@@ -1139,8 +1147,8 @@ description | Waiting for a newly initialized WAL file to reach durable storage
 
    <note>
     <para>
-     Extensions can add <literal>Extension</literal> and
-     <literal>LWLock</literal> events
+     Extensions can add <literal>Extension</literal>,
+     <literal>InjectionPoint</literal>. and <literal>LWLock</literal> events
      to the lists shown in <xref linkend="wait-event-extension-table"/> and
      <xref linkend="wait-event-lwlock-table"/>. In some cases, the name
      of an <literal>LWLock</literal> assigned by an extension will not be
@@ -2584,7 +2592,7 @@ description | Waiting for a newly initialized WAL file to reach durable storage
           <literal>vacuum</literal>: I/O operations performed outside of shared
           buffers while vacuuming and analyzing permanent relations. Temporary
           table vacuums use the same local buffer pool as other temporary table
-          IO operations and are tracked in <varname>context</varname>
+          I/O operations and are tracked in <varname>context</varname>
           <literal>normal</literal>.
          </para>
         </listitem>
@@ -2860,7 +2868,7 @@ description | Waiting for a newly initialized WAL file to reach durable storage
     Columns tracking I/O time will only be non-zero when
     <xref linkend="guc-track-io-timing"/> is enabled. The user should be
     careful when referencing these columns in combination with their
-    corresponding IO operations in case <varname>track_io_timing</varname>
+    corresponding I/O operations in case <varname>track_io_timing</varname>
     was not enabled for the entire time since the last stats reset.
    </para>
   </note>
@@ -3016,7 +3024,8 @@ description | Waiting for a newly initialized WAL file to reach durable storage
       </para>
       <para>
        Total amount of time that has been spent in the portion of
-       checkpoint processing where files are written to disk, in milliseconds
+       processing checkpoints and restartpoints where files are written to disk,
+       in milliseconds
       </para></entry>
      </row>
 
@@ -3026,8 +3035,8 @@ description | Waiting for a newly initialized WAL file to reach durable storage
       </para>
       <para>
        Total amount of time that has been spent in the portion of
-       checkpoint processing where files are synchronized to disk, in
-       milliseconds
+       processing checkpoints and restartpoints where files are synchronized to
+       disk, in milliseconds
       </para></entry>
      </row>
 
@@ -3036,7 +3045,7 @@ description | Waiting for a newly initialized WAL file to reach durable storage
        <structfield>buffers_written</structfield> <type>bigint</type>
       </para>
       <para>
-       Number of buffers written during checkpoints
+       Number of buffers written during checkpoints and restartpoints
       </para></entry>
      </row>
 
@@ -4063,6 +4072,19 @@ description | Waiting for a newly initialized WAL file to reach durable storage
    </para>
   </note>
 
+  <note>
+   <para>
+    Queries that use certain <acronym>SQL</acronym> constructs to search for
+    rows matching any value out of a list or array of multiple scalar values
+    (see <xref linkend="functions-comparisons"/>) perform multiple
+    <quote>primitive</quote> index scans (up to one primitive scan per scalar
+    value) during query execution.  Each internal primitive index scan
+    increments <structname>pg_stat_all_indexes</structname>.<structfield>idx_scan</structfield>,
+    so it's possible for the count of index scans to significantly exceed the
+    total number of index scan executor node executions.
+   </para>
+  </note>
+
  </sect2>
 
  <sect2 id="monitoring-pg-statio-all-tables-view">
@@ -4482,10 +4504,17 @@ description | Waiting for a newly initialized WAL file to reach durable storage
 
   <para>
    <productname>PostgreSQL</productname> accesses certain on-disk information
-   via <firstterm>SLRU</firstterm> (simple least-recently-used) caches.
+   via <literal>SLRU</literal> (<firstterm>simple least-recently-used</firstterm>)
+   caches.
    The <structname>pg_stat_slru</structname> view will contain
    one row for each tracked SLRU cache, showing statistics about access
    to cached pages.
+  </para>
+
+  <para>
+   For each <literal>SLRU</literal> cache that's part of the core server,
+   there is a configuration parameter that controls its size, with the suffix
+   <literal>_buffers</literal> appended.
   </para>
 
   <table id="pg-stat-slru-view" xreflabel="pg_stat_slru">
@@ -4853,13 +4882,13 @@ description | Waiting for a newly initialized WAL file to reach durable storage
         <literal>NULL</literal> or is not specified, all the counters shown in
         the <structname>pg_stat_slru</structname> view for all SLRU caches are
         reset. The argument can be one of
-        <literal>CommitTs</literal>,
-        <literal>MultiXactMember</literal>,
-        <literal>MultiXactOffset</literal>,
-        <literal>Notify</literal>,
-        <literal>Serial</literal>,
-        <literal>Subtrans</literal>, or
-        <literal>Xact</literal>
+        <literal>commit_timestamp</literal>,
+        <literal>multixact_member</literal>,
+        <literal>multixact_offset</literal>,
+        <literal>notify</literal>,
+        <literal>serializable</literal>,
+        <literal>subtransaction</literal>, or
+        <literal>transaction</literal>
         to reset the counters for only that entry.
         If the argument is <literal>other</literal> (or indeed, any
         unrecognized name), then the counters for all other SLRU caches, such
@@ -4933,7 +4962,7 @@ description | Waiting for a newly initialized WAL file to reach durable storage
    access functions can be used; these are shown in <xref
    linkend="monitoring-stats-backend-funcs-table"/>.
    These access functions use the session's backend ID number, which is a
-   small positive integer that is distinct from the backend ID of any
+   small integer (>= 0) that is distinct from the backend ID of any
    concurrent session, although a session's ID can be recycled as soon as
    it exits.  The backend ID is used, among other things, to identify the
    session's temporary schema if it has one.
@@ -5734,7 +5763,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
        <structfield>type</structfield> <type>text</type>
       </para>
       <para>
-       The io type that the data is read from or written to:
+       The I/O type that the data is read from or written to:
        <literal>FILE</literal>, <literal>PROGRAM</literal>,
        <literal>PIPE</literal> (for <command>COPY FROM STDIN</command> and
        <command>COPY TO STDOUT</command>), or <literal>CALLBACK</literal>
@@ -6229,10 +6258,10 @@ FROM pg_stat_get_backend_idset() AS backendid;
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
-       <structfield>max_dead_tuples</structfield> <type>bigint</type>
+       <structfield>max_dead_tuple_bytes</structfield> <type>bigint</type>
       </para>
       <para>
-       Number of dead tuples that we can store before needing to perform
+       Amount of dead tuple data that we can store before needing to perform
        an index vacuum cycle, based on
        <xref linkend="guc-maintenance-work-mem"/>.
       </para></entry>
@@ -6240,10 +6269,19 @@ FROM pg_stat_get_backend_idset() AS backendid;
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
-       <structfield>num_dead_tuples</structfield> <type>bigint</type>
+       <structfield>dead_tuple_bytes</structfield> <type>bigint</type>
       </para>
       <para>
-       Number of dead tuples collected since the last index vacuum cycle.
+       Amount of dead tuple data collected since the last index vacuum cycle.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+      <structfield>num_dead_item_ids</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of dead item identifiers collected since the last index vacuum cycle.
       </para></entry>
      </row>
 
@@ -6806,7 +6844,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
        arg0 contains the fork to be extended. arg1, arg2, and arg3 contain the
        tablespace, database, and relation OIDs identifying the relation.  arg4
        is the ID of the backend which created the temporary relation for a
-       local buffer, or <symbol>InvalidBackendId</symbol> (-1) for a shared
+       local buffer, or <symbol>INVALID_PROC_NUMBER</symbol> (-1) for a shared
        buffer. arg5 is the number of blocks the caller would like to extend
        by.</entry>
     </row>
@@ -6817,7 +6855,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
        arg0 contains the fork to be extended. arg1, arg2, and arg3 contain the
        tablespace, database, and relation OIDs identifying the relation.  arg4
        is the ID of the backend which created the temporary relation for a
-       local buffer, or <symbol>InvalidBackendId</symbol> (-1) for a shared
+       local buffer, or <symbol>INVALID_PROC_NUMBER</symbol> (-1) for a shared
        buffer. arg5 is the number of blocks the relation was extended by, this
        can be less than the number in the
        <literal>buffer-extend-start</literal> due to resource
@@ -6832,7 +6870,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
       arg2, arg3, and arg4 contain the tablespace, database, and relation OIDs
       identifying the relation.
       arg5 is the ID of the backend which created the temporary relation for a
-      local buffer, or <symbol>InvalidBackendId</symbol> (-1) for a shared buffer.
+      local buffer, or <symbol>INVALID_PROC_NUMBER</symbol> (-1) for a shared buffer.
       </entry>
     </row>
     <row>
@@ -6843,7 +6881,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
       arg2, arg3, and arg4 contain the tablespace, database, and relation OIDs
       identifying the relation.
       arg5 is the ID of the backend which created the temporary relation for a
-      local buffer, or <symbol>InvalidBackendId</symbol> (-1) for a shared buffer.
+      local buffer, or <symbol>INVALID_PROC_NUMBER</symbol> (-1) for a shared buffer.
       arg6 is true if the buffer was found in the pool, false if not.</entry>
     </row>
     <row>
@@ -6896,7 +6934,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
       arg2, arg3, and arg4 contain the tablespace, database, and relation OIDs
       identifying the relation.
       arg5 is the ID of the backend which created the temporary relation for a
-      local buffer, or <symbol>InvalidBackendId</symbol> (-1) for a shared buffer.</entry>
+      local buffer, or <symbol>INVALID_PROC_NUMBER</symbol> (-1) for a shared buffer.</entry>
     </row>
     <row>
      <entry><literal>smgr-md-read-done</literal></entry>
@@ -6906,7 +6944,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
       arg2, arg3, and arg4 contain the tablespace, database, and relation OIDs
       identifying the relation.
       arg5 is the ID of the backend which created the temporary relation for a
-      local buffer, or <symbol>InvalidBackendId</symbol> (-1) for a shared buffer.
+      local buffer, or <symbol>INVALID_PROC_NUMBER</symbol> (-1) for a shared buffer.
       arg6 is the number of bytes actually read, while arg7 is the number
       requested (if these are different it indicates a short read).</entry>
     </row>
@@ -6918,7 +6956,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
       arg2, arg3, and arg4 contain the tablespace, database, and relation OIDs
       identifying the relation.
       arg5 is the ID of the backend which created the temporary relation for a
-      local buffer, or <symbol>InvalidBackendId</symbol> (-1) for a shared buffer.</entry>
+      local buffer, or <symbol>INVALID_PROC_NUMBER</symbol> (-1) for a shared buffer.</entry>
     </row>
     <row>
      <entry><literal>smgr-md-write-done</literal></entry>
@@ -6928,7 +6966,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
       arg2, arg3, and arg4 contain the tablespace, database, and relation OIDs
       identifying the relation.
       arg5 is the ID of the backend which created the temporary relation for a
-      local buffer, or <symbol>InvalidBackendId</symbol> (-1) for a shared buffer.
+      local buffer, or <symbol>INVALID_PROC_NUMBER</symbol> (-1) for a shared buffer.
       arg6 is the number of bytes actually written, while arg7 is the number
       requested (if these are different it indicates a short write).</entry>
     </row>
@@ -7272,6 +7310,149 @@ if (TRACE_POSTGRESQL_TRANSACTION_START_ENABLED())
 
   </sect2>
 
+ </sect1>
+
+ <sect1 id="diskusage">
+  <title>Monitoring Disk Usage</title>
+
+  <para>
+   This section discusses how to monitor the disk usage of a
+   <productname>PostgreSQL</productname> database system.
+  </para>
+
+  <sect2 id="disk-usage">
+   <title>Determining Disk Usage</title>
+
+   <indexterm zone="disk-usage">
+    <primary>disk usage</primary>
+   </indexterm>
+
+   <para>
+    Each table has a primary heap disk file where most of the data is
+    stored. If the table has any columns with potentially-wide values,
+    there also might be a <acronym>TOAST</acronym> file associated with the table,
+    which is used to store values too wide to fit comfortably in the main
+    table (see <xref linkend="storage-toast"/>).  There will be one valid index
+    on the <acronym>TOAST</acronym> table, if present. There also might be indexes
+    associated with the base table.  Each table and index is stored in a
+    separate disk file &mdash; possibly more than one file, if the file would
+    exceed one gigabyte.  Naming conventions for these files are described
+    in <xref linkend="storage-file-layout"/>.
+   </para>
+
+   <para>
+    You can monitor disk space in three ways:
+    using the SQL functions listed in <xref linkend="functions-admin-dbsize"/>,
+    using the <xref linkend="oid2name"/> module, or
+    using manual inspection of the system catalogs.
+    The SQL functions are the easiest to use and are generally recommended.
+    The remainder of this section shows how to do it by inspection of the
+    system catalogs.
+   </para>
+
+   <para>
+    Using <application>psql</application> on a recently vacuumed or analyzed
+    database, you can issue queries to see the disk usage of any table:
+<programlisting>
+SELECT pg_relation_filepath(oid), relpages FROM pg_class WHERE relname = 'customer';
+
+ pg_relation_filepath | relpages
+----------------------+----------
+ base/16384/16806     |       60
+(1 row)
+</programlisting>
+    Each page is typically 8 kilobytes. (Remember, <structfield>relpages</structfield>
+    is only updated by <command>VACUUM</command>, <command>ANALYZE</command>, and
+    a few DDL commands such as <command>CREATE INDEX</command>.)  The file path name
+    is of interest if you want to examine the table's disk file directly.
+   </para>
+
+   <para>
+    To show the space used by <acronym>TOAST</acronym> tables, use a query
+    like the following:
+<programlisting>
+SELECT relname, relpages
+FROM pg_class,
+     (SELECT reltoastrelid
+      FROM pg_class
+      WHERE relname = 'customer') AS ss
+WHERE oid = ss.reltoastrelid OR
+      oid = (SELECT indexrelid
+             FROM pg_index
+             WHERE indrelid = ss.reltoastrelid)
+ORDER BY relname;
+
+       relname        | relpages
+----------------------+----------
+ pg_toast_16806       |        0
+ pg_toast_16806_index |        1
+</programlisting>
+   </para>
+
+   <para>
+    You can easily display index sizes, too:
+<programlisting>
+SELECT c2.relname, c2.relpages
+FROM pg_class c, pg_class c2, pg_index i
+WHERE c.relname = 'customer' AND
+      c.oid = i.indrelid AND
+      c2.oid = i.indexrelid
+ORDER BY c2.relname;
+
+      relname      | relpages
+-------------------+----------
+ customer_id_index |       26
+</programlisting>
+   </para>
+
+   <para>
+    It is easy to find your largest tables and indexes using this
+    information:
+<programlisting>
+SELECT relname, relpages
+FROM pg_class
+ORDER BY relpages DESC;
+
+       relname        | relpages
+----------------------+----------
+ bigtable             |     3290
+ customer             |     3144
+</programlisting>
+   </para>
+  </sect2>
+
+  <sect2 id="disk-full">
+   <title>Disk Full Failure</title>
+
+   <para>
+    The most important disk monitoring task of a database administrator
+    is to make sure the disk doesn't become full.  A filled data disk will
+    not result in data corruption, but it might prevent useful activity
+    from occurring. If the disk holding the WAL files grows full, database
+    server panic and consequent shutdown might occur.
+   </para>
+
+   <para>
+    If you cannot free up additional space on the disk by deleting
+    other things, you can move some of the database files to other file
+    systems by making use of tablespaces. See <xref
+    linkend="manage-ag-tablespaces"/> for more information about that.
+   </para>
+
+   <tip>
+    <para>
+     Some file systems perform badly when they are almost full, so do
+     not wait until the disk is completely full to take action.
+    </para>
+   </tip>
+
+   <para>
+    If your system supports per-user disk quotas, then the database
+    will naturally be subject to whatever quota is placed on the user
+    the server runs as.  Exceeding the quota will have the same bad
+    effects as running out of disk space entirely.
+   </para>
+  </sect2>
  </sect1>
 
 </chapter>

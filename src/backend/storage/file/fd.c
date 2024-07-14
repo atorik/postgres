@@ -2132,11 +2132,11 @@ FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
 	pgstat_report_wait_end();
 }
 
-int
+ssize_t
 FileReadV(File file, const struct iovec *iov, int iovcnt, off_t offset,
 		  uint32 wait_event_info)
 {
-	int			returnCode;
+	ssize_t		returnCode;
 	Vfd		   *vfdP;
 
 	Assert(FileIsValid(file));
@@ -2188,11 +2188,11 @@ retry:
 	return returnCode;
 }
 
-int
+ssize_t
 FileWriteV(File file, const struct iovec *iov, int iovcnt, off_t offset,
 		   uint32 wait_event_info)
 {
-	int			returnCode;
+	ssize_t		returnCode;
 	Vfd		   *vfdP;
 
 	Assert(FileIsValid(file));
@@ -3947,7 +3947,7 @@ check_debug_io_direct(char **newval, void **extra, GucSource source)
 #if PG_O_DIRECT == 0
 	if (strcmp(*newval, "") != 0)
 	{
-		GUC_check_errdetail("debug_io_direct is not supported on this platform.");
+		GUC_check_errdetail("\"debug_io_direct\" is not supported on this platform.");
 		result = false;
 	}
 	flags = 0;
@@ -3961,7 +3961,7 @@ check_debug_io_direct(char **newval, void **extra, GucSource source)
 
 	if (!SplitGUCList(rawstring, ',', &elemlist))
 	{
-		GUC_check_errdetail("Invalid list syntax in parameter %s",
+		GUC_check_errdetail("Invalid list syntax in parameter \"%s\"",
 							"debug_io_direct");
 		pfree(rawstring);
 		list_free(elemlist);
@@ -3994,14 +3994,14 @@ check_debug_io_direct(char **newval, void **extra, GucSource source)
 #if XLOG_BLCKSZ < PG_IO_ALIGN_SIZE
 	if (result && (flags & (IO_DIRECT_WAL | IO_DIRECT_WAL_INIT)))
 	{
-		GUC_check_errdetail("debug_io_direct is not supported for WAL because XLOG_BLCKSZ is too small");
+		GUC_check_errdetail("\"debug_io_direct\" is not supported for WAL because XLOG_BLCKSZ is too small");
 		result = false;
 	}
 #endif
 #if BLCKSZ < PG_IO_ALIGN_SIZE
 	if (result && (flags & IO_DIRECT_DATA))
 	{
-		GUC_check_errdetail("debug_io_direct is not supported for data because BLCKSZ is too small");
+		GUC_check_errdetail("\"debug_io_direct\" is not supported for data because BLCKSZ is too small");
 		result = false;
 	}
 #endif
@@ -4020,7 +4020,7 @@ check_debug_io_direct(char **newval, void **extra, GucSource source)
 	return result;
 }
 
-extern void
+void
 assign_debug_io_direct(const char *newval, void *extra)
 {
 	int		   *flags = (int *) extra;

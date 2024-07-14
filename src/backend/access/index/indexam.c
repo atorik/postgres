@@ -44,19 +44,14 @@
 #include "postgres.h"
 
 #include "access/amapi.h"
-#include "access/heapam.h"
+#include "access/relation.h"
 #include "access/reloptions.h"
 #include "access/relscan.h"
 #include "access/tableam.h"
-#include "access/transam.h"
-#include "access/xlog.h"
 #include "catalog/index.h"
-#include "catalog/pg_amproc.h"
 #include "catalog/pg_type.h"
-#include "commands/defrem.h"
-#include "nodes/makefuncs.h"
+#include "nodes/execnodes.h"
 #include "pgstat.h"
-#include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
 #include "utils/ruleutils.h"
@@ -70,18 +65,23 @@
  * Note: the ReindexIsProcessingIndex() check in RELATION_CHECKS is there
  * to check that we don't try to scan or do retail insertions into an index
  * that is currently being rebuilt or pending rebuild.  This helps to catch
- * things that don't work when reindexing system catalogs.  The assertion
+ * things that don't work when reindexing system catalogs, as well as prevent
+ * user errors like index expressions that access their own tables.  The check
  * doesn't prevent the actual rebuild because we don't use RELATION_CHECKS
  * when calling the index AM's ambuild routine, and there is no reason for
  * ambuild to call its subsidiary routines through this file.
  * ----------------------------------------------------------------
  */
 #define RELATION_CHECKS \
-( \
-	AssertMacro(RelationIsValid(indexRelation)), \
-	AssertMacro(PointerIsValid(indexRelation->rd_indam)), \
-	AssertMacro(!ReindexIsProcessingIndex(RelationGetRelid(indexRelation))) \
-)
+do { \
+	Assert(RelationIsValid(indexRelation)); \
+	Assert(PointerIsValid(indexRelation->rd_indam)); \
+	if (unlikely(ReindexIsProcessingIndex(RelationGetRelid(indexRelation)))) \
+		ereport(ERROR, \
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED), \
+				 errmsg("cannot access index \"%s\" while it is being reindexed", \
+						RelationGetRelationName(indexRelation)))); \
+} while(0)
 
 #define SCAN_CHECKS \
 ( \
@@ -242,10 +242,9 @@ index_insert_cleanup(Relation indexRelation,
 					 IndexInfo *indexInfo)
 {
 	RELATION_CHECKS;
-	Assert(indexInfo);
 
-	if (indexRelation->rd_indam->aminsertcleanup && indexInfo->ii_AmCache)
-		indexRelation->rd_indam->aminsertcleanup(indexInfo);
+	if (indexRelation->rd_indam->aminsertcleanup)
+		indexRelation->rd_indam->aminsertcleanup(indexRelation, indexInfo);
 }
 
 /*
@@ -449,13 +448,10 @@ index_restrpos(IndexScanDesc scan)
 
 /*
  * index_parallelscan_estimate - estimate shared memory for parallel scan
- *
- * Currently, we don't pass any information to the AM-specific estimator,
- * so it can probably only return a constant.  In the future, we might need
- * to pass more information.
  */
 Size
-index_parallelscan_estimate(Relation indexRelation, Snapshot snapshot)
+index_parallelscan_estimate(Relation indexRelation, int nkeys, int norderbys,
+							Snapshot snapshot)
 {
 	Size		nbytes;
 
@@ -474,7 +470,8 @@ index_parallelscan_estimate(Relation indexRelation, Snapshot snapshot)
 	 */
 	if (indexRelation->rd_indam->amestimateparallelscan != NULL)
 		nbytes = add_size(nbytes,
-						  indexRelation->rd_indam->amestimateparallelscan());
+						  indexRelation->rd_indam->amestimateparallelscan(nkeys,
+																		  norderbys));
 
 	return nbytes;
 }

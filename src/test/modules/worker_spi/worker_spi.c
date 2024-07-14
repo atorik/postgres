@@ -39,10 +39,10 @@
 #include "fmgr.h"
 #include "lib/stringinfo.h"
 #include "pgstat.h"
+#include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/snapmgr.h"
-#include "tcop/utility.h"
 
 PG_MODULE_MAGIC;
 
@@ -384,7 +384,7 @@ _PG_init(void)
 	/*
 	 * Now fill in worker-specific data, and do the actual registrations.
 	 *
-	 * bgw_extra can optionally include a dabatase OID, a role OID and a set
+	 * bgw_extra can optionally include a database OID, a role OID and a set
 	 * of flags.  This is left empty here to fallback to the related GUCs at
 	 * startup (0 for the bgworker flags).
 	 */

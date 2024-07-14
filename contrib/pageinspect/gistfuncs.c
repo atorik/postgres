@@ -21,8 +21,8 @@
 #include "storage/itemptr.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
-#include "utils/pg_lsn.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_lsn.h"
 #include "utils/rel.h"
 #include "utils/ruleutils.h"
 #include "utils/varlena.h"
@@ -309,7 +309,7 @@ gist_page_items(PG_FUNCTION_ARGS)
 					bool		typisvarlena;
 					Oid			typoid;
 
-					typoid = tupdesc->attrs[i].atttypid;
+					typoid = TupleDescAttr(tupdesc, i)->atttypid;
 					getTypeOutputInfo(typoid, &foutoid, &typisvarlena);
 					value = OidOutputFunctionCall(foutoid, itup_values[i]);
 				}

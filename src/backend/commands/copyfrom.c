@@ -25,10 +25,8 @@
 #include <sys/stat.h>
 
 #include "access/heapam.h"
-#include "access/htup_details.h"
 #include "access/tableam.h"
 #include "access/xact.h"
-#include "access/xlog.h"
 #include "catalog/namespace.h"
 #include "commands/copy.h"
 #include "commands/copyfrom_internal.h"
@@ -39,8 +37,7 @@
 #include "executor/nodeModifyTable.h"
 #include "executor/tuptable.h"
 #include "foreign/fdwapi.h"
-#include "libpq/libpq.h"
-#include "libpq/pqformat.h"
+#include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "nodes/miscnodes.h"
 #include "optimizer/optimizer.h"
@@ -104,8 +101,6 @@ typedef struct CopyMultiInsertInfo
 
 
 /* non-export function prototypes */
-static char *limit_printout_length(const char *str);
-
 static void ClosePipeFromProgram(CopyFromState cstate);
 
 /*
@@ -144,7 +139,7 @@ CopyFromErrorCallback(void *arg)
 			/* error is relevant to a particular column */
 			char	   *attval;
 
-			attval = limit_printout_length(cstate->cur_attval);
+			attval = CopyLimitPrintoutLength(cstate->cur_attval);
 			errcontext("COPY %s, line %llu, column %s: \"%s\"",
 					   cstate->cur_relname,
 					   (unsigned long long) cstate->cur_lineno,
@@ -171,7 +166,7 @@ CopyFromErrorCallback(void *arg)
 			{
 				char	   *lineval;
 
-				lineval = limit_printout_length(cstate->line_buf.data);
+				lineval = CopyLimitPrintoutLength(cstate->line_buf.data);
 				errcontext("COPY %s, line %llu: \"%s\"",
 						   cstate->cur_relname,
 						   (unsigned long long) cstate->cur_lineno, lineval);
@@ -192,8 +187,8 @@ CopyFromErrorCallback(void *arg)
  *
  * Returns a pstrdup'd copy of the input.
  */
-static char *
-limit_printout_length(const char *str)
+char *
+CopyLimitPrintoutLength(const char *str)
 {
 #define MAX_COPY_DATA_DISPLAY 100
 
@@ -767,7 +762,7 @@ CopyFrom(CopyFromState cstate)
 	ExecInitResultRelation(estate, resultRelInfo, 1);
 
 	/* Verify the named relation is a valid target for INSERT */
-	CheckValidResultRel(resultRelInfo, CMD_INSERT);
+	CheckValidResultRel(resultRelInfo, CMD_INSERT, NIL);
 
 	ExecOpenIndices(resultRelInfo, false);
 
@@ -1001,7 +996,7 @@ CopyFrom(CopyFromState cstate)
 			cstate->escontext->error_occurred)
 		{
 			/*
-			 * Soft error occured, skip this tuple and deal with error
+			 * Soft error occurred, skip this tuple and deal with error
 			 * information according to ON_ERROR.
 			 */
 			if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE)

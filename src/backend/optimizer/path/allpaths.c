@@ -35,18 +35,15 @@
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/geqo.h"
-#include "optimizer/inherit.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/plancat.h"
 #include "optimizer/planner.h"
-#include "optimizer/restrictinfo.h"
 #include "optimizer/tlist.h"
 #include "parser/parse_clause.h"
 #include "parser/parsetree.h"
 #include "partitioning/partbounds.h"
-#include "partitioning/partprune.h"
 #include "port/pg_bitutils.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
@@ -2183,9 +2180,9 @@ set_dummy_rel_pathlist(RelOptInfo *rel)
 
 	/*
 	 * We set the cheapest-path fields immediately, just in case they were
-	 * pointing at some discarded path.  This is redundant when we're called
-	 * from set_rel_size(), but not when called from elsewhere, and doing it
-	 * twice is harmless anyway.
+	 * pointing at some discarded path.  This is redundant in current usage
+	 * because set_rel_pathlist will do it later, but it's cheap so we keep it
+	 * for safety and consistency with mark_dummy_rel.
 	 */
 	set_cheapest(rel);
 }
@@ -2208,7 +2205,7 @@ set_dummy_rel_pathlist(RelOptInfo *rel)
  * the run condition will handle all of the required filtering.
  *
  * Returns true if 'opexpr' was found to be useful and was added to the
- * WindowClauses runCondition.  We also set *keep_original accordingly and add
+ * WindowFunc's runCondition.  We also set *keep_original accordingly and add
  * 'attno' to *run_cond_attrs offset by FirstLowInvalidHeapAttributeNumber.
  * If the 'opexpr' cannot be used then we set *keep_original to true and
  * return false.
@@ -2361,7 +2358,7 @@ find_window_run_conditions(Query *subquery, RangeTblEntry *rte, Index rti,
 			*keep_original = true;
 			runopexpr = opexpr;
 
-			/* determine the operator to use for the runCondition qual */
+			/* determine the operator to use for the WindowFuncRunCondition */
 			runoperator = get_opfamily_member(opinfo->opfamily_id,
 											  opinfo->oplefttype,
 											  opinfo->oprighttype,
@@ -2372,27 +2369,15 @@ find_window_run_conditions(Query *subquery, RangeTblEntry *rte, Index rti,
 
 	if (runopexpr != NULL)
 	{
-		Expr	   *newexpr;
+		WindowFuncRunCondition *wfuncrc;
 
-		/*
-		 * Build the qual required for the run condition keeping the
-		 * WindowFunc on the same side as it was originally.
-		 */
-		if (wfunc_left)
-			newexpr = make_opclause(runoperator,
-									runopexpr->opresulttype,
-									runopexpr->opretset, (Expr *) wfunc,
-									otherexpr, runopexpr->opcollid,
-									runopexpr->inputcollid);
-		else
-			newexpr = make_opclause(runoperator,
-									runopexpr->opresulttype,
-									runopexpr->opretset,
-									otherexpr, (Expr *) wfunc,
-									runopexpr->opcollid,
-									runopexpr->inputcollid);
+		wfuncrc = makeNode(WindowFuncRunCondition);
+		wfuncrc->opno = runoperator;
+		wfuncrc->inputcollid = runopexpr->inputcollid;
+		wfuncrc->wfunc_left = wfunc_left;
+		wfuncrc->arg = copyObject(otherexpr);
 
-		wclause->runCondition = lappend(wclause->runCondition, newexpr);
+		wfunc->runCondition = lappend(wfunc->runCondition, wfuncrc);
 
 		/* record that this attno was used in a run condition */
 		*run_cond_attrs = bms_add_member(*run_cond_attrs,
@@ -2406,9 +2391,9 @@ find_window_run_conditions(Query *subquery, RangeTblEntry *rte, Index rti,
 
 /*
  * check_and_push_window_quals
- *		Check if 'clause' is a qual that can be pushed into a WindowFunc's
- *		WindowClause as a 'runCondition' qual.  These, when present, allow
- *		some unnecessary work to be skipped during execution.
+ *		Check if 'clause' is a qual that can be pushed into a WindowFunc
+ *		as a 'runCondition' qual.  These, when present, allow some unnecessary
+ *		work to be skipped during execution.
  *
  * 'run_cond_attrs' will be populated with all targetlist resnos of subquery
  * targets (offset by FirstLowInvalidHeapAttributeNumber) that we pushed
@@ -2648,9 +2633,8 @@ set_subquery_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	Assert(root->plan_params == NIL);
 
 	/* Generate a subroot and Paths for the subquery */
-	rel->subroot = subquery_planner(root->glob, subquery,
-									root,
-									false, tuple_fraction);
+	rel->subroot = subquery_planner(root->glob, subquery, root, false,
+									tuple_fraction, NULL);
 
 	/* Isolate the params needed by this specific subplan */
 	rel->subplan_params = root->plan_params;
@@ -2875,16 +2859,19 @@ set_tablefunc_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 static void
 set_cte_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 {
+	Path	   *ctepath;
 	Plan	   *cteplan;
 	PlannerInfo *cteroot;
 	Index		levelsup;
+	List	   *pathkeys;
 	int			ndx;
 	ListCell   *lc;
 	int			plan_id;
 	Relids		required_outer;
 
 	/*
-	 * Find the referenced CTE, and locate the plan previously made for it.
+	 * Find the referenced CTE, and locate the path and plan previously made
+	 * for it.
 	 */
 	levelsup = rte->ctelevelsup;
 	cteroot = root;
@@ -2916,10 +2903,19 @@ set_cte_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 	plan_id = list_nth_int(cteroot->cte_plan_ids, ndx);
 	if (plan_id <= 0)
 		elog(ERROR, "no plan was made for CTE \"%s\"", rte->ctename);
+
+	Assert(list_length(root->glob->subpaths) == list_length(root->glob->subplans));
+	ctepath = (Path *) list_nth(root->glob->subpaths, plan_id - 1);
 	cteplan = (Plan *) list_nth(root->glob->subplans, plan_id - 1);
 
 	/* Mark rel with estimated output rows, width, etc */
 	set_cte_size_estimates(root, rel, cteplan->plan_rows);
+
+	/* Convert the ctepath's pathkeys to outer query's representation */
+	pathkeys = convert_subquery_pathkeys(root,
+										 rel,
+										 ctepath->pathkeys,
+										 cteplan->targetlist);
 
 	/*
 	 * We don't support pushing join clauses into the quals of a CTE scan, but
@@ -2929,7 +2925,7 @@ set_cte_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 	required_outer = rel->lateral_relids;
 
 	/* Generate appropriate path */
-	add_path(rel, create_ctescan_path(root, rel, required_outer));
+	add_path(rel, create_ctescan_path(root, rel, pathkeys, required_outer));
 }
 
 /*
@@ -2957,9 +2953,6 @@ set_namedtuplestore_pathlist(PlannerInfo *root, RelOptInfo *rel,
 
 	/* Generate appropriate path */
 	add_path(rel, create_namedtuplestorescan_path(root, rel, required_outer));
-
-	/* Select cheapest path (pretty easy in this case...) */
-	set_cheapest(rel);
 }
 
 /*
@@ -2987,9 +2980,6 @@ set_result_pathlist(PlannerInfo *root, RelOptInfo *rel,
 
 	/* Generate appropriate path */
 	add_path(rel, create_resultscan_path(root, rel, required_outer));
-
-	/* Select cheapest path (pretty easy in this case...) */
-	set_cheapest(rel);
 }
 
 /*
@@ -3053,10 +3043,10 @@ set_worktable_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
  *
  * If we're generating paths for a scan or join relation, override_rows will
  * be false, and we'll just use the relation's size estimate.  When we're
- * being called for a partially-grouped path, though, we need to override
- * the rowcount estimate.  (It's not clear that the particular value we're
- * using here is actually best, but the underlying rel has no estimate so
- * we must do something.)
+ * being called for a partially-grouped or partially-distinct path, though, we
+ * need to override the rowcount estimate.  (It's not clear that the
+ * particular value we're using here is actually best, but the underlying rel
+ * has no estimate so we must do something.)
  */
 void
 generate_gather_paths(PlannerInfo *root, RelOptInfo *rel, bool override_rows)

@@ -17,6 +17,13 @@
 #include "lib/stringinfo.h"
 #include "parser/parse_node.h"
 
+typedef enum ExplainSerializeOption
+{
+	EXPLAIN_SERIALIZE_NONE,
+	EXPLAIN_SERIALIZE_TEXT,
+	EXPLAIN_SERIALIZE_BINARY,
+} ExplainSerializeOption;
+
 typedef enum ExplainFormat
 {
 	EXPLAIN_FORMAT_TEXT,
@@ -45,8 +52,10 @@ typedef struct ExplainState
 	bool		wal;			/* print WAL usage */
 	bool		timing;			/* print detailed node timing */
 	bool		summary;		/* print total planning and execution timing */
+	bool		memory;			/* print planner's memory usage information */
 	bool		settings;		/* print modified settings */
 	bool		generic;		/* generate a generic plan */
+	ExplainSerializeOption serialize;	/* serialize the query's output? */
 	ExplainFormat format;		/* output format */
 	/* state for output formatting --- not reset for each new plan tree */
 	int			indent;			/* current indentation level */
@@ -79,6 +88,10 @@ extern PGDLLIMPORT explain_get_index_name_hook_type explain_get_index_name_hook;
 
 extern void ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 						 ParamListInfo params, DestReceiver *dest);
+extern void standard_ExplainOneQuery(Query *query, int cursorOptions,
+									 IntoClause *into, ExplainState *es,
+									 const char *queryString, ParamListInfo params,
+									 QueryEnvironment *queryEnv);
 
 extern ExplainState *NewExplainState(void);
 
@@ -92,7 +105,8 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 						   ExplainState *es, const char *queryString,
 						   ParamListInfo params, QueryEnvironment *queryEnv,
 						   const instr_time *planduration,
-						   const BufferUsage *bufusage);
+						   const BufferUsage *bufusage,
+						   const MemoryContextCounters *mem_counters);
 
 extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);
 extern void ExplainPrintTriggers(ExplainState *es, QueryDesc *queryDesc);
@@ -125,5 +139,7 @@ extern void ExplainOpenGroup(const char *objtype, const char *labelname,
 							 bool labeled, ExplainState *es);
 extern void ExplainCloseGroup(const char *objtype, const char *labelname,
 							  bool labeled, ExplainState *es);
+
+extern DestReceiver *CreateExplainSerializeDestReceiver(ExplainState *es);
 
 #endif							/* EXPLAIN_H */

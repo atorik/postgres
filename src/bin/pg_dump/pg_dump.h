@@ -346,13 +346,8 @@ typedef struct _tableInfo
 	char	   *attcompression; /* per-attribute compression method */
 	char	  **attfdwoptions;	/* per-attribute fdw options */
 	char	  **attmissingval;	/* per attribute missing value */
-	char	  **notnull_constrs;	/* NOT NULL constraint names. If null,
-									 * there isn't one on this column. If
-									 * empty string, unnamed constraint
-									 * (pre-v17) */
-	bool	   *notnull_noinh;	/* NOT NULL is NO INHERIT */
-	bool	   *notnull_throwaway;	/* drop the NOT NULL constraint later */
-	bool	   *notnull_inh;	/* true if NOT NULL has no local definition */
+	bool	   *notnull;		/* not-null constraints on attributes */
+	bool	   *inhNotNull;		/* true if NOT NULL is inherited */
 	struct _attrDefInfo **attrdefs; /* DEFAULT expressions */
 	struct _constraintInfo *checkexprs; /* CHECK constraints */
 	bool		needs_override; /* has GENERATED ALWAYS AS IDENTITY */
@@ -479,8 +474,6 @@ typedef struct _constraintInfo
 	DumpId		conindex;		/* identifies associated index if any */
 	bool		condeferrable;	/* true if constraint is DEFERRABLE */
 	bool		condeferred;	/* true if constraint is INITIALLY DEFERRED */
-	bool		conwithoutoverlaps; /* true if the constraint is WITHOUT
-									 * OVERLAPS */
 	bool		conislocal;		/* true if constraint has local definition */
 	bool		separate;		/* true if must dump as separate item */
 } ConstraintInfo;
@@ -583,11 +576,21 @@ typedef struct _defaultACLInfo
 	char		defaclobjtype;
 } DefaultACLInfo;
 
+/*
+ * LoInfo represents a group of large objects (blobs) that share the same
+ * owner and ACL setting.  dobj.components has the DUMP_COMPONENT_COMMENT bit
+ * set if any blob in the group has a comment; similarly for sec labels.
+ * If there are many blobs with the same owner/ACL, we can divide them into
+ * multiple LoInfo groups, which will each spawn a BLOB METADATA and a BLOBS
+ * (data) TOC entry.  This allows more parallelism during restore.
+ */
 typedef struct _loInfo
 {
 	DumpableObject dobj;
 	DumpableAcl dacl;
 	const char *rolname;
+	int			numlos;
+	Oid			looids[FLEXIBLE_ARRAY_MEMBER];
 } LoInfo;
 
 /*
@@ -667,6 +670,7 @@ typedef struct _SubscriptionInfo
 	char	   *subpublications;
 	char	   *suborigin;
 	char	   *suboriginremotelsn;
+	char	   *subfailover;
 } SubscriptionInfo;
 
 /*
@@ -695,6 +699,7 @@ typedef struct _SubRelInfo
 extern TableInfo *getSchemaData(Archive *fout, int *numTablesPtr);
 
 extern void AssignDumpId(DumpableObject *dobj);
+extern void recordAdditionalCatalogID(CatalogId catId, DumpableObject *dobj);
 extern DumpId createDumpId(void);
 extern DumpId getMaxDumpId(void);
 extern DumpableObject *findObjectByDumpId(DumpId dumpId);
@@ -726,17 +731,17 @@ extern void sortDumpableObjectsByTypeName(DumpableObject **objs, int numObjs);
 /*
  * version specific routines
  */
-extern NamespaceInfo *getNamespaces(Archive *fout, int *numNamespaces);
+extern void getNamespaces(Archive *fout);
 extern ExtensionInfo *getExtensions(Archive *fout, int *numExtensions);
-extern TypeInfo *getTypes(Archive *fout, int *numTypes);
-extern FuncInfo *getFuncs(Archive *fout, int *numFuncs);
-extern AggInfo *getAggregates(Archive *fout, int *numAggs);
-extern OprInfo *getOperators(Archive *fout, int *numOprs);
-extern AccessMethodInfo *getAccessMethods(Archive *fout, int *numAccessMethods);
-extern OpclassInfo *getOpclasses(Archive *fout, int *numOpclasses);
-extern OpfamilyInfo *getOpfamilies(Archive *fout, int *numOpfamilies);
-extern CollInfo *getCollations(Archive *fout, int *numCollations);
-extern ConvInfo *getConversions(Archive *fout, int *numConversions);
+extern void getTypes(Archive *fout);
+extern void getFuncs(Archive *fout);
+extern void getAggregates(Archive *fout);
+extern void getOperators(Archive *fout);
+extern void getAccessMethods(Archive *fout);
+extern void getOpclasses(Archive *fout);
+extern void getOpfamilies(Archive *fout);
+extern void getCollations(Archive *fout);
+extern void getConversions(Archive *fout);
 extern TableInfo *getTables(Archive *fout, int *numTables);
 extern void getOwnedSeqs(Archive *fout, TableInfo tblinfo[], int numTables);
 extern InhInfo *getInherits(Archive *fout, int *numInherits);
@@ -744,30 +749,27 @@ extern void getPartitioningInfo(Archive *fout);
 extern void getIndexes(Archive *fout, TableInfo tblinfo[], int numTables);
 extern void getExtendedStatistics(Archive *fout);
 extern void getConstraints(Archive *fout, TableInfo tblinfo[], int numTables);
-extern RuleInfo *getRules(Archive *fout, int *numRules);
+extern void getRules(Archive *fout);
 extern void getTriggers(Archive *fout, TableInfo tblinfo[], int numTables);
-extern ProcLangInfo *getProcLangs(Archive *fout, int *numProcLangs);
-extern CastInfo *getCasts(Archive *fout, int *numCasts);
-extern TransformInfo *getTransforms(Archive *fout, int *numTransforms);
+extern void getProcLangs(Archive *fout);
+extern void getCasts(Archive *fout);
+extern void getTransforms(Archive *fout);
 extern void getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables);
 extern bool shouldPrintColumn(const DumpOptions *dopt, const TableInfo *tbinfo, int colno);
-extern TSParserInfo *getTSParsers(Archive *fout, int *numTSParsers);
-extern TSDictInfo *getTSDictionaries(Archive *fout, int *numTSDicts);
-extern TSTemplateInfo *getTSTemplates(Archive *fout, int *numTSTemplates);
-extern TSConfigInfo *getTSConfigurations(Archive *fout, int *numTSConfigs);
-extern FdwInfo *getForeignDataWrappers(Archive *fout,
-									   int *numForeignDataWrappers);
-extern ForeignServerInfo *getForeignServers(Archive *fout,
-											int *numForeignServers);
-extern DefaultACLInfo *getDefaultACLs(Archive *fout, int *numDefaultACLs);
+extern void getTSParsers(Archive *fout);
+extern void getTSDictionaries(Archive *fout);
+extern void getTSTemplates(Archive *fout);
+extern void getTSConfigurations(Archive *fout);
+extern void getForeignDataWrappers(Archive *fout);
+extern void getForeignServers(Archive *fout);
+extern void getDefaultACLs(Archive *fout);
 extern void getExtensionMembership(Archive *fout, ExtensionInfo extinfo[],
 								   int numExtensions);
 extern void processExtensionTables(Archive *fout, ExtensionInfo extinfo[],
 								   int numExtensions);
-extern EventTriggerInfo *getEventTriggers(Archive *fout, int *numEventTriggers);
+extern void getEventTriggers(Archive *fout);
 extern void getPolicies(Archive *fout, TableInfo tblinfo[], int numTables);
-extern PublicationInfo *getPublications(Archive *fout,
-										int *numPublications);
+extern void getPublications(Archive *fout);
 extern void getPublicationNamespaces(Archive *fout);
 extern void getPublicationTables(Archive *fout, TableInfo tblinfo[],
 								 int numTables);

@@ -5,7 +5,7 @@
  *
  * src/backend/catalog/system_functions.sql
  *
- * This file redefines certain built-in functions that it's impractical
+ * This file redefines certain built-in functions that are impractical
  * to fully define in pg_proc.dat.  In most cases that's because they use
  * SQL-standard function bodies and/or default expressions.  The node
  * tree representations of those are too unreadable, platform-dependent,
@@ -776,6 +776,10 @@ GRANT EXECUTE ON FUNCTION pg_ls_logicalsnapdir() TO pg_monitor;
 GRANT EXECUTE ON FUNCTION pg_ls_logicalmapdir() TO pg_monitor;
 
 GRANT EXECUTE ON FUNCTION pg_ls_replslotdir(text) TO pg_monitor;
+
+GRANT EXECUTE ON FUNCTION pg_current_logfile() TO pg_monitor;
+
+GRANT EXECUTE ON FUNCTION pg_current_logfile(text) TO pg_monitor;
 
 GRANT pg_read_all_settings TO pg_monitor;
 

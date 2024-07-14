@@ -6,8 +6,6 @@ use warnings FATAL => 'all';
 use List::Util qw(min);
 use Getopt::Long;
 
-my @def;
-
 #
 # Script that generates a .DEF file for all objects in a directory
 #
@@ -195,8 +193,8 @@ mkdir($tempdir) unless -d $tempdir;
 
 my $cmd = "dumpbin /nologo /symbols /out:$tmpfile " . join(' ', @files);
 
-system($cmd) && die "Could not call dumpbin";
-rename($tmpfile, $symfile);
+system($cmd) == 0 or die "Could not call dumpbin";
+rename($tmpfile, $symfile) or die $!;
 extract_syms($symfile, \%def);
 print "\n";
 

@@ -60,8 +60,8 @@ static const char *progname;
 /*
  * Progress status information.
  */
-int64		total_size = 0;
-int64		current_size = 0;
+static int64 total_size = 0;
+static int64 current_size = 0;
 static pg_time_t last_progress_report = 0;
 
 static void
@@ -327,6 +327,10 @@ scan_directory(const char *basedir, const char *subdir, bool sizeonly)
 		if (strncmp(de->d_name,
 					PG_TEMP_FILES_DIR,
 					strlen(PG_TEMP_FILES_DIR)) == 0)
+			continue;
+
+		/* Skip macOS system files */
+		if (strcmp(de->d_name, ".DS_Store") == 0)
 			continue;
 
 		snprintf(fn, sizeof(fn), "%s/%s", path, de->d_name);

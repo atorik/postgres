@@ -76,8 +76,6 @@ VPATH = $(srcdir)
 endif
 endif # not PGXS
 
-vpathsearch = `for f in $(addsuffix /$(1),$(subst :, ,. $(VPATH))); do test -r $$f && echo $$f && break; done`
-
 
 ##########################################################################
 #
@@ -264,7 +262,9 @@ CFLAGS_SL_MODULE = @CFLAGS_SL_MODULE@
 CXXFLAGS_SL_MODULE = @CXXFLAGS_SL_MODULE@
 CFLAGS_UNROLL_LOOPS = @CFLAGS_UNROLL_LOOPS@
 CFLAGS_VECTORIZE = @CFLAGS_VECTORIZE@
+CFLAGS_POPCNT = @CFLAGS_POPCNT@
 CFLAGS_CRC = @CFLAGS_CRC@
+CFLAGS_XSAVE = @CFLAGS_XSAVE@
 PERMIT_DECLARATION_AFTER_STATEMENT = @PERMIT_DECLARATION_AFTER_STATEMENT@
 CXXFLAGS = @CXXFLAGS@
 
@@ -361,7 +361,7 @@ DOWNLOAD = wget -O $@ --no-use-server-timestamps
 UNICODE_VERSION = 15.1.0
 
 # Pick a release from here: <http://cldr.unicode.org/index/downloads>
-CLDR_VERSION = 43
+CLDR_VERSION = 45
 
 
 # Tree-wide build support
@@ -741,6 +741,7 @@ endif
 #
 ifdef COPT
    CFLAGS += $(COPT)
+   CXXFLAGS += $(COPT)
    LDFLAGS += $(COPT)
 endif
 
@@ -759,6 +760,9 @@ LIBOBJS = @LIBOBJS@
 
 # files needed for the chosen CRC-32C implementation
 PG_CRC32C_OBJS = @PG_CRC32C_OBJS@
+
+# files needed for the chosen popcount implementation
+PG_POPCNT_OBJS = @PG_POPCNT_OBJS@
 
 LIBS := -lpgcommon -lpgport $(LIBS)
 

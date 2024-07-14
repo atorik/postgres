@@ -16,7 +16,6 @@
 #include "postgres.h"
 
 #include "funcapi.h"
-#include "miscadmin.h"
 #include "mb/pg_wchar.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
@@ -37,7 +36,7 @@ PutMemoryContextsStatsTupleStore(Tuplestorestate *tupstore,
 								 TupleDesc tupdesc, MemoryContext context,
 								 const char *parent, int level)
 {
-#define PG_GET_BACKEND_MEMORY_CONTEXTS_COLS	9
+#define PG_GET_BACKEND_MEMORY_CONTEXTS_COLS	10
 
 	Datum		values[PG_GET_BACKEND_MEMORY_CONTEXTS_COLS];
 	bool		nulls[PG_GET_BACKEND_MEMORY_CONTEXTS_COLS];
@@ -45,6 +44,7 @@ PutMemoryContextsStatsTupleStore(Tuplestorestate *tupstore,
 	MemoryContext child;
 	const char *name;
 	const char *ident;
+	const char *type;
 
 	Assert(MemoryContextIsValid(context));
 
@@ -97,12 +97,32 @@ PutMemoryContextsStatsTupleStore(Tuplestorestate *tupstore,
 	else
 		nulls[2] = true;
 
-	values[3] = Int32GetDatum(level);
-	values[4] = Int64GetDatum(stat.totalspace);
-	values[5] = Int64GetDatum(stat.nblocks);
-	values[6] = Int64GetDatum(stat.freespace);
-	values[7] = Int64GetDatum(stat.freechunks);
-	values[8] = Int64GetDatum(stat.totalspace - stat.freespace);
+	switch (context->type)
+	{
+		case T_AllocSetContext:
+			type = "AllocSet";
+			break;
+		case T_GenerationContext:
+			type = "Generation";
+			break;
+		case T_SlabContext:
+			type = "Slab";
+			break;
+		case T_BumpContext:
+			type = "Bump";
+			break;
+		default:
+			type = "???";
+			break;
+	}
+
+	values[3] = CStringGetTextDatum(type);
+	values[4] = Int32GetDatum(level);
+	values[5] = Int64GetDatum(stat.totalspace);
+	values[6] = Int64GetDatum(stat.nblocks);
+	values[7] = Int64GetDatum(stat.freespace);
+	values[8] = Int64GetDatum(stat.freechunks);
+	values[9] = Int64GetDatum(stat.totalspace - stat.freespace);
 	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 
 	for (child = context->firstchild; child != NULL; child = child->nextchild)
@@ -146,21 +166,13 @@ pg_log_backend_memory_contexts(PG_FUNCTION_ARGS)
 {
 	int			pid = PG_GETARG_INT32(0);
 	PGPROC	   *proc;
-	BackendId	backendId = InvalidBackendId;
-
-	proc = BackendPidGetProc(pid);
+	ProcNumber	procNumber = INVALID_PROC_NUMBER;
 
 	/*
 	 * See if the process with given pid is a backend or an auxiliary process.
-	 *
-	 * If the given process is a backend, use its backend id in
-	 * SendProcSignal() later to speed up the operation. Otherwise, don't do
-	 * that because auxiliary processes (except the startup process) don't
-	 * have a valid backend id.
 	 */
-	if (proc != NULL)
-		backendId = proc->backendId;
-	else
+	proc = BackendPidGetProc(pid);
+	if (proc == NULL)
 		proc = AuxiliaryPidGetProc(pid);
 
 	/*
@@ -183,7 +195,8 @@ pg_log_backend_memory_contexts(PG_FUNCTION_ARGS)
 		PG_RETURN_BOOL(false);
 	}
 
-	if (SendProcSignal(pid, PROCSIG_LOG_MEMORY_CONTEXT, backendId) < 0)
+	procNumber = GetNumberFromPGProc(proc);
+	if (SendProcSignal(pid, PROCSIG_LOG_MEMORY_CONTEXT, procNumber) < 0)
 	{
 		/* Again, just a warning to allow loops */
 		ereport(WARNING,

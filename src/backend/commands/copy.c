@@ -33,11 +33,9 @@
 #include "parser/parse_collate.h"
 #include "parser/parse_expr.h"
 #include "parser/parse_relation.h"
-#include "rewrite/rewriteHandler.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
-#include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/rls.h"
 
@@ -283,12 +281,6 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 	{
 		Assert(stmt->query);
 
-		/* MERGE is allowed by parser, but unimplemented. Reject for now */
-		if (IsA(stmt->query, MergeStmt))
-			ereport(ERROR,
-					errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					errmsg("MERGE not supported in COPY"));
-
 		query = makeNode(RawStmt);
 		query->stmt = stmt->query;
 		query->stmt_location = stmt_location;
@@ -400,7 +392,7 @@ defGetCopyHeaderChoice(DefElem *def, bool is_from)
 static CopyOnErrorChoice
 defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 {
-	char	   *sval;
+	char	   *sval = defGetString(def);
 
 	if (!is_from)
 		ereport(ERROR,
@@ -409,15 +401,8 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 				 parser_errposition(pstate, def->location)));
 
 	/*
-	 * If no parameter value given, assume the default value.
-	 */
-	if (def->arg == NULL)
-		return COPY_ON_ERROR_STOP;
-
-	/*
 	 * Allow "stop", or "ignore" values.
 	 */
-	sval = defGetString(def);
 	if (pg_strcasecmp(sval, "stop") == 0)
 		return COPY_ON_ERROR_STOP;
 	if (pg_strcasecmp(sval, "ignore") == 0)
@@ -428,6 +413,30 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 			 errmsg("COPY ON_ERROR \"%s\" not recognized", sval),
 			 parser_errposition(pstate, def->location)));
 	return COPY_ON_ERROR_STOP;	/* keep compiler quiet */
+}
+
+/*
+ * Extract a CopyLogVerbosityChoice value from a DefElem.
+ */
+static CopyLogVerbosityChoice
+defGetCopyLogVerbosityChoice(DefElem *def, ParseState *pstate)
+{
+	char	   *sval;
+
+	/*
+	 * Allow "default", or "verbose" values.
+	 */
+	sval = defGetString(def);
+	if (pg_strcasecmp(sval, "default") == 0)
+		return COPY_LOG_VERBOSITY_DEFAULT;
+	if (pg_strcasecmp(sval, "verbose") == 0)
+		return COPY_LOG_VERBOSITY_VERBOSE;
+
+	ereport(ERROR,
+			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			 errmsg("COPY LOG_VERBOSITY \"%s\" not recognized", sval),
+			 parser_errposition(pstate, def->location)));
+	return COPY_LOG_VERBOSITY_DEFAULT;	/* keep compiler quiet */
 }
 
 /*
@@ -456,6 +465,7 @@ ProcessCopyOptions(ParseState *pstate,
 	bool		freeze_specified = false;
 	bool		header_specified = false;
 	bool		on_error_specified = false;
+	bool		log_verbosity_specified = false;
 	ListCell   *option;
 
 	/* Support external use for option sanity checking */
@@ -615,14 +625,21 @@ ProcessCopyOptions(ParseState *pstate,
 			on_error_specified = true;
 			opts_out->on_error = defGetCopyOnErrorChoice(defel, pstate, is_from);
 		}
+		else if (strcmp(defel->defname, "log_verbosity") == 0)
+		{
+			if (log_verbosity_specified)
+				errorConflictingDefElem(defel, pstate);
+			log_verbosity_specified = true;
+			opts_out->log_verbosity = defGetCopyLogVerbosityChoice(defel, pstate);
+		}
 		else if (strcmp(defel->defname, "reject_limit") == 0)
 		{
 			int64	reject_limit = defGetInt64(defel);
 
-			if (!opts_out->on_error)
+			if (opts_out->on_error != COPY_ON_ERROR_STOP)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("REJECT_LIMIT requires ON_ERROR to be set to other than stop")));
+						 errmsg("REJECT_LIMIT requires ON_ERROR to be set to stop")));
 			if (opts_out->reject_limit > 0)
 				errorConflictingDefElem(defel, pstate);
 			if (reject_limit <= 0)

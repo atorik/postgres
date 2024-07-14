@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/table.h"
 #include "access/xact.h"
@@ -20,16 +21,19 @@
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_authid.h"
+#include "catalog/pg_auth_members.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_event_trigger.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_opfamily.h"
+#include "catalog/pg_parameter_acl.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_tablespace.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_ts_config.h"
 #include "catalog/pg_type.h"
-#include "commands/dbcommands.h"
 #include "commands/event_trigger.h"
 #include "commands/extension.h"
 #include "commands/trigger.h"
@@ -45,7 +49,7 @@
 #include "utils/builtins.h"
 #include "utils/evtcache.h"
 #include "utils/fmgroids.h"
-#include "utils/inval.h"
+#include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -107,7 +111,7 @@ static void validate_table_rewrite_tags(const char *filtervar, List *taglist);
 static void EventTriggerInvoke(List *fn_oid_list, EventTriggerData *trigdata);
 static const char *stringify_grant_objtype(ObjectType objtype);
 static const char *stringify_adefprivs_objtype(ObjectType objtype);
-static void SetDatatabaseHasLoginEventTriggers(void);
+static void SetDatabaseHasLoginEventTriggers(void);
 
 /*
  * Create an event trigger.
@@ -174,7 +178,7 @@ CreateEventTrigger(CreateEventTrigStmt *stmt)
 	else if (strcmp(stmt->eventname, "login") == 0 && tags != NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("tag filtering is not supported for login event trigger")));
+				 errmsg("tag filtering is not supported for login event triggers")));
 
 	/*
 	 * Give user a nice error message if an event trigger of the same name
@@ -307,11 +311,11 @@ insert_event_trigger_tuple(const char *trigname, const char *eventname, Oid evtO
 	heap_freetuple(tuple);
 
 	/*
-	 * Login event triggers have an additional flag in pg_database to avoid
+	 * Login event triggers have an additional flag in pg_database to enable
 	 * faster lookups in hot codepaths. Set the flag unless already True.
 	 */
 	if (strcmp(eventname, "login") == 0)
-		SetDatatabaseHasLoginEventTriggers();
+		SetDatabaseHasLoginEventTriggers();
 
 	/* Depend on owner. */
 	recordDependencyOnOwner(EventTriggerRelationId, trigoid, evtOwner);
@@ -376,10 +380,10 @@ filter_list_to_array(List *filterlist)
 
 /*
  * Set pg_database.dathasloginevt flag for current database indicating that
- * current database has on login triggers.
+ * current database has on login event triggers.
  */
 void
-SetDatatabaseHasLoginEventTriggers(void)
+SetDatabaseHasLoginEventTriggers(void)
 {
 	/* Set dathasloginevt flag in pg_database */
 	Form_pg_database db;
@@ -444,12 +448,12 @@ AlterEventTrigger(AlterEventTrigStmt *stmt)
 	CatalogTupleUpdate(tgrel, &tup->t_self, tup);
 
 	/*
-	 * Login event triggers have an additional flag in pg_database to avoid
+	 * Login event triggers have an additional flag in pg_database to enable
 	 * faster lookups in hot codepaths. Set the flag unless already True.
 	 */
 	if (namestrcmp(&evtForm->evtevent, "login") == 0 &&
 		tgenabled != TRIGGER_DISABLED)
-		SetDatatabaseHasLoginEventTriggers();
+		SetDatabaseHasLoginEventTriggers();
 
 	InvokeObjectPostAlterHook(EventTriggerRelationId,
 							  trigoid, 0);
@@ -695,7 +699,7 @@ EventTriggerCommonSetup(Node *parsetree,
 		}
 	}
 
-	/* don't spend any more time on this if no functions to run */
+	/* Don't spend any more time on this if no functions to run */
 	if (runlist == NIL)
 		return NIL;
 
@@ -878,7 +882,7 @@ EventTriggerSQLDrop(Node *parsetree)
 
 /*
  * Fire login event triggers if any are present.  The dathasloginevt
- * pg_database flag is left when an event trigger is dropped, to avoid
+ * pg_database flag is left unchanged when an event trigger is dropped to avoid
  * complicating the codepath in the case of multiple event triggers.  This
  * function will instead unset the flag if no trigger is defined.
  */
@@ -891,7 +895,7 @@ EventTriggerOnLogin(void)
 	/*
 	 * See EventTriggerDDLCommandStart for a discussion about why event
 	 * triggers are disabled in single user mode or via a GUC.  We also need a
-	 * database connection (some background workers doesn't have it).
+	 * database connection (some background workers don't have it).
 	 */
 	if (!IsUnderPostmaster || !event_triggers ||
 		!OidIsValid(MyDatabaseId) || !MyDatabaseHasLoginEventTriggers)
@@ -920,8 +924,8 @@ EventTriggerOnLogin(void)
 
 	/*
 	 * There is no active login event trigger, but our
-	 * pg_database.dathasloginevt was set. Try to unset this flag.  We use the
-	 * lock to prevent concurrent SetDatatabaseHasLoginEventTriggers(), but we
+	 * pg_database.dathasloginevt is set. Try to unset this flag.  We use the
+	 * lock to prevent concurrent SetDatabaseHasLoginEventTriggers(), but we
 	 * don't want to hang the connection waiting on the lock.  Thus, we are
 	 * just trying to acquire the lock conditionally.
 	 */
@@ -931,7 +935,7 @@ EventTriggerOnLogin(void)
 		/*
 		 * The lock is held.  Now we need to recheck that login event triggers
 		 * list is still empty.  Once the list is empty, we know that even if
-		 * there is a backend, which concurrently inserts/enables login
+		 * there is a backend which concurrently inserts/enables a login event
 		 * trigger, it will update pg_database.dathasloginevt *afterwards*.
 		 */
 		runlist = EventTriggerCommonSetup(NULL,
@@ -943,18 +947,45 @@ EventTriggerOnLogin(void)
 			Relation	pg_db = table_open(DatabaseRelationId, RowExclusiveLock);
 			HeapTuple	tuple;
 			Form_pg_database db;
+			ScanKeyData key[1];
+			SysScanDesc scan;
 
-			tuple = SearchSysCacheCopy1(DATABASEOID,
-										ObjectIdGetDatum(MyDatabaseId));
+			/*
+			 * Get the pg_database tuple to scribble on.  Note that this does
+			 * not directly rely on the syscache to avoid issues with
+			 * flattened toast values for the in-place update.
+			 */
+			ScanKeyInit(&key[0],
+						Anum_pg_database_oid,
+						BTEqualStrategyNumber, F_OIDEQ,
+						ObjectIdGetDatum(MyDatabaseId));
+
+			scan = systable_beginscan(pg_db, DatabaseOidIndexId, true,
+									  NULL, 1, key);
+			tuple = systable_getnext(scan);
+			tuple = heap_copytuple(tuple);
+			systable_endscan(scan);
 
 			if (!HeapTupleIsValid(tuple))
-				elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
+				elog(ERROR, "could not find tuple for database %u", MyDatabaseId);
 
 			db = (Form_pg_database) GETSTRUCT(tuple);
 			if (db->dathasloginevt)
 			{
 				db->dathasloginevt = false;
-				CatalogTupleUpdate(pg_db, &tuple->t_self, tuple);
+
+				/*
+				 * Do an "in place" update of the pg_database tuple.  Doing
+				 * this instead of regular updates serves two purposes. First,
+				 * that avoids possible waiting on the row-level lock. Second,
+				 * that avoids dealing with TOAST.
+				 *
+				 * It's known that changes made by heap_inplace_update() may
+				 * be lost due to concurrent normal updates.  However, we are
+				 * OK with that.  The subsequent connections will still have a
+				 * chance to set "dathasloginevt" to false.
+				 */
+				heap_inplace_update(pg_db, tuple);
 			}
 			table_close(pg_db, RowExclusiveLock);
 			heap_freetuple(tuple);
@@ -1098,6 +1129,8 @@ EventTriggerInvoke(List *fn_oid_list, EventTriggerData *trigdata)
 
 /*
  * Do event triggers support this object type?
+ *
+ * See also event trigger support matrix in event-trigger.sgml.
  */
 bool
 EventTriggerSupportsObjectType(ObjectType obtype)
@@ -1108,133 +1141,39 @@ EventTriggerSupportsObjectType(ObjectType obtype)
 		case OBJECT_TABLESPACE:
 		case OBJECT_ROLE:
 		case OBJECT_PARAMETER_ACL:
-			/* no support for global objects */
+			/* no support for global objects (except subscriptions) */
 			return false;
 		case OBJECT_EVENT_TRIGGER:
 			/* no support for event triggers on event triggers */
 			return false;
-		case OBJECT_ACCESS_METHOD:
-		case OBJECT_AGGREGATE:
-		case OBJECT_AMOP:
-		case OBJECT_AMPROC:
-		case OBJECT_ATTRIBUTE:
-		case OBJECT_CAST:
-		case OBJECT_COLUMN:
-		case OBJECT_COLLATION:
-		case OBJECT_CONVERSION:
-		case OBJECT_DEFACL:
-		case OBJECT_DEFAULT:
-		case OBJECT_DOMAIN:
-		case OBJECT_DOMCONSTRAINT:
-		case OBJECT_EXTENSION:
-		case OBJECT_FDW:
-		case OBJECT_FOREIGN_SERVER:
-		case OBJECT_FOREIGN_TABLE:
-		case OBJECT_FUNCTION:
-		case OBJECT_INDEX:
-		case OBJECT_LANGUAGE:
-		case OBJECT_LARGEOBJECT:
-		case OBJECT_MATVIEW:
-		case OBJECT_OPCLASS:
-		case OBJECT_OPERATOR:
-		case OBJECT_OPFAMILY:
-		case OBJECT_POLICY:
-		case OBJECT_PROCEDURE:
-		case OBJECT_PUBLICATION:
-		case OBJECT_PUBLICATION_NAMESPACE:
-		case OBJECT_PUBLICATION_REL:
-		case OBJECT_ROUTINE:
-		case OBJECT_RULE:
-		case OBJECT_SCHEMA:
-		case OBJECT_SEQUENCE:
-		case OBJECT_SUBSCRIPTION:
-		case OBJECT_STATISTIC_EXT:
-		case OBJECT_TABCONSTRAINT:
-		case OBJECT_TABLE:
-		case OBJECT_TRANSFORM:
-		case OBJECT_TRIGGER:
-		case OBJECT_TSCONFIGURATION:
-		case OBJECT_TSDICTIONARY:
-		case OBJECT_TSPARSER:
-		case OBJECT_TSTEMPLATE:
-		case OBJECT_TYPE:
-		case OBJECT_USER_MAPPING:
-		case OBJECT_VIEW:
+		default:
 			return true;
-
-			/*
-			 * There's intentionally no default: case here; we want the
-			 * compiler to warn if a new ObjectType hasn't been handled above.
-			 */
 	}
-
-	/* Shouldn't get here, but if we do, say "no support" */
-	return false;
 }
 
 /*
  * Do event triggers support this object class?
+ *
+ * See also event trigger support matrix in event-trigger.sgml.
  */
 bool
-EventTriggerSupportsObjectClass(ObjectClass objclass)
+EventTriggerSupportsObject(const ObjectAddress *object)
 {
-	switch (objclass)
+	switch (object->classId)
 	{
-		case OCLASS_DATABASE:
-		case OCLASS_TBLSPACE:
-		case OCLASS_ROLE:
-		case OCLASS_ROLE_MEMBERSHIP:
-		case OCLASS_PARAMETER_ACL:
-			/* no support for global objects */
+		case DatabaseRelationId:
+		case TableSpaceRelationId:
+		case AuthIdRelationId:
+		case AuthMemRelationId:
+		case ParameterAclRelationId:
+			/* no support for global objects (except subscriptions) */
 			return false;
-		case OCLASS_EVENT_TRIGGER:
+		case EventTriggerRelationId:
 			/* no support for event triggers on event triggers */
 			return false;
-		case OCLASS_CLASS:
-		case OCLASS_PROC:
-		case OCLASS_TYPE:
-		case OCLASS_CAST:
-		case OCLASS_COLLATION:
-		case OCLASS_CONSTRAINT:
-		case OCLASS_CONVERSION:
-		case OCLASS_DEFAULT:
-		case OCLASS_LANGUAGE:
-		case OCLASS_LARGEOBJECT:
-		case OCLASS_OPERATOR:
-		case OCLASS_OPCLASS:
-		case OCLASS_OPFAMILY:
-		case OCLASS_AM:
-		case OCLASS_AMOP:
-		case OCLASS_AMPROC:
-		case OCLASS_REWRITE:
-		case OCLASS_TRIGGER:
-		case OCLASS_SCHEMA:
-		case OCLASS_STATISTIC_EXT:
-		case OCLASS_TSPARSER:
-		case OCLASS_TSDICT:
-		case OCLASS_TSTEMPLATE:
-		case OCLASS_TSCONFIG:
-		case OCLASS_FDW:
-		case OCLASS_FOREIGN_SERVER:
-		case OCLASS_USER_MAPPING:
-		case OCLASS_DEFACL:
-		case OCLASS_EXTENSION:
-		case OCLASS_POLICY:
-		case OCLASS_PUBLICATION:
-		case OCLASS_PUBLICATION_NAMESPACE:
-		case OCLASS_PUBLICATION_REL:
-		case OCLASS_SUBSCRIPTION:
-		case OCLASS_TRANSFORM:
+		default:
 			return true;
-
-			/*
-			 * There's intentionally no default: case here; we want the
-			 * compiler to warn if a new OCLASS hasn't been handled above.
-			 */
 	}
-
-	/* Shouldn't get here, but if we do, say "no support" */
-	return false;
 }
 
 /*
@@ -1346,7 +1285,7 @@ EventTriggerSQLDropAddObject(const ObjectAddress *object, bool original, bool no
 	if (!currentEventTriggerState)
 		return;
 
-	Assert(EventTriggerSupportsObjectClass(getObjectClass(object)));
+	Assert(EventTriggerSupportsObject(object));
 
 	/* don't report temp schemas except my own */
 	if (object->classId == NamespaceRelationId &&

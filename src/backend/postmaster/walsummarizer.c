@@ -29,21 +29,21 @@
 #include "access/xlogutils.h"
 #include "backup/walsummary.h"
 #include "catalog/storage_xlog.h"
+#include "commands/dbcommands_xlog.h"
 #include "common/blkreftable.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
-#include "postmaster/bgwriter.h"
+#include "postmaster/auxprocess.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/walsummarizer.h"
 #include "replication/walreceiver.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
-#include "storage/lwlock.h"
 #include "storage/latch.h"
+#include "storage/lwlock.h"
 #include "storage/proc.h"
 #include "storage/procsignal.h"
 #include "storage/shmem.h"
-#include "storage/spin.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/wait_event.h"
@@ -71,8 +71,8 @@ typedef struct
 	 * and so the LSN might point to the start of the next file even though
 	 * that might happen to be in the middle of a WAL record.
 	 *
-	 * summarizer_pgprocno is the pgprocno value for the summarizer process,
-	 * if one is running, or else INVALID_PGPROCNO.
+	 * summarizer_pgprocno is the proc number of the summarizer process, if
+	 * one is running, or else INVALID_PROC_NUMBER.
 	 *
 	 * pending_lsn is used by the summarizer to advertise the ending LSN of a
 	 * record it has recently read. It shouldn't ever be less than
@@ -83,7 +83,7 @@ typedef struct
 	TimeLineID	summarized_tli;
 	XLogRecPtr	summarized_lsn;
 	bool		lsn_is_exact;
-	int			summarizer_pgprocno;
+	ProcNumber	summarizer_pgprocno;
 	XLogRecPtr	pending_lsn;
 
 	/*
@@ -108,7 +108,7 @@ static WalSummarizerData *WalSummarizerCtl;
 
 /*
  * When we reach end of WAL and need to read more, we sleep for a number of
- * milliseconds that is a integer multiple of MS_PER_SLEEP_QUANTUM. This is
+ * milliseconds that is an integer multiple of MS_PER_SLEEP_QUANTUM. This is
  * the multiplier. It should vary between 1 and MAX_SLEEP_QUANTA, depending
  * on system activity. See summarizer_wait_for_wal() for how we adjust this.
  */
@@ -140,7 +140,7 @@ static XLogRecPtr redo_pointer_at_last_summary_removal = InvalidXLogRecPtr;
  * GUC parameters
  */
 bool		summarize_wal = false;
-int			wal_summary_keep_time = 10 * 24 * 60;
+int			wal_summary_keep_time = 10 * HOURS_PER_DAY * MINS_PER_HOUR;
 
 static void WalSummarizerShutdown(int code, Datum arg);
 static XLogRecPtr GetLatestLSN(TimeLineID *tli);
@@ -148,6 +148,8 @@ static void HandleWalSummarizerInterrupts(void);
 static XLogRecPtr SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn,
 							   bool exact, XLogRecPtr switch_lsn,
 							   XLogRecPtr maximum_lsn);
+static void SummarizeDbaseRecord(XLogReaderState *xlogreader,
+								 BlockRefTable *brtab);
 static void SummarizeSmgrRecord(XLogReaderState *xlogreader,
 								BlockRefTable *brtab);
 static void SummarizeXactRecord(XLogReaderState *xlogreader,
@@ -195,7 +197,7 @@ WalSummarizerShmemInit(void)
 		WalSummarizerCtl->summarized_tli = 0;
 		WalSummarizerCtl->summarized_lsn = InvalidXLogRecPtr;
 		WalSummarizerCtl->lsn_is_exact = false;
-		WalSummarizerCtl->summarizer_pgprocno = INVALID_PGPROCNO;
+		WalSummarizerCtl->summarizer_pgprocno = INVALID_PROC_NUMBER;
 		WalSummarizerCtl->pending_lsn = InvalidXLogRecPtr;
 		ConditionVariableInit(&WalSummarizerCtl->summary_file_cv);
 	}
@@ -205,7 +207,7 @@ WalSummarizerShmemInit(void)
  * Entry point for walsummarizer process.
  */
 void
-WalSummarizerMain(void)
+WalSummarizerMain(char *startup_data, size_t startup_data_len)
 {
 	sigjmp_buf	local_sigjmp_buf;
 	MemoryContext context;
@@ -226,6 +228,11 @@ WalSummarizerMain(void)
 	bool		exact;
 	XLogRecPtr	switch_lsn = InvalidXLogRecPtr;
 	TimeLineID	switch_tli = 0;
+
+	Assert(startup_data_len == 0);
+
+	MyBackendType = B_WAL_SUMMARIZER;
+	AuxiliaryProcessMainCommon();
 
 	ereport(DEBUG1,
 			(errmsg_internal("WAL summarizer started")));
@@ -248,7 +255,7 @@ WalSummarizerMain(void)
 	/* Advertise ourselves. */
 	on_shmem_exit(WalSummarizerShutdown, (Datum) 0);
 	LWLockAcquire(WALSummarizerLock, LW_EXCLUSIVE);
-	WalSummarizerCtl->summarizer_pgprocno = MyProc->pgprocno;
+	WalSummarizerCtl->summarizer_pgprocno = MyProcNumber;
 	LWLockRelease(WALSummarizerLock);
 
 	/* Create and switch to a memory context that we can reset on error. */
@@ -330,7 +337,7 @@ WalSummarizerMain(void)
 	 *
 	 * If we discover that WAL summarization is not enabled, just exit.
 	 */
-	current_lsn = GetOldestUnsummarizedLSN(&current_tli, &exact, true);
+	current_lsn = GetOldestUnsummarizedLSN(&current_tli, &exact);
 	if (XLogRecPtrIsInvalid(current_lsn))
 		proc_exit(0);
 
@@ -444,7 +451,7 @@ GetWalSummarizerState(TimeLineID *summarized_tli, XLogRecPtr *summarized_lsn,
 
 		*summarized_tli = WalSummarizerCtl->summarized_tli;
 		*summarized_lsn = WalSummarizerCtl->summarized_lsn;
-		if (summarizer_pgprocno == INVALID_PGPROCNO)
+		if (summarizer_pgprocno == INVALID_PROC_NUMBER)
 		{
 			/*
 			 * If the summarizer has exited, the fact that it had processed
@@ -472,23 +479,18 @@ GetWalSummarizerState(TimeLineID *summarized_tli, XLogRecPtr *summarized_lsn,
 
 /*
  * Get the oldest LSN in this server's timeline history that has not yet been
- * summarized.
+ * summarized, and update shared memory state as appropriate.
  *
  * If *tli != NULL, it will be set to the TLI for the LSN that is returned.
  *
  * If *lsn_is_exact != NULL, it will be set to true if the returned LSN is
  * necessarily the start of a WAL record and false if it's just the beginning
  * of a WAL segment.
- *
- * If reset_pending_lsn is true, resets the pending_lsn in shared memory to
- * be equal to the summarized_lsn.
  */
 XLogRecPtr
-GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact,
-						 bool reset_pending_lsn)
+GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 {
 	TimeLineID	latest_tli;
-	LWLockMode	mode = reset_pending_lsn ? LW_EXCLUSIVE : LW_SHARED;
 	int			n;
 	List	   *tles;
 	XLogRecPtr	unsummarized_lsn = InvalidXLogRecPtr;
@@ -496,22 +498,21 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact,
 	bool		should_make_exact = false;
 	List	   *existing_summaries;
 	ListCell   *lc;
+	bool		am_wal_summarizer = AmWalSummarizerProcess();
 
 	/* If not summarizing WAL, do nothing. */
 	if (!summarize_wal)
 		return InvalidXLogRecPtr;
 
 	/*
-	 * Unless we need to reset the pending_lsn, we initially acquire the lock
-	 * in shared mode and try to fetch the required information. If we acquire
-	 * in shared mode and find that the data structure hasn't been
-	 * initialized, we reacquire the lock in exclusive mode so that we can
-	 * initialize it. However, if someone else does that first before we get
-	 * the lock, then we can just return the requested information after all.
+	 * If we are not the WAL summarizer process, then we normally just want to
+	 * read the values from shared memory. However, as an exception, if shared
+	 * memory hasn't been initialized yet, then we need to do that so that we
+	 * can read legal values and not remove any WAL too early.
 	 */
-	while (1)
+	if (!am_wal_summarizer)
 	{
-		LWLockAcquire(WALSummarizerLock, mode);
+		LWLockAcquire(WALSummarizerLock, LW_SHARED);
 
 		if (WalSummarizerCtl->initialized)
 		{
@@ -520,27 +521,22 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact,
 				*tli = WalSummarizerCtl->summarized_tli;
 			if (lsn_is_exact != NULL)
 				*lsn_is_exact = WalSummarizerCtl->lsn_is_exact;
-			if (reset_pending_lsn)
-				WalSummarizerCtl->pending_lsn =
-					WalSummarizerCtl->summarized_lsn;
 			LWLockRelease(WALSummarizerLock);
 			return unsummarized_lsn;
 		}
 
-		if (mode == LW_EXCLUSIVE)
-			break;
-
 		LWLockRelease(WALSummarizerLock);
-		mode = LW_EXCLUSIVE;
 	}
 
 	/*
-	 * The data structure needs to be initialized, and we are the first to
-	 * obtain the lock in exclusive mode, so it's our job to do that
-	 * initialization.
+	 * Find the oldest timeline on which WAL still exists, and the earliest
+	 * segment for which it exists.
 	 *
-	 * So, find the oldest timeline on which WAL still exists, and the
-	 * earliest segment for which it exists.
+	 * Note that we do this every time the WAL summarizer process restarts or
+	 * recovers from an error, in case the contents of pg_wal have changed
+	 * under us e.g. if some files were removed, either manually - which
+	 * shouldn't really happen, but might - or by postgres itself, if
+	 * summarize_wal was turned off and then back on again.
 	 */
 	(void) GetLatestLSN(&latest_tli);
 	tles = readTimeLineHistory(latest_tli);
@@ -561,12 +557,6 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact,
 		}
 	}
 
-	/* It really should not be possible for us to find no WAL. */
-	if (unsummarized_tli == 0)
-		ereport(ERROR,
-				errcode(ERRCODE_INTERNAL_ERROR),
-				errmsg_internal("no WAL found on timeline %d", latest_tli));
-
 	/*
 	 * Don't try to summarize anything older than the end LSN of the newest
 	 * summary file that exists for this timeline.
@@ -585,12 +575,31 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact,
 		}
 	}
 
-	/* Update shared memory with the discovered values. */
-	WalSummarizerCtl->initialized = true;
-	WalSummarizerCtl->summarized_lsn = unsummarized_lsn;
-	WalSummarizerCtl->summarized_tli = unsummarized_tli;
-	WalSummarizerCtl->lsn_is_exact = should_make_exact;
-	WalSummarizerCtl->pending_lsn = unsummarized_lsn;
+	/* It really should not be possible for us to find no WAL. */
+	if (unsummarized_tli == 0)
+		ereport(ERROR,
+				errcode(ERRCODE_INTERNAL_ERROR),
+				errmsg_internal("no WAL found on timeline %u", latest_tli));
+
+	/*
+	 * If we're the WAL summarizer, we always want to store the values we just
+	 * computed into shared memory, because those are the values we're going
+	 * to use to drive our operation, and so they are the authoritative
+	 * values. Otherwise, we only store values into shared memory if shared
+	 * memory is uninitialized. Our values are not canonical in such a case,
+	 * but it's better to have something than nothing, to guide WAL retention.
+	 */
+	LWLockAcquire(WALSummarizerLock, LW_EXCLUSIVE);
+	if (am_wal_summarizer || !WalSummarizerCtl->initialized)
+	{
+		WalSummarizerCtl->initialized = true;
+		WalSummarizerCtl->summarized_lsn = unsummarized_lsn;
+		WalSummarizerCtl->summarized_tli = unsummarized_tli;
+		WalSummarizerCtl->lsn_is_exact = should_make_exact;
+		WalSummarizerCtl->pending_lsn = unsummarized_lsn;
+	}
+	else
+		unsummarized_lsn = WalSummarizerCtl->summarized_lsn;
 
 	/* Also return the to the caller as required. */
 	if (tli != NULL)
@@ -613,7 +622,7 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact,
 void
 SetWalSummarizerLatch(void)
 {
-	int			pgprocno;
+	ProcNumber	pgprocno;
 
 	if (WalSummarizerCtl == NULL)
 		return;
@@ -622,7 +631,7 @@ SetWalSummarizerLatch(void)
 	pgprocno = WalSummarizerCtl->summarizer_pgprocno;
 	LWLockRelease(WALSummarizerLock);
 
-	if (pgprocno != INVALID_PGPROCNO)
+	if (pgprocno != INVALID_PROC_NUMBER)
 		SetLatch(&ProcGlobal->allProcs[pgprocno].procLatch);
 }
 
@@ -683,7 +692,7 @@ static void
 WalSummarizerShutdown(int code, Datum arg)
 {
 	LWLockAcquire(WALSummarizerLock, LW_EXCLUSIVE);
-	WalSummarizerCtl->summarizer_pgprocno = INVALID_PGPROCNO;
+	WalSummarizerCtl->summarizer_pgprocno = INVALID_PROC_NUMBER;
 	LWLockRelease(WALSummarizerLock);
 }
 
@@ -909,7 +918,7 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, bool exact,
 				 * able to read a complete record.
 				 */
 				ereport(DEBUG1,
-						errmsg_internal("could not read WAL from timeline %d at %X/%X: end of WAL at %X/%X",
+						errmsg_internal("could not read WAL from timeline %u at %X/%X: end of WAL at %X/%X",
 										tli,
 										LSN_FORMAT_ARGS(xlogreader->EndRecPtr),
 										LSN_FORMAT_ARGS(private_data->read_upto)));
@@ -963,6 +972,9 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, bool exact,
 		/* Special handling for particular types of WAL records. */
 		switch (XLogRecGetRmid(xlogreader))
 		{
+			case RM_DBASE_ID:
+				SummarizeDbaseRecord(xlogreader, brtab);
+				break;
 			case RM_SMGR_ID:
 				SummarizeSmgrRecord(xlogreader, brtab);
 				break;
@@ -1064,7 +1076,7 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, bool exact,
 
 		/* Tell the user what we did. */
 		ereport(DEBUG1,
-				errmsg("summarized WAL on TLI %d from %X/%X to %X/%X",
+				errmsg("summarized WAL on TLI %u from %X/%X to %X/%X",
 					   tli,
 					   LSN_FORMAT_ARGS(summary_start_lsn),
 					   LSN_FORMAT_ARGS(summary_end_lsn)));
@@ -1074,6 +1086,75 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, bool exact,
 	}
 
 	return summary_end_lsn;
+}
+
+/*
+ * Special handling for WAL records with RM_DBASE_ID.
+ */
+static void
+SummarizeDbaseRecord(XLogReaderState *xlogreader, BlockRefTable *brtab)
+{
+	uint8		info = XLogRecGetInfo(xlogreader) & ~XLR_INFO_MASK;
+
+	/*
+	 * We use relfilenode zero for a given database OID and tablespace OID to
+	 * indicate that all relations with that pair of IDs have been recreated
+	 * if they exist at all. Effectively, we're setting a limit block of 0 for
+	 * all such relfilenodes.
+	 *
+	 * Technically, this special handling is only needed in the case of
+	 * XLOG_DBASE_CREATE_FILE_COPY, because that can create a whole bunch of
+	 * relation files in a directory without logging anything specific to each
+	 * one. If we didn't mark the whole DB OID/TS OID combination in some way,
+	 * then a tablespace that was dropped after the reference backup and
+	 * recreated using the FILE_COPY method prior to the incremental backup
+	 * would look just like one that was never touched at all, which would be
+	 * catastrophic.
+	 *
+	 * But it seems best to adopt this treatment for all records that drop or
+	 * create a DB OID/TS OID combination. That's similar to how we treat the
+	 * limit block for individual relations, and it's an extra layer of safety
+	 * here. We can never lose data by marking more stuff as needing to be
+	 * backed up in full.
+	 */
+	if (info == XLOG_DBASE_CREATE_FILE_COPY)
+	{
+		xl_dbase_create_file_copy_rec *xlrec;
+		RelFileLocator rlocator;
+
+		xlrec =
+			(xl_dbase_create_file_copy_rec *) XLogRecGetData(xlogreader);
+		rlocator.spcOid = xlrec->tablespace_id;
+		rlocator.dbOid = xlrec->db_id;
+		rlocator.relNumber = 0;
+		BlockRefTableSetLimitBlock(brtab, &rlocator, MAIN_FORKNUM, 0);
+	}
+	else if (info == XLOG_DBASE_CREATE_WAL_LOG)
+	{
+		xl_dbase_create_wal_log_rec *xlrec;
+		RelFileLocator rlocator;
+
+		xlrec = (xl_dbase_create_wal_log_rec *) XLogRecGetData(xlogreader);
+		rlocator.spcOid = xlrec->tablespace_id;
+		rlocator.dbOid = xlrec->db_id;
+		rlocator.relNumber = 0;
+		BlockRefTableSetLimitBlock(brtab, &rlocator, MAIN_FORKNUM, 0);
+	}
+	else if (info == XLOG_DBASE_DROP)
+	{
+		xl_dbase_drop_rec *xlrec;
+		RelFileLocator rlocator;
+		int			i;
+
+		xlrec = (xl_dbase_drop_rec *) XLogRecGetData(xlogreader);
+		rlocator.dbOid = xlrec->db_id;
+		rlocator.relNumber = 0;
+		for (i = 0; i < xlrec->ntablespaces; ++i)
+		{
+			rlocator.spcOid = xlrec->tablespace_ids[i];
+			BlockRefTableSetLimitBlock(brtab, &rlocator, MAIN_FORKNUM, 0);
+		}
+	}
 }
 
 /*
@@ -1318,12 +1399,7 @@ summarizer_read_local_xlog_page(XLogReaderState *state,
 		}
 	}
 
-	/*
-	 * Even though we just determined how much of the page can be validly read
-	 * as 'count', read the whole page anyway. It's guaranteed to be
-	 * zero-padded up to the page boundary if it's incomplete.
-	 */
-	if (!WALRead(state, cur_page, targetPagePtr, XLOG_BLCKSZ,
+	if (!WALRead(state, cur_page, targetPagePtr, count,
 				 private_data->tli, &errinfo))
 		WALReadRaiseError(&errinfo);
 
@@ -1406,7 +1482,7 @@ MaybeRemoveOldWalSummaries(void)
 	 * Files should only be removed if the last modification time precedes the
 	 * cutoff time we compute here.
 	 */
-	cutoff_time = time(NULL) - 60 * wal_summary_keep_time;
+	cutoff_time = time(NULL) - wal_summary_keep_time * SECS_PER_MINUTE;
 
 	/* Get all the summaries that currently exist. */
 	wslist = GetWalSummaries(0, InvalidXLogRecPtr, InvalidXLogRecPtr);

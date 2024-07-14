@@ -21,11 +21,9 @@
 #include "postmaster/postmaster.h"
 #include "replication/logicallauncher.h"
 #include "replication/logicalworker.h"
-#include "storage/dsm.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
 #include "storage/lwlock.h"
-#include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procsignal.h"
@@ -722,21 +720,33 @@ bgworker_die(SIGNAL_ARGS)
  * Main entry point for background worker processes.
  */
 void
-BackgroundWorkerMain(void)
+BackgroundWorkerMain(char *startup_data, size_t startup_data_len)
 {
 	sigjmp_buf	local_sigjmp_buf;
-	BackgroundWorker *worker = MyBgworkerEntry;
+	BackgroundWorker *worker;
 	bgworker_main_type entrypt;
 
-	if (worker == NULL)
+	if (startup_data == NULL)
 		elog(FATAL, "unable to find bgworker entry");
+	Assert(startup_data_len == sizeof(BackgroundWorker));
+	worker = MemoryContextAlloc(TopMemoryContext, sizeof(BackgroundWorker));
+	memcpy(worker, startup_data, sizeof(BackgroundWorker));
 
-	IsBackgroundWorker = true;
+	/*
+	 * Now that we're done reading the startup data, release postmaster's
+	 * working memory context.
+	 */
+	if (PostmasterContext)
+	{
+		MemoryContextDelete(PostmasterContext);
+		PostmasterContext = NULL;
+	}
 
+	MyBgworkerEntry = worker;
 	MyBackendType = B_BG_WORKER;
 	init_ps_display(worker->bgw_name);
 
-	SetProcessingMode(InitProcessing);
+	Assert(GetProcessingMode() == InitProcessing);
 
 	/* Apply PostAuthDelay */
 	if (PostAuthDelay > 0)
@@ -842,6 +852,89 @@ BackgroundWorkerMain(void)
 }
 
 /*
+ * Connect background worker to a database.
+ */
+void
+BackgroundWorkerInitializeConnection(const char *dbname, const char *username, uint32 flags)
+{
+	BackgroundWorker *worker = MyBgworkerEntry;
+	bits32		init_flags = 0; /* never honor session_preload_libraries */
+
+	/* ignore datallowconn? */
+	if (flags & BGWORKER_BYPASS_ALLOWCONN)
+		init_flags |= INIT_PG_OVERRIDE_ALLOW_CONNS;
+	/* ignore rolcanlogin? */
+	if (flags & BGWORKER_BYPASS_ROLELOGINCHECK)
+		init_flags |= INIT_PG_OVERRIDE_ROLE_LOGIN;
+
+	/* XXX is this the right errcode? */
+	if (!(worker->bgw_flags & BGWORKER_BACKEND_DATABASE_CONNECTION))
+		ereport(FATAL,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("database connection requirement not indicated during registration")));
+
+	InitPostgres(dbname, InvalidOid,	/* database to connect to */
+				 username, InvalidOid,	/* role to connect as */
+				 init_flags,
+				 NULL);			/* no out_dbname */
+
+	/* it had better not gotten out of "init" mode yet */
+	if (!IsInitProcessingMode())
+		ereport(ERROR,
+				(errmsg("invalid processing mode in background worker")));
+	SetProcessingMode(NormalProcessing);
+}
+
+/*
+ * Connect background worker to a database using OIDs.
+ */
+void
+BackgroundWorkerInitializeConnectionByOid(Oid dboid, Oid useroid, uint32 flags)
+{
+	BackgroundWorker *worker = MyBgworkerEntry;
+	bits32		init_flags = 0; /* never honor session_preload_libraries */
+
+	/* ignore datallowconn? */
+	if (flags & BGWORKER_BYPASS_ALLOWCONN)
+		init_flags |= INIT_PG_OVERRIDE_ALLOW_CONNS;
+	/* ignore rolcanlogin? */
+	if (flags & BGWORKER_BYPASS_ROLELOGINCHECK)
+		init_flags |= INIT_PG_OVERRIDE_ROLE_LOGIN;
+
+	/* XXX is this the right errcode? */
+	if (!(worker->bgw_flags & BGWORKER_BACKEND_DATABASE_CONNECTION))
+		ereport(FATAL,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("database connection requirement not indicated during registration")));
+
+	InitPostgres(NULL, dboid,	/* database to connect to */
+				 NULL, useroid, /* role to connect as */
+				 init_flags,
+				 NULL);			/* no out_dbname */
+
+	/* it had better not gotten out of "init" mode yet */
+	if (!IsInitProcessingMode())
+		ereport(ERROR,
+				(errmsg("invalid processing mode in background worker")));
+	SetProcessingMode(NormalProcessing);
+}
+
+/*
+ * Block/unblock signals in a background worker
+ */
+void
+BackgroundWorkerBlockSignals(void)
+{
+	sigprocmask(SIG_SETMASK, &BlockSig, NULL);
+}
+
+void
+BackgroundWorkerUnblockSignals(void)
+{
+	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
+}
+
+/*
  * Register a new static background worker.
  *
  * This can only be called directly from postmaster or in the _PG_init
@@ -875,7 +968,7 @@ RegisterBackgroundWorker(BackgroundWorker *worker)
 			return;
 		ereport(LOG,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("background worker \"%s\": must be registered in shared_preload_libraries",
+				 errmsg("background worker \"%s\": must be registered in \"shared_preload_libraries\"",
 						worker->bgw_name)));
 		return;
 	}
@@ -918,7 +1011,7 @@ RegisterBackgroundWorker(BackgroundWorker *worker)
 								  "Up to %d background workers can be registered with the current settings.",
 								  max_worker_processes,
 								  max_worker_processes),
-				 errhint("Consider increasing the configuration parameter max_worker_processes.")));
+				 errhint("Consider increasing the configuration parameter \"%s\".", "max_worker_processes")));
 		return;
 	}
 
