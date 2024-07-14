@@ -632,21 +632,22 @@ ProcessCopyOptions(ParseState *pstate,
 			log_verbosity_specified = true;
 			opts_out->log_verbosity = defGetCopyLogVerbosityChoice(defel, pstate);
 		}
-		else if (strcmp(defel->defname, "reject_limit") == 0)
+		else if (strcmp(defel->defname, "ignore_errors") == 0)
 		{
-			int64	reject_limit = defGetInt64(defel);
-
-			if (opts_out->on_error != COPY_ON_ERROR_STOP)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("REJECT_LIMIT requires ON_ERROR to be set to stop")));
-			if (opts_out->reject_limit > 0)
-				errorConflictingDefElem(defel, pstate);
-			if (reject_limit <= 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("REJECT_LIMIT must be greater than zero")));
-			opts_out->reject_limit = reject_limit;
+			int64	num_ignore_errors;
+			char *sval = defGetString(defel);
+			if (strcmp(sval, "all") == 0)
+				num_ignore_errors = 0;
+			else
+			{
+				num_ignore_errors = defGetInt64(defel);
+				if (num_ignore_errors <= 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("IGNORE_ERRORS must be greater than zero or 'all'")));
+			}
+			opts_out->on_error = COPY_ON_ERROR_IGNORE;
+			opts_out->num_ignore_errors = num_ignore_errors;
 		}
 		else
 			ereport(ERROR,

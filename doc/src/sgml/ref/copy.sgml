@@ -44,6 +44,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
     FORCE_NOT_NULL { ( <replaceable class="parameter">column_name</replaceable> [, ...] ) | * }
     FORCE_NULL { ( <replaceable class="parameter">column_name</replaceable> [, ...] ) | * }
     ON_ERROR <replaceable class="parameter">error_action</replaceable>
+    IGNORE_ERRORS <replaceable class="parameter">num_error</replaceable>
     ENCODING '<replaceable class="parameter">encoding_name</replaceable>'
     LOG_VERBOSITY <replaceable class="parameter">verbosity</replaceable>
 </synopsis>
@@ -412,14 +413,19 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
    </varlistentry>
 
    <varlistentry>
-    <term><literal>REJECT_LIMIT</literal></term>
+    <term><literal>IGNORE_ERRORS</literal></term>
     <listitem>
      <para>
-      Specifies the maximum tolerable number of malformed rows.
-      If input data has caused more malformed errors than this value, entire
+      Specifies the maximum tolerable number of errors while converting a
+      column's input value into its data type.
+      If input data caused more errors than the specified value, entire
       <command>COPY</command> fails.
-      This option must be used with <literal>ON_ERROR</literal> to be set to
-      other than <literal>stop</literal>.
+      Otherwise <command>COPY</command> discards the input row and continue with
+      the next one.
+     </para>
+     <para>
+      When specified <literal>all</literal>, <command>COPY</command> ignores all
+      the errors. This is a synonym for <literal>ON_ERROR</literal> <literal>ignore</literal>.
      </para>
     </listitem>
    </varlistentry>
