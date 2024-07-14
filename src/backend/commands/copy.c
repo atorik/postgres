@@ -638,7 +638,6 @@ ProcessCopyOptions(ParseState *pstate,
 			switch(nodeTag(defel->arg))
 			{
 				case T_Integer:
-					elog(LOG, "T_Integer");
 					num_ignore_errors = defGetInt64(defel);
 					if (num_ignore_errors <= 0)
 						ereport(ERROR,
@@ -646,7 +645,6 @@ ProcessCopyOptions(ParseState *pstate,
 								 errmsg("IGNORE_ERRORS must be greater than zero or 'all'")));
 					break;
 				case T_String:
-					elog(LOG, "T_String");
 					if (strcmp(defGetString(defel), "all") == 0)
 						num_ignore_errors = 0;
 					else
