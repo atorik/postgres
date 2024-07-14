@@ -635,13 +635,26 @@ ProcessCopyOptions(ParseState *pstate,
 		else if (strcmp(defel->defname, "ignore_errors") == 0)
 		{
 			int64	num_ignore_errors;
-			char *sval = defGetString(defel);
-			if (strcmp(sval, "all") == 0)
-				num_ignore_errors = 0;
-			else
+			switch(nodeTag(defel->arg))
 			{
-				num_ignore_errors = defGetInt64(defel);
-				if (num_ignore_errors <= 0)
+				case T_Integer:
+					elog(LOG, "T_Integer");
+					num_ignore_errors = defGetInt64(defel);
+					if (num_ignore_errors <= 0)
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+								 errmsg("IGNORE_ERRORS must be greater than zero or 'all'")));
+					break;
+				case T_String:
+					elog(LOG, "T_String");
+					if (strcmp(defGetString(defel), "all") == 0)
+						num_ignore_errors = 0;
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+								 errmsg("IGNORE_ERRORS must be greater than zero or 'all'")));
+					break;
+				default:
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("IGNORE_ERRORS must be greater than zero or 'all'")));
