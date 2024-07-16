@@ -416,6 +416,42 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 }
 
 /*
+ * Extract an IgnoreErrorsThresholds values from a DefElem.
+ */
+static CopyIgnoreThresholds
+defGetIgnoreErrorsOptions(DefElem *def)
+{
+	CopyIgnoreThresholds	thresholds;
+	uint64					num_err;
+
+	switch(nodeTag(def->arg))
+	{
+		case T_Integer:
+			num_err = defGetInt64(def);
+			if (num_err <= 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("number for IGNORE_ERRORS must be greater than zero")));
+			break;
+		case T_String:
+			if (pg_strcasecmp(defGetString(def), "all") == 0)
+				/* when set to 0, the threashold is treated as no limit */
+				num_err = 0;
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("string for IGNORE_ERRORS must be 'ALL'")));
+			break;
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("value for IGNORE_ERRORS must be positive integer or 'ALL'")));
+	}
+	thresholds.num_err = num_err;
+	return thresholds;
+}
+
+/*
  * Extract a CopyLogVerbosityChoice value from a DefElem.
  */
 static CopyLogVerbosityChoice
@@ -466,6 +502,7 @@ ProcessCopyOptions(ParseState *pstate,
 	bool		header_specified = false;
 	bool		on_error_specified = false;
 	bool		log_verbosity_specified = false;
+	bool		ignore_errors_specified = false;
 	ListCell   *option;
 
 	/* Support external use for option sanity checking */
@@ -634,31 +671,11 @@ ProcessCopyOptions(ParseState *pstate,
 		}
 		else if (strcmp(defel->defname, "ignore_errors") == 0)
 		{
-			int64	num_ignore_errors;
-			switch(nodeTag(defel->arg))
-			{
-				case T_Integer:
-					num_ignore_errors = defGetInt64(defel);
-					if (num_ignore_errors <= 0)
-						ereport(ERROR,
-								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-								 errmsg("IGNORE_ERRORS must be greater than zero or 'all'")));
-					break;
-				case T_String:
-					if (strcmp(defGetString(defel), "all") == 0)
-						num_ignore_errors = 0;
-					else
-						ereport(ERROR,
-								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-								 errmsg("IGNORE_ERRORS must be greater than zero or 'all'")));
-					break;
-				default:
-					ereport(ERROR,
-							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							 errmsg("IGNORE_ERRORS must be greater than zero or 'all'")));
-			}
+			if (ignore_errors_specified)
+				errorConflictingDefElem(defel, pstate);
+			ignore_errors_specified = true;
 			opts_out->on_error = COPY_ON_ERROR_IGNORE;
-			opts_out->num_ignore_errors = num_ignore_errors;
+			opts_out->err_thresholds = defGetIgnoreErrorsOptions(defel);
 		}
 		else
 			ereport(ERROR,

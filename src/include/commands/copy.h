@@ -50,6 +50,15 @@ typedef enum CopyLogVerbosityChoice
 } CopyLogVerbosityChoice;
 
 /*
+ * A struct to hold ignore_errors options, in a parsed form.
+ * More values to be added in another patch.
+ */
+typedef struct CopyIgnoreThresholds
+{
+	uint64		num_err;	/* maximum tolerable number of errors */
+} CopyIgnoreThresholds;
+
+/*
  * A struct to hold COPY options, in a parsed form. All of these are related
  * to formatting, except for 'freeze', which doesn't really belong here, but
  * it's expedient to parse it along with all the other options.
@@ -83,7 +92,7 @@ typedef struct CopyFormatOptions
 	bool		convert_selectively;	/* do selective binary conversion? */
 	CopyOnErrorChoice on_error; /* what to do when error happened */
 	CopyLogVerbosityChoice log_verbosity;	/* verbosity of logged messages */
-	int			num_ignore_errors;	/* maximum tolerable number of errors */
+	CopyIgnoreThresholds	err_thresholds;
 	List	   *convert_select; /* list of column names (can be NIL) */
 } CopyFormatOptions;
 

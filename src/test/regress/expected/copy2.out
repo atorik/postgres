@@ -85,6 +85,10 @@ COPY x from stdin (log_verbosity default, log_verbosity verbose);
 ERROR:  conflicting or redundant options
 LINE 1: COPY x from stdin (log_verbosity default, log_verbosity verb...
                                                   ^
+COPY x from stdin (ignore_errors 'all', ignore_errors 3);
+ERROR:  conflicting or redundant options
+LINE 1: COPY x from stdin (ignore_errors 'all', ignore_errors 3);
+                                                ^
 -- incorrect options
 COPY x to stdin (format BINARY, delimiter ',');
 ERROR:  cannot specify DELIMITER in BINARY mode
@@ -117,7 +121,7 @@ ERROR:  COPY LOG_VERBOSITY "unsupported" not recognized
 LINE 1: COPY x to stdout (log_verbosity unsupported);
                           ^
 COPY x from stdin with (ignore_errors 0);
-ERROR:  IGNORE_ERRORS must be greater than zero or 'all'
+ERROR:  number for IGNORE_ERRORS must be greater than zero
 -- too many columns in column list: should fail
 COPY x (a, b, c, d, e, d, c) from stdin;
 ERROR:  column "d" specified more than once

@@ -68,6 +68,7 @@ COPY x from stdin (convert_selectively (a), convert_selectively (b));
 COPY x from stdin (encoding 'sql_ascii', encoding 'sql_ascii');
 COPY x from stdin (on_error ignore, on_error ignore);
 COPY x from stdin (log_verbosity default, log_verbosity verbose);
+COPY x from stdin (ignore_errors 'all', ignore_errors 3);
 
 -- incorrect options
 COPY x to stdin (format BINARY, delimiter ',');

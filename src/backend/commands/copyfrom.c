@@ -1012,11 +1012,12 @@ CopyFrom(CopyFromState cstate)
 			pgstat_progress_update_param(PROGRESS_COPY_TUPLES_SKIPPED,
 										 ++skipped);
 
-			if (cstate->opts.num_ignore_errors > 0 && skipped > cstate->opts.num_ignore_errors)
+			if (cstate->opts.err_thresholds.num_err > 0 &&
+				skipped > cstate->opts.err_thresholds.num_err)
 				ereport(ERROR,
 						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
 						 errmsg("exceeded the number specified by IGNORE_ERRORS \"%d\"",
-								cstate->opts.num_ignore_errors)));
+								cstate->opts.err_thresholds.num_err)));
 
 			continue;
 		}
