@@ -421,7 +421,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       value into its data type.
       If input data caused more errors than the specified value, entire
       <command>COPY</command> fails.
-      Otherwise <command>COPY</command> discards the input row and continues
+      Otherwise, <command>COPY</command> discards the input row and continues
       with the next one.
      </para>
      <para>
