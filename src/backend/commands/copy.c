@@ -422,7 +422,7 @@ static CopyIgnoreThresholds
 defGetIgnoreErrorsOptions(DefElem *def)
 {
 	CopyIgnoreThresholds	thresholds;
-	uint64					num_err;
+	int64					num_err;
 
 	switch(nodeTag(def->arg))
 	{
