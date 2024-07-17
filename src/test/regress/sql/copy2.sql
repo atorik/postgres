@@ -68,7 +68,7 @@ COPY x from stdin (convert_selectively (a), convert_selectively (b));
 COPY x from stdin (encoding 'sql_ascii', encoding 'sql_ascii');
 COPY x from stdin (on_error ignore, on_error ignore);
 COPY x from stdin (log_verbosity default, log_verbosity verbose);
-COPY x from stdin (ignore_errors 'all', ignore_errors 3);
+COPY x from stdin (reject_limit 'INFINITY', reject_limit 3);
 
 -- incorrect options
 COPY x to stdin (format BINARY, delimiter ',');
@@ -83,8 +83,8 @@ COPY x to stdout (format TEXT, force_null(a));
 COPY x to stdin (format CSV, force_null(a));
 COPY x to stdin (format BINARY, on_error unsupported);
 COPY x to stdout (log_verbosity unsupported);
-COPY x from stdin with (ignore_errors 0);
-COPY x from stdin with (ignore_errors 1.1);
+COPY x from stdin with (reject_limit 0);
+COPY x from stdin with (reject_limit 1.1);
 
 -- too many columns in column list: should fail
 COPY x (a, b, c, d, e, d, c) from stdin;
@@ -560,8 +560,8 @@ COPY check_ign_err FROM STDIN WITH (on_error ignore);
 1	{1}	3	abc
 \.
 
--- tests for ignore_errors option
-COPY check_ign_err FROM STDIN WITH (ignore_errors 3);
+-- tests for reject_limit option
+COPY check_ign_err FROM STDIN WITH (reject_limit 3);
 6	{6}	6
 a	{7}	7
 8	{8}	8888888888
@@ -570,7 +570,7 @@ a	{7}	7
 10	{10}	10
 \.
 
-COPY check_ign_err FROM STDIN WITH (ignore_errors 4);
+COPY check_ign_err FROM STDIN WITH (reject_limit 4);
 6	{6}	6
 a	{7}	7
 8	{8}	8888888888
@@ -579,7 +579,7 @@ a	{7}	7
 10	{10}	10
 \.
 
-COPY check_ign_err FROM STDIN WITH (ignore_errors 'all');
+COPY check_ign_err FROM STDIN WITH (reject_limit 'INFINITY');
 6	{6}	6
 a	{7}	7
 8	{8}	8888888888
@@ -588,7 +588,7 @@ a	{7}	7
 10	{10}	10
 \.
 
-COPY check_ign_err FROM STDIN WITH (ignore_errors 0.6);
+COPY check_ign_err FROM STDIN WITH (reject_limit 0.6);
 6	{6}	6
 a	{7}	7
 8	{8}	8888888888
@@ -597,7 +597,7 @@ a	{7}	7
 10	{10}	10
 \.
 
-COPY check_ign_err FROM STDIN WITH (ignore_errors 0.7);
+COPY check_ign_err FROM STDIN WITH (reject_limit 0.7);
 6	{6}	6
 a	{7}	7
 8	{8}	8888888888

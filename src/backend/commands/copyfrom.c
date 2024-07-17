@@ -1013,12 +1013,12 @@ CopyFrom(CopyFromState cstate)
 			pgstat_progress_update_param(PROGRESS_COPY_TUPLES_SKIPPED,
 										 ++skipped);
 
-			if (cstate->opts.err_thresholds.num_err > 0 &&
-				skipped > cstate->opts.err_thresholds.num_err)
+			if (cstate->opts.reject_limits.num_err > 0 &&
+				skipped > cstate->opts.reject_limits.num_err)
 				ereport(ERROR,
 						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-						 errmsg("exceeded the number specified by IGNORE_ERRORS \"%lld\"",
-								(long long) cstate->opts.err_thresholds.num_err)));
+						 errmsg("exceeded the number specified by REJECT_LIMIT \"%lld\"",
+								(long long) cstate->opts.reject_limits.num_err)));
 			continue;
 		}
 
@@ -1312,12 +1312,12 @@ CopyFrom(CopyFromState cstate)
 	}
 
 	ratio_err = (double) skipped / (processed + skipped);
-	if (cstate->opts.err_thresholds.ratio_err > 0 &&
-		cstate->opts.err_thresholds.ratio_err < ratio_err)
+	if (cstate->opts.reject_limits.ratio_err &&
+		cstate->opts.reject_limits.ratio_err < ratio_err)
 		ereport(ERROR,
 			(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-				errmsg("exceeded the ratio specified by IGNORE_ERRORS \"%f\" :the error ratio was: \"%f\"",
-				cstate->opts.err_thresholds.ratio_err,
+				errmsg("exceeded the ratio specified by REJECT_LIMIT \"%f\", the error ratio was: \"%f\"",
+				cstate->opts.reject_limits.ratio_err,
 				ratio_err)));
 
 	/* Done, clean up */

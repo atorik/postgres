@@ -44,7 +44,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
     FORCE_NOT_NULL { ( <replaceable class="parameter">column_name</replaceable> [, ...] ) | * }
     FORCE_NULL { ( <replaceable class="parameter">column_name</replaceable> [, ...] ) | * }
     ON_ERROR <replaceable class="parameter">error_action</replaceable>
-    IGNORE_ERRORS { <replaceable class="parameter">integer</replaceable> | <replaceable class="parameter">floating point</replaceable> | ALL }
+    REJECT_LIMIT { <replaceable class="parameter">integer</replaceable> | <replaceable class="parameter">floating point</replaceable> | INFINITY }
     ENCODING '<replaceable class="parameter">encoding_name</replaceable>'
     LOG_VERBOSITY <replaceable class="parameter">verbosity</replaceable>
 </synopsis>
@@ -413,7 +413,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
    </varlistentry>
 
    <varlistentry>
-    <term><literal>IGNORE_ERRORS</literal></term>
+    <term><literal>REJECT_LIMIT</literal></term>
     <listitem>
      <para>
       When a positive integer value is specified, <command>COPY</command> limits
@@ -421,7 +421,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       value into its data type.
       If input data caused more errors than the specified value, entire
       <command>COPY</command> fails.
-      Otherwise <command>COPY</command> discards the input row and continues
+      Otherwise, <command>COPY</command> discards the input row and continues
       with the next one.
      </para>
      <para>
@@ -430,11 +430,11 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       value into its data type.
       If input data caused an error ratio greater than the specified value,
       entire <command>COPY</command> fails.
-      Otherwise <command>COPY</command> discards only the input rows where
+      Otherwise, <command>COPY</command> discards only the input rows where
       errors occured and copies all the other rows.
      </para>
      <para>
-      When specified <literal>ALL</literal>, <command>COPY</command> ignores all
+      When specified <literal>INFINITY</literal>, <command>COPY</command> ignores all
       the errors. This is a synonym for <literal>ON_ERROR</literal> <literal>ignore</literal>.
      </para>
     </listitem>
