@@ -92,7 +92,7 @@ typedef struct CopyFormatOptions
 	bool		convert_selectively;	/* do selective binary conversion? */
 	CopyOnErrorChoice on_error; /* what to do when error happened */
 	CopyLogVerbosityChoice log_verbosity;	/* verbosity of logged messages */
-	CopyIgnoreThresholds	err_thresholds;
+	CopyIgnoreThresholds	err_thresholds;	/* thresholds of ignoring errors */
 	List	   *convert_select; /* list of column names (can be NIL) */
 } CopyFormatOptions;
 
