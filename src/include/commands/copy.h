@@ -50,13 +50,13 @@ typedef enum CopyLogVerbosityChoice
 } CopyLogVerbosityChoice;
 
 /*
- * A struct to hold ignore_errors options, in a parsed form.
+ * A struct to hold reject_limit options, in a parsed form.
  * More values to be added in another patch.
  */
-typedef struct CopyIgnoreThresholds
+typedef struct CopyRejectLimits
 {
 	int64		num_err;	/* maximum tolerable number of errors */
-} CopyIgnoreThresholds;
+} CopyRejectLimits;
 
 /*
  * A struct to hold COPY options, in a parsed form. All of these are related
@@ -92,7 +92,7 @@ typedef struct CopyFormatOptions
 	bool		convert_selectively;	/* do selective binary conversion? */
 	CopyOnErrorChoice on_error; /* what to do when error happened */
 	CopyLogVerbosityChoice log_verbosity;	/* verbosity of logged messages */
-	CopyIgnoreThresholds	err_thresholds;	/* thresholds of ignoring errors */
+	CopyRejectLimits	reject_limits;	/* thresholds of reject_limit */
 	List	   *convert_select; /* list of column names (can be NIL) */
 } CopyFormatOptions;
 

@@ -416,12 +416,12 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 }
 
 /*
- * Extract an IgnoreErrorsThresholds values from a DefElem.
+ * Extract a CopyRejectLimits values from a DefElem.
  */
-static CopyIgnoreThresholds
-defGetIgnoreErrorsOptions(DefElem *def)
+static CopyRejectLimits
+defGetCopyRejectLimitOptions(DefElem *def)
 {
-	CopyIgnoreThresholds	thresholds;
+	CopyRejectLimits	thresholds;
 	int64					num_err;
 
 	switch(nodeTag(def->arg))
@@ -431,21 +431,21 @@ defGetIgnoreErrorsOptions(DefElem *def)
 			if (num_err <= 0)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("number for IGNORE_ERRORS must be greater than zero")));
+						 errmsg("number for REJECT_LIMIT must be greater than zero")));
 			break;
 		case T_String:
-			if (pg_strcasecmp(defGetString(def), "all") == 0)
+			if (pg_strcasecmp(defGetString(def), "INFINITY") == 0)
 				/* when set to 0, the threashold is treated as no limit */
 				num_err = 0;
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("string for IGNORE_ERRORS must be 'ALL'")));
+						 errmsg("string for REJECT_LIMIT must be 'INFINITY'")));
 			break;
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("value for IGNORE_ERRORS must be positive integer or 'ALL'")));
+					 errmsg("value for REJECT_LIMIT must be positive integer or 'INFINITY'")));
 	}
 	thresholds.num_err = num_err;
 
@@ -503,7 +503,7 @@ ProcessCopyOptions(ParseState *pstate,
 	bool		header_specified = false;
 	bool		on_error_specified = false;
 	bool		log_verbosity_specified = false;
-	bool		ignore_errors_specified = false;
+	bool		reject_limit_specified = false;
 	ListCell   *option;
 
 	/* Support external use for option sanity checking */
@@ -670,13 +670,13 @@ ProcessCopyOptions(ParseState *pstate,
 			log_verbosity_specified = true;
 			opts_out->log_verbosity = defGetCopyLogVerbosityChoice(defel, pstate);
 		}
-		else if (strcmp(defel->defname, "ignore_errors") == 0)
+		else if (strcmp(defel->defname, "reject_limit") == 0)
 		{
-			if (ignore_errors_specified)
+			if (reject_limit_specified)
 				errorConflictingDefElem(defel, pstate);
-			ignore_errors_specified = true;
+			reject_limit_specified = true;
 			opts_out->on_error = COPY_ON_ERROR_IGNORE;
-			opts_out->err_thresholds = defGetIgnoreErrorsOptions(defel);
+			opts_out->reject_limits = defGetCopyRejectLimitOptions(defel);
 		}
 		else
 			ereport(ERROR,
