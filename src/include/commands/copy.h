@@ -56,6 +56,7 @@ typedef enum CopyLogVerbosityChoice
 typedef struct CopyIgnoreThresholds
 {
 	int64		num_err;	/* maximum tolerable number of errors */
+	float		ratio_err;	/* maximum tolerable ratio of errors */
 } CopyIgnoreThresholds;
 
 /*

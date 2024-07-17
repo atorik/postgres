@@ -122,6 +122,8 @@ LINE 1: COPY x to stdout (log_verbosity unsupported);
                           ^
 COPY x from stdin with (ignore_errors 0);
 ERROR:  number for IGNORE_ERRORS must be greater than zero
+COPY x from stdin with (ignore_errors 1.1);
+ERROR:  float for IGNORE_ERRORS must be greater than zero and smaller than 1
 -- too many columns in column list: should fail
 COPY x (a, b, c, d, e, d, c) from stdin;
 ERROR:  column "d" specified more than once
@@ -802,6 +804,11 @@ CONTEXT:  COPY check_ign_err, line 5, column n: ""
 COPY check_ign_err FROM STDIN WITH (ignore_errors 4);
 NOTICE:  4 rows were skipped due to data type incompatibility
 COPY check_ign_err FROM STDIN WITH (ignore_errors 'all');
+NOTICE:  4 rows were skipped due to data type incompatibility
+COPY check_ign_err FROM STDIN WITH (ignore_errors 0.6);
+ERROR:  exceeded the ratio specified by IGNORE_ERRORS "0.600000" :the error ratio was: "0.666667"
+CONTEXT:  COPY check_ign_err, line 7: ""
+COPY check_ign_err FROM STDIN WITH (ignore_errors 0.7);
 NOTICE:  4 rows were skipped due to data type incompatibility
 -- clean up
 DROP TABLE forcetest;

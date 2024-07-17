@@ -422,7 +422,8 @@ static CopyIgnoreThresholds
 defGetIgnoreErrorsOptions(DefElem *def)
 {
 	CopyIgnoreThresholds	thresholds;
-	int64					num_err;
+	uint64					num_err = 0;
+	float					ratio_err = 0;
 
 	switch(nodeTag(def->arg))
 	{
@@ -433,14 +434,20 @@ defGetIgnoreErrorsOptions(DefElem *def)
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("number for IGNORE_ERRORS must be greater than zero")));
 			break;
+		case T_Float:
+			ratio_err = defGetNumeric(def);
+			if (ratio_err <= 0 || ratio_err >= 1)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("float for IGNORE_ERRORS must be greater than zero and smaller than 1")));
+			break;
 		case T_String:
-			if (pg_strcasecmp(defGetString(def), "all") == 0)
-				/* when set to 0, the threashold is treated as no limit */
-				num_err = 0;
-			else
+			if (pg_strcasecmp(defGetString(def), "all") != 0)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("string for IGNORE_ERRORS must be 'ALL'")));
+
+				/* when set to 0, the threashold is treated as no limit */
 			break;
 		default:
 			ereport(ERROR,
@@ -448,6 +455,7 @@ defGetIgnoreErrorsOptions(DefElem *def)
 					 errmsg("value for IGNORE_ERRORS must be positive integer or 'ALL'")));
 	}
 	thresholds.num_err = num_err;
+	thresholds.ratio_err = ratio_err;
 
 	return thresholds;
 }

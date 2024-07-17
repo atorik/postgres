@@ -84,6 +84,7 @@ COPY x to stdin (format CSV, force_null(a));
 COPY x to stdin (format BINARY, on_error unsupported);
 COPY x to stdout (log_verbosity unsupported);
 COPY x from stdin with (ignore_errors 0);
+COPY x from stdin with (ignore_errors 1.1);
 
 -- too many columns in column list: should fail
 COPY x (a, b, c, d, e, d, c) from stdin;
@@ -579,6 +580,24 @@ a	{7}	7
 \.
 
 COPY check_ign_err FROM STDIN WITH (ignore_errors 'all');
+6	{6}	6
+a	{7}	7
+8	{8}	8888888888
+9	{a, 9}	9
+
+10	{10}	10
+\.
+
+COPY check_ign_err FROM STDIN WITH (ignore_errors 0.6);
+6	{6}	6
+a	{7}	7
+8	{8}	8888888888
+9	{a, 9}	9
+
+10	{10}	10
+\.
+
+COPY check_ign_err FROM STDIN WITH (ignore_errors 0.7);
 6	{6}	6
 a	{7}	7
 8	{8}	8888888888

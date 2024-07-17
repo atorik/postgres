@@ -44,7 +44,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
     FORCE_NOT_NULL { ( <replaceable class="parameter">column_name</replaceable> [, ...] ) | * }
     FORCE_NULL { ( <replaceable class="parameter">column_name</replaceable> [, ...] ) | * }
     ON_ERROR <replaceable class="parameter">error_action</replaceable>
-    IGNORE_ERRORS { <replaceable class="parameter">integer</replaceable> | ALL }
+    IGNORE_ERRORS { <replaceable class="parameter">integer</replaceable> | <replaceable class="parameter">floating point</replaceable> | ALL }
     ENCODING '<replaceable class="parameter">encoding_name</replaceable>'
     LOG_VERBOSITY <replaceable class="parameter">verbosity</replaceable>
 </synopsis>
@@ -423,6 +423,15 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       <command>COPY</command> fails.
       Otherwise <command>COPY</command> discards the input row and continues
       with the next one.
+     </para>
+     <para>
+      When a positive floating point value is specified, <command>COPY</command>
+      limits the maximum ratio of errors while converting a column's input
+      value into its data type.
+      If input data caused more error ratio than the specified value, entire
+      <command>COPY</command> fails.
+      Otherwise <command>COPY</command> only discards the input rows where
+      errors occured and copies all the other rows.
      </para>
      <para>
       When specified <literal>ALL</literal>, <command>COPY</command> ignores all

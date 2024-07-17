@@ -646,6 +646,7 @@ CopyFrom(CopyFromState cstate)
 	int64		processed = 0;
 	int64		excluded = 0;
 	int64		skipped = 0;
+	double		ratio_err = 0;
 	bool		has_before_insert_row_trig;
 	bool		has_instead_insert_row_trig;
 	bool		leafpart_use_multi_insert = false;
@@ -1018,7 +1019,6 @@ CopyFrom(CopyFromState cstate)
 						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
 						 errmsg("exceeded the number specified by IGNORE_ERRORS \"%lld\"",
 								(long long) cstate->opts.err_thresholds.num_err)));
-
 			continue;
 		}
 
@@ -1310,6 +1310,15 @@ CopyFrom(CopyFromState cstate)
 		if (!CopyMultiInsertInfoIsEmpty(&multiInsertInfo))
 			CopyMultiInsertInfoFlush(&multiInsertInfo, NULL, &processed);
 	}
+
+	ratio_err = (double) skipped / (processed + skipped);
+	if (cstate->opts.err_thresholds.ratio_err > 0 &&
+		cstate->opts.err_thresholds.ratio_err < ratio_err)
+		ereport(ERROR,
+			(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+				errmsg("exceeded the ratio specified by IGNORE_ERRORS \"%f\" :the error ratio was: \"%f\"",
+				cstate->opts.err_thresholds.ratio_err,
+				ratio_err)));
 
 	/* Done, clean up */
 	error_context_stack = errcallback.previous;
