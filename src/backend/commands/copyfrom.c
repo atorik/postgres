@@ -1016,7 +1016,7 @@ CopyFrom(CopyFromState cstate)
 				skipped > cstate->opts.err_thresholds.num_err)
 				ereport(ERROR,
 						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-						 errmsg("exceeded the number specified by IGNORE_ERRORS \"%d\"",
+						 errmsg("exceeded the number specified by IGNORE_ERRORS \"%ld\"",
 								cstate->opts.err_thresholds.num_err)));
 
 			continue;

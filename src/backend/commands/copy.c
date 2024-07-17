@@ -448,6 +448,7 @@ defGetIgnoreErrorsOptions(DefElem *def)
 					 errmsg("value for IGNORE_ERRORS must be positive integer or 'ALL'")));
 	}
 	thresholds.num_err = num_err;
+
 	return thresholds;
 }
 
