@@ -421,7 +421,7 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 static CopyRejectLimits
 defGetCopyRejectLimitOptions(DefElem *def)
 {
-	CopyRejectLimits	thresholds;
+	CopyRejectLimits	limits;
 	int64					num_err;
 
 	switch(nodeTag(def->arg))
@@ -435,7 +435,7 @@ defGetCopyRejectLimitOptions(DefElem *def)
 			break;
 		case T_String:
 			if (pg_strcasecmp(defGetString(def), "INFINITY") == 0)
-				/* when set to 0, the threashold is treated as no limit */
+				/* when set to 0, it is treated as no limit */
 				num_err = 0;
 			else
 				ereport(ERROR,
@@ -447,9 +447,9 @@ defGetCopyRejectLimitOptions(DefElem *def)
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("value for REJECT_LIMIT must be positive integer or 'INFINITY'")));
 	}
-	thresholds.num_err = num_err;
+	limits.num_err = num_err;
 
-	return thresholds;
+	return limits;
 }
 
 /*
