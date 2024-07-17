@@ -428,9 +428,9 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       When a positive floating point value is specified, <command>COPY</command>
       limits the maximum ratio of errors while converting a column's input
       value into its data type.
-      If input data caused more error ratio than the specified value, entire
-      <command>COPY</command> fails.
-      Otherwise <command>COPY</command> only discards the input rows where
+      If input data caused an error ratio greater than the specified value,
+      entire <command>COPY</command> fails.
+      Otherwise <command>COPY</command> discards only the input rows where
       errors occured and copies all the other rows.
      </para>
      <para>
