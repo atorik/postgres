@@ -15,9 +15,13 @@
  * Injections points require --enable-injection-points.
  */
 #ifdef USE_INJECTION_POINTS
+#define INJECTION_POINT_LOAD(name) InjectionPointLoad(name)
 #define INJECTION_POINT(name) InjectionPointRun(name)
+#define INJECTION_POINT_CACHED(name) InjectionPointCached(name)
 #else
+#define INJECTION_POINT_LOAD(name) ((void) name)
 #define INJECTION_POINT(name) ((void) name)
+#define INJECTION_POINT_CACHED(name) ((void) name)
 #endif
 
 /*
@@ -34,7 +38,9 @@ extern void InjectionPointAttach(const char *name,
 								 const char *function,
 								 const void *private_data,
 								 int private_data_size);
+extern void InjectionPointLoad(const char *name);
 extern void InjectionPointRun(const char *name);
+extern void InjectionPointCached(const char *name);
 extern bool InjectionPointDetach(const char *name);
 
 #endif							/* INJECTION_POINT_H */
