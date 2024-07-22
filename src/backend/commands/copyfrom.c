@@ -1024,6 +1024,12 @@ CopyFrom(CopyFromState cstate)
 			pgstat_progress_update_param(PROGRESS_COPY_TUPLES_SKIPPED,
 										 ++skipped);
 
+			if (cstate->opts.reject_limits.num_err &&
+				skipped > cstate->opts.reject_limits.num_err)
+				ereport(ERROR,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						 errmsg("exceeded the number specified by REJECT_LIMIT \"%lld\"",
+								(long long) cstate->opts.reject_limits.num_err)));
 			continue;
 		}
 

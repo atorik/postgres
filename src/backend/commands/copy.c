@@ -419,6 +419,43 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 }
 
 /*
+ * Extract a CopyRejectLimits values from a DefElem.
+ */
+static CopyRejectLimits
+defGetCopyRejectLimitOptions(DefElem *def)
+{
+	CopyRejectLimits	limits;
+	int64					num_err;
+
+	switch(nodeTag(def->arg))
+	{
+		case T_Integer:
+			num_err = defGetInt64(def);
+			if (num_err <= 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("number for REJECT_LIMIT must be greater than zero")));
+			break;
+		case T_String:
+			if (pg_strcasecmp(defGetString(def), "INFINITY") == 0)
+				/* when set to 0, it is treated as no limit */
+				num_err = 0;
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("string for REJECT_LIMIT must be 'INFINITY'")));
+			break;
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("value for REJECT_LIMIT must be positive integer or 'INFINITY'")));
+	}
+	limits.num_err = num_err;
+
+	return limits;
+}
+
+/*
  * Extract a CopyLogVerbosityChoice value from a DefElem.
  */
 static CopyLogVerbosityChoice
@@ -470,6 +507,7 @@ ProcessCopyOptions(ParseState *pstate,
 	bool		header_specified = false;
 	bool		on_error_specified = false;
 	bool		log_verbosity_specified = false;
+	bool		reject_limit_specified = false;
 	ListCell   *option;
 
 	/* Support external use for option sanity checking */
@@ -635,6 +673,17 @@ ProcessCopyOptions(ParseState *pstate,
 				errorConflictingDefElem(defel, pstate);
 			log_verbosity_specified = true;
 			opts_out->log_verbosity = defGetCopyLogVerbosityChoice(defel, pstate);
+		}
+		else if (strcmp(defel->defname, "reject_limit") == 0)
+		{
+			if (reject_limit_specified)
+				errorConflictingDefElem(defel, pstate);
+			if (!opts_out->on_error)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("REJECT_LIMIT requires ON_ERROR to be set to other than stop")));
+			reject_limit_specified = true;
+			opts_out->reject_limits = defGetCopyRejectLimitOptions(defel);
 		}
 		else
 			ereport(ERROR,
