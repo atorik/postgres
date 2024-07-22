@@ -85,10 +85,10 @@ COPY x from stdin (log_verbosity default, log_verbosity verbose);
 ERROR:  conflicting or redundant options
 LINE 1: COPY x from stdin (log_verbosity default, log_verbosity verb...
                                                   ^
-COPY x from stdin (reject_limit 'INFINITY', reject_limit 3);
+COPY x from stdin (on_error ignore, reject_limit 'INFINITY', reject_limit 3);
 ERROR:  conflicting or redundant options
-LINE 1: COPY x from stdin (reject_limit 'INFINITY', reject_limit 3);
-                                                    ^
+LINE 1: ... stdin (on_error ignore, reject_limit 'INFINITY', reject_lim...
+                                                             ^
 -- incorrect options
 COPY x to stdin (format BINARY, delimiter ',');
 ERROR:  cannot specify DELIMITER in BINARY mode
@@ -120,7 +120,7 @@ COPY x to stdout (log_verbosity unsupported);
 ERROR:  COPY LOG_VERBOSITY "unsupported" not recognized
 LINE 1: COPY x to stdout (log_verbosity unsupported);
                           ^
-COPY x from stdin with (reject_limit 0);
+COPY x from stdin with (on_error ignore, reject_limit 0);
 ERROR:  number for REJECT_LIMIT must be greater than zero
 -- too many columns in column list: should fail
 COPY x (a, b, c, d, e, d, c) from stdin;
@@ -796,12 +796,12 @@ COPY check_ign_err FROM STDIN WITH (on_error ignore);
 ERROR:  extra data after last expected column
 CONTEXT:  COPY check_ign_err, line 1: "1	{1}	3	abc"
 -- tests for reject_limit option
-COPY check_ign_err FROM STDIN WITH (reject_limit 3);
+COPY check_ign_err FROM STDIN WITH (on_error ignore, reject_limit 3);
 ERROR:  exceeded the number specified by REJECT_LIMIT "3"
 CONTEXT:  COPY check_ign_err, line 5, column n: ""
-COPY check_ign_err FROM STDIN WITH (reject_limit 4);
+COPY check_ign_err FROM STDIN WITH (on_error ignore, reject_limit 4);
 NOTICE:  4 rows were skipped due to data type incompatibility
-COPY check_ign_err FROM STDIN WITH (reject_limit 'INFINITY');
+COPY check_ign_err FROM STDIN WITH (on_error ignore, reject_limit 'INFINITY');
 NOTICE:  4 rows were skipped due to data type incompatibility
 -- clean up
 DROP TABLE forcetest;

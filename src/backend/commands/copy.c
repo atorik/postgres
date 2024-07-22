@@ -674,8 +674,11 @@ ProcessCopyOptions(ParseState *pstate,
 		{
 			if (reject_limit_specified)
 				errorConflictingDefElem(defel, pstate);
+			if (!opts_out->on_error)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("REJECT_LIMIT requires ON_ERROR to be set to other than stop")));
 			reject_limit_specified = true;
-			opts_out->on_error = COPY_ON_ERROR_IGNORE;
 			opts_out->reject_limits = defGetCopyRejectLimitOptions(defel);
 		}
 		else
