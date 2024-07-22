@@ -423,7 +423,7 @@ defGetCopyRejectLimitOptions(DefElem *def)
 {
 	CopyRejectLimits	limits;
 	uint64				num_err = 0;
-	float				ratio_err = 0;
+	double				ratio_err = 0;
 
 	switch(nodeTag(def->arg))
 	{
