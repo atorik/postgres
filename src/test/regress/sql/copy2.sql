@@ -588,7 +588,7 @@ a	{7}	7
 10	{10}	10
 \.
 
-COPY check_ign_err FROM STDIN WITH (reject_limit 0.6);
+COPY check_ign_err FROM STDIN WITH (on_error ignore, reject_limit 0.6);
 6	{6}	6
 a	{7}	7
 8	{8}	8888888888
@@ -597,7 +597,7 @@ a	{7}	7
 10	{10}	10
 \.
 
-COPY check_ign_err FROM STDIN WITH (reject_limit 0.7);
+COPY check_ign_err FROM STDIN WITH (on_error ignore, reject_limit 0.7);
 6	{6}	6
 a	{7}	7
 8	{8}	8888888888

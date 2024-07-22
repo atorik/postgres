@@ -122,7 +122,7 @@ LINE 1: COPY x to stdout (log_verbosity unsupported);
                           ^
 COPY x from stdin with (on_error ignore, reject_limit 0);
 ERROR:  number for REJECT_LIMIT must be greater than zero
-COPY x from stdin with (reject_limit 1.1);
+COPY x from stdin with (on_error ignore, reject_limit 1.1);
 ERROR:  float for REJECT_LIMIT must be greater than zero and smaller than 1
 -- too many columns in column list: should fail
 COPY x (a, b, c, d, e, d, c) from stdin;
@@ -805,10 +805,10 @@ COPY check_ign_err FROM STDIN WITH (on_error ignore, reject_limit 4);
 NOTICE:  4 rows were skipped due to data type incompatibility
 COPY check_ign_err FROM STDIN WITH (on_error ignore, reject_limit 'INFINITY');
 NOTICE:  4 rows were skipped due to data type incompatibility
-COPY check_ign_err FROM STDIN WITH (reject_limit 0.6);
+COPY check_ign_err FROM STDIN WITH (on_error ignore, reject_limit 0.6);
 ERROR:  exceeded the ratio specified by REJECT_LIMIT "0.600000", the error ratio was: "0.666667"
 CONTEXT:  COPY check_ign_err, line 7: ""
-COPY check_ign_err FROM STDIN WITH (reject_limit 0.7);
+COPY check_ign_err FROM STDIN WITH (on_error ignore, reject_limit 0.7);
 NOTICE:  4 rows were skipped due to data type incompatibility
 -- clean up
 DROP TABLE forcetest;
