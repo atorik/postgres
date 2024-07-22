@@ -423,6 +423,8 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       <command>COPY</command> fails.
       Otherwise, <command>COPY</command> discards the input row and continues
       with the next one.
+      This option must be used with <literal>ON_ERROR</literal> to be set to
+      other than <literal>stop</literal>.
      </para>
      <para>
       When a positive floating point value is specified, <command>COPY</command>
