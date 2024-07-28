@@ -5504,6 +5504,10 @@ ExecProcNodeWithExplain(PlanState *ps)
 	es->verbose = true;
 	es->signaled = true;
 
+	// for testing
+	if (ActiveQueryDesc == NULL)
+		return ps->ExecProcNodeOriginal(ps);
+
 	ExplainAssembleLogOutput(es, ActiveQueryDesc, EXPLAIN_FORMAT_TEXT, 0, -1);
 
 	ereport(LOG_SERVER_ONLY,
