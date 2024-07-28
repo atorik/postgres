@@ -1052,9 +1052,8 @@ typedef struct JsonExprState
 
 	/*
 	 * Address of the step to coerce the result value of jsonpath evaluation
-	 * to the RETURNING type using JsonExpr.coercion_expr.  -1 if no coercion
-	 * is necessary or if either JsonExpr.use_io_coercion or
-	 * JsonExpr.use_json_coercion is true.
+	 * to the RETURNING type.  -1 if no coercion if JsonExpr.use_io_coercion
+	 * is true.
 	 */
 	int			jump_eval_coercion;
 
@@ -1751,6 +1750,19 @@ typedef struct BitmapIndexScanState
 } BitmapIndexScanState;
 
 /* ----------------
+ *	 BitmapHeapScanInstrumentation information
+ *
+ *		exact_pages		   total number of exact pages retrieved
+ *		lossy_pages		   total number of lossy pages retrieved
+ * ----------------
+ */
+typedef struct BitmapHeapScanInstrumentation
+{
+	uint64		exact_pages;
+	uint64		lossy_pages;
+} BitmapHeapScanInstrumentation;
+
+/* ----------------
  *	 SharedBitmapState information
  *
  *		BM_INITIAL		TIDBitmap creation is not yet started, so first worker
@@ -1794,6 +1806,20 @@ typedef struct ParallelBitmapHeapState
 } ParallelBitmapHeapState;
 
 /* ----------------
+ *	 Instrumentation data for a parallel bitmap heap scan.
+ *
+ * A shared memory struct that each parallel worker copies its
+ * BitmapHeapScanInstrumentation information into at executor shutdown to
+ * allow the leader to display the information in EXPLAIN ANALYZE.
+ * ----------------
+ */
+typedef struct SharedBitmapHeapInstrumentation
+{
+	int			num_workers;
+	BitmapHeapScanInstrumentation sinstrument[FLEXIBLE_ARRAY_MEMBER];
+} SharedBitmapHeapInstrumentation;
+
+/* ----------------
  *	 BitmapHeapScanState information
  *
  *		bitmapqualorig	   execution state for bitmapqualorig expressions
@@ -1801,8 +1827,7 @@ typedef struct ParallelBitmapHeapState
  *		tbmiterator		   iterator for scanning current pages
  *		tbmres			   current-page data
  *		pvmbuffer		   buffer for visibility-map lookups of prefetched pages
- *		exact_pages		   total number of exact pages retrieved
- *		lossy_pages		   total number of lossy pages retrieved
+ *		stats			   execution statistics
  *		prefetch_iterator  iterator for prefetching ahead of current page
  *		prefetch_pages	   # pages prefetch iterator is ahead of current
  *		prefetch_target    current target prefetch distance
@@ -1811,6 +1836,7 @@ typedef struct ParallelBitmapHeapState
  *		shared_tbmiterator	   shared iterator
  *		shared_prefetch_iterator shared iterator for prefetching
  *		pstate			   shared state for parallel bitmap scan
+ *		sinstrument		   statistics for parallel workers
  * ----------------
  */
 typedef struct BitmapHeapScanState
@@ -1821,8 +1847,7 @@ typedef struct BitmapHeapScanState
 	TBMIterator *tbmiterator;
 	TBMIterateResult *tbmres;
 	Buffer		pvmbuffer;
-	long		exact_pages;
-	long		lossy_pages;
+	BitmapHeapScanInstrumentation stats;
 	TBMIterator *prefetch_iterator;
 	int			prefetch_pages;
 	int			prefetch_target;
@@ -1831,6 +1856,7 @@ typedef struct BitmapHeapScanState
 	TBMSharedIterator *shared_tbmiterator;
 	TBMSharedIterator *shared_prefetch_iterator;
 	ParallelBitmapHeapState *pstate;
+	SharedBitmapHeapInstrumentation *sinstrument;
 } BitmapHeapScanState;
 
 /* ----------------

@@ -253,6 +253,7 @@ BernoulliSamplerData
 BgWorkerStartTime
 BgwHandleStatus
 BinaryArithmFunc
+BinaryUpgradeClassOidItem
 BindParamCbData
 BipartiteMatchState
 BitString
@@ -261,6 +262,7 @@ BitmapAndPath
 BitmapAndState
 BitmapHeapPath
 BitmapHeapScan
+BitmapHeapScanInstrumentation
 BitmapHeapScanState
 BitmapIndexScan
 BitmapIndexScanState
@@ -1237,6 +1239,7 @@ InjectionPointCallback
 InjectionPointCondition
 InjectionPointConditionType
 InjectionPointEntry
+InjectionPointsCtl
 InjectionPointSharedState
 InlineCodeBlock
 InsertStmt
@@ -2602,6 +2605,7 @@ SetToDefault
 SetupWorkerPtrType
 ShDependObjectInfo
 SharedAggInfo
+SharedBitmapHeapInstrumentation
 SharedBitmapState
 SharedDependencyObjectType
 SharedDependencyType
@@ -2717,7 +2721,6 @@ SplitPoint
 SplitTextOutputData
 SplitVar
 StackElem
-StandbySlotNamesConfigData
 StartDataPtrType
 StartLOPtrType
 StartLOsPtrType
@@ -2782,6 +2785,7 @@ SyncRepConfigData
 SyncRepStandbyData
 SyncRequestHandler
 SyncRequestType
+SyncStandbySlotsConfigData
 SyncingTablesState
 SysFKRelationship
 SysScanDesc
@@ -3099,9 +3103,9 @@ WaitEvent
 WaitEventActivity
 WaitEventBufferPin
 WaitEventClient
-WaitEventExtensionCounterData
-WaitEventExtensionEntryById
-WaitEventExtensionEntryByName
+WaitEventCustomCounterData
+WaitEventCustomEntryByInfo
+WaitEventCustomEntryByName
 WaitEventIO
 WaitEventIPC
 WaitEventSet
@@ -3696,6 +3700,9 @@ pg_md5_ctx
 pg_on_exit_callback
 pg_prng_state
 pg_re_flags
+pg_regex_t
+pg_regmatch_t
+pg_regoff_t
 pg_saslprep_rc
 pg_sha1_ctx
 pg_sha224_ctx
@@ -3931,6 +3938,7 @@ string
 substitute_actual_parameters_context
 substitute_actual_srf_parameters_context
 substitute_phv_relids_context
+subxids_array_status
 symbol
 tablespaceinfo
 td_entry

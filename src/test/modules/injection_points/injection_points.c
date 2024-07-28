@@ -219,7 +219,7 @@ injection_wait(const char *name, const void *private_data)
 	 * this custom wait event name is not released, but we don't care much for
 	 * testing as this should be short-lived.
 	 */
-	injection_wait_event = WaitEventExtensionNew(name);
+	injection_wait_event = WaitEventInjectionPointNew(name);
 
 	/*
 	 * Find a free slot to wait for, and register this injection point's name.
@@ -321,6 +321,23 @@ injection_points_attach(PG_FUNCTION_ARGS)
 }
 
 /*
+ * SQL function for loading an injection point.
+ */
+PG_FUNCTION_INFO_V1(injection_points_load);
+Datum
+injection_points_load(PG_FUNCTION_ARGS)
+{
+	char	   *name = text_to_cstring(PG_GETARG_TEXT_PP(0));
+
+	if (inj_state == NULL)
+		injection_init_shmem();
+
+	INJECTION_POINT_LOAD(name);
+
+	PG_RETURN_VOID();
+}
+
+/*
  * SQL function for triggering an injection point.
  */
 PG_FUNCTION_INFO_V1(injection_points_run);
@@ -330,6 +347,20 @@ injection_points_run(PG_FUNCTION_ARGS)
 	char	   *name = text_to_cstring(PG_GETARG_TEXT_PP(0));
 
 	INJECTION_POINT(name);
+
+	PG_RETURN_VOID();
+}
+
+/*
+ * SQL function for triggering an injection point from cache.
+ */
+PG_FUNCTION_INFO_V1(injection_points_cached);
+Datum
+injection_points_cached(PG_FUNCTION_ARGS)
+{
+	char	   *name = text_to_cstring(PG_GETARG_TEXT_PP(0));
+
+	INJECTION_POINT_CACHED(name);
 
 	PG_RETURN_VOID();
 }

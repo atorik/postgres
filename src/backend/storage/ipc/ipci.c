@@ -149,7 +149,7 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, SyncScanShmemSize());
 	size = add_size(size, AsyncShmemSize());
 	size = add_size(size, StatsShmemSize());
-	size = add_size(size, WaitEventExtensionShmemSize());
+	size = add_size(size, WaitEventCustomShmemSize());
 	size = add_size(size, InjectionPointShmemSize());
 	size = add_size(size, SlotSyncShmemSize());
 #ifdef EXEC_BACKEND
@@ -355,7 +355,7 @@ CreateOrAttachShmemStructs(void)
 	SyncScanShmemInit();
 	AsyncShmemInit();
 	StatsShmemInit();
-	WaitEventExtensionShmemInit();
+	WaitEventCustomShmemInit();
 	InjectionPointShmemInit();
 }
 
@@ -372,11 +372,12 @@ InitializeShmemGUCs(void)
 	Size		size_b;
 	Size		size_mb;
 	Size		hp_size;
+	int			num_semas;
 
 	/*
 	 * Calculate the shared memory size and round up to the nearest megabyte.
 	 */
-	size_b = CalculateShmemSize(NULL);
+	size_b = CalculateShmemSize(&num_semas);
 	size_mb = add_size(size_b, (1024 * 1024) - 1) / (1024 * 1024);
 	sprintf(buf, "%zu", size_mb);
 	SetConfigOption("shared_memory_size", buf,
@@ -395,4 +396,7 @@ InitializeShmemGUCs(void)
 		SetConfigOption("shared_memory_size_in_huge_pages", buf,
 						PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
 	}
+
+	sprintf(buf, "%d", num_semas);
+	SetConfigOption("num_os_semaphores", buf, PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
 }

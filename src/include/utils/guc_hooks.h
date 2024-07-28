@@ -29,8 +29,6 @@ extern bool check_application_name(char **newval, void **extra,
 								   GucSource source);
 extern void assign_application_name(const char *newval, void *extra);
 extern const char *show_archive_command(void);
-extern bool check_autovacuum_max_workers(int *newval, void **extra,
-										 GucSource source);
 extern bool check_autovacuum_work_mem(int *newval, void **extra,
 									  GucSource source);
 extern bool check_vacuum_buffer_usage_limit(int *newval, void **extra,
@@ -84,13 +82,9 @@ extern const char *show_log_timezone(void);
 extern bool check_maintenance_io_concurrency(int *newval, void **extra,
 											 GucSource source);
 extern void assign_maintenance_io_concurrency(int newval, void *extra);
-extern bool check_max_connections(int *newval, void **extra, GucSource source);
-extern bool check_max_wal_senders(int *newval, void **extra, GucSource source);
 extern bool check_max_slot_wal_keep_size(int *newval, void **extra,
 										 GucSource source);
 extern void assign_max_wal_size(int newval, void *extra);
-extern bool check_max_worker_processes(int *newval, void **extra,
-									   GucSource source);
 extern bool check_max_stack_depth(int *newval, void **extra, GucSource source);
 extern void assign_max_stack_depth(int newval, void *extra);
 extern bool check_multixact_member_buffers(int *newval, void **extra,
@@ -174,8 +168,8 @@ extern bool check_wal_consistency_checking(char **newval, void **extra,
 extern void assign_wal_consistency_checking(const char *newval, void *extra);
 extern bool check_wal_segment_size(int *newval, void **extra, GucSource source);
 extern void assign_wal_sync_method(int new_wal_sync_method, void *extra);
-extern bool check_standby_slot_names(char **newval, void **extra,
-									 GucSource source);
-extern void assign_standby_slot_names(const char *newval, void *extra);
+extern bool check_synchronized_standby_slots(char **newval, void **extra,
+											 GucSource source);
+extern void assign_synchronized_standby_slots(const char *newval, void *extra);
 
 #endif							/* GUC_HOOKS_H */

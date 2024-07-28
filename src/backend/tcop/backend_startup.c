@@ -33,6 +33,7 @@
 #include "tcop/backend_startup.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
+#include "utils/injection_point.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/timeout.h"
@@ -196,9 +197,8 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 	 * Save remote_host and remote_port in port structure (after this, they
 	 * will appear in log_line_prefix data for log messages).
 	 */
-	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
-	port->remote_host = pstrdup(remote_host);
-	port->remote_port = pstrdup(remote_port);
+	port->remote_host = MemoryContextStrdup(TopMemoryContext, remote_host);
+	port->remote_port = MemoryContextStrdup(TopMemoryContext, remote_port);
 
 	/* And now we can issue the Log_connections message, if wanted */
 	if (Log_connections)
@@ -213,6 +213,21 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 					(errmsg("connection received: host=%s",
 							remote_host)));
 	}
+
+	/* For testing client error handling */
+#ifdef USE_INJECTION_POINTS
+	INJECTION_POINT("backend-initialize");
+	if (IS_INJECTION_POINT_ATTACHED("backend-initialize-v2-error"))
+	{
+		/*
+		 * This simulates an early error from a pre-v14 server, which used the
+		 * version 2 protocol for any errors that occurred before processing
+		 * the startup packet.
+		 */
+		FrontendProtocol = PG_PROTOCOL(2, 0);
+		elog(FATAL, "protocol version 2 error triggered");
+	}
+#endif
 
 	/*
 	 * If we did a reverse lookup to name, we might as well save the results
@@ -230,9 +245,8 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 		strspn(remote_host, "0123456789.") < strlen(remote_host) &&
 		strspn(remote_host, "0123456789ABCDEFabcdef:") < strlen(remote_host))
 	{
-		port->remote_hostname = pstrdup(remote_host);
+		port->remote_hostname = MemoryContextStrdup(TopMemoryContext, remote_host);
 	}
-	MemoryContextSwitchTo(oldcontext);
 
 	/*
 	 * Ready to begin client interaction.  We will give up and _exit(1) after

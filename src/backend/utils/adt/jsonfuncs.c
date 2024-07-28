@@ -447,12 +447,13 @@ static Datum populate_composite(CompositeIOData *io, Oid typid,
 								HeapTupleHeader defaultval, JsValue *jsv, bool *isnull,
 								Node *escontext);
 static Datum populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv,
-							 bool *isnull, Node *escontext);
+							 bool *isnull, Node *escontext, bool omit_quotes);
 static void prepare_column_cache(ColumnIOData *column, Oid typid, int32 typmod,
 								 MemoryContext mcxt, bool need_scalar);
 static Datum populate_record_field(ColumnIOData *col, Oid typid, int32 typmod,
 								   const char *colname, MemoryContext mcxt, Datum defaultval,
-								   JsValue *jsv, bool *isnull, Node *escontext);
+								   JsValue *jsv, bool *isnull, Node *escontext,
+								   bool omit_scalar_quotes);
 static RecordIOData *allocate_record_info(MemoryContext mcxt, int ncolumns);
 static bool JsObjectGetField(JsObject *obj, char *field, JsValue *jsv);
 static void populate_recordset_record(PopulateRecordsetState *state, JsObject *obj);
@@ -469,7 +470,7 @@ static Datum populate_array(ArrayIOData *aio, const char *colname,
 							Node *escontext);
 static Datum populate_domain(DomainIOData *io, Oid typid, const char *colname,
 							 MemoryContext mcxt, JsValue *jsv, bool *isnull,
-							 Node *escontext);
+							 Node *escontext, bool omit_quotes);
 
 /* functions supporting jsonb_delete, jsonb_set and jsonb_concat */
 static JsonbValue *IteratorConcat(JsonbIterator **it1, JsonbIterator **it2,
@@ -2622,7 +2623,8 @@ populate_array_element(PopulateArrayContext *ctx, int ndim, JsValue *jsv)
 									ctx->aio->element_type,
 									ctx->aio->element_typmod,
 									NULL, ctx->mcxt, PointerGetDatum(NULL),
-									jsv, &element_isnull, ctx->escontext);
+									jsv, &element_isnull, ctx->escontext,
+									false);
 	/* Nothing to do on an error. */
 	if (SOFT_ERROR_OCCURRED(ctx->escontext))
 		return false;
@@ -3119,7 +3121,7 @@ populate_composite(CompositeIOData *io,
  */
 static Datum
 populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv,
-				bool *isnull, Node *escontext)
+				bool *isnull, Node *escontext, bool omit_quotes)
 {
 	Datum		res;
 	char	   *str = NULL;
@@ -3162,7 +3164,9 @@ populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv,
 	{
 		JsonbValue *jbv = jsv->val.jsonb;
 
-		if (typid == JSONBOID)
+		if (jbv->type == jbvString && omit_quotes)
+			str = pnstrdup(jbv->val.string.val, jbv->val.string.len);
+		else if (typid == JSONBOID)
 		{
 			Jsonb	   *jsonb = JsonbValueToJsonb(jbv); /* directly use jsonb */
 
@@ -3214,7 +3218,8 @@ populate_domain(DomainIOData *io,
 				MemoryContext mcxt,
 				JsValue *jsv,
 				bool *isnull,
-				Node *escontext)
+				Node *escontext,
+				bool omit_quotes)
 {
 	Datum		res;
 
@@ -3225,7 +3230,7 @@ populate_domain(DomainIOData *io,
 		res = populate_record_field(io->base_io,
 									io->base_typid, io->base_typmod,
 									colname, mcxt, PointerGetDatum(NULL),
-									jsv, isnull, escontext);
+									jsv, isnull, escontext, omit_quotes);
 		Assert(!*isnull || SOFT_ERROR_OCCURRED(escontext));
 	}
 
@@ -3338,7 +3343,7 @@ Datum
 json_populate_type(Datum json_val, Oid json_type,
 				   Oid typid, int32 typmod,
 				   void **cache, MemoryContext mcxt,
-				   bool *isnull,
+				   bool *isnull, bool omit_quotes,
 				   Node *escontext)
 {
 	JsValue		jsv = {0};
@@ -3368,10 +3373,22 @@ json_populate_type(Datum json_val, Oid json_type,
 
 		jsv.val.jsonb = &jbv;
 
-		/* fill binary jsonb value pointing to jb */
-		jbv.type = jbvBinary;
-		jbv.val.binary.data = &jsonb->root;
-		jbv.val.binary.len = VARSIZE(jsonb) - VARHDRSZ;
+		if (omit_quotes)
+		{
+			char	   *str = JsonbUnquote(DatumGetJsonbP(json_val));
+
+			/* fill the quote-stripped string */
+			jbv.type = jbvString;
+			jbv.val.string.len = strlen(str);
+			jbv.val.string.val = str;
+		}
+		else
+		{
+			/* fill binary jsonb value pointing to jb */
+			jbv.type = jbvBinary;
+			jbv.val.binary.data = &jsonb->root;
+			jbv.val.binary.len = VARSIZE(jsonb) - VARHDRSZ;
+		}
 	}
 
 	if (*cache == NULL)
@@ -3379,7 +3396,7 @@ json_populate_type(Datum json_val, Oid json_type,
 
 	return populate_record_field(*cache, typid, typmod, NULL, mcxt,
 								 PointerGetDatum(NULL), &jsv, isnull,
-								 escontext);
+								 escontext, omit_quotes);
 }
 
 /* recursively populate a record field or an array element from a json/jsonb value */
@@ -3392,7 +3409,8 @@ populate_record_field(ColumnIOData *col,
 					  Datum defaultval,
 					  JsValue *jsv,
 					  bool *isnull,
-					  Node *escontext)
+					  Node *escontext,
+					  bool omit_scalar_quotes)
 {
 	TypeCat		typcat;
 
@@ -3426,7 +3444,7 @@ populate_record_field(ColumnIOData *col,
 	{
 		case TYPECAT_SCALAR:
 			return populate_scalar(&col->scalar_io, typid, typmod, jsv,
-								   isnull, escontext);
+								   isnull, escontext, omit_scalar_quotes);
 
 		case TYPECAT_ARRAY:
 			return populate_array(&col->io.array, colname, mcxt, jsv,
@@ -3444,7 +3462,7 @@ populate_record_field(ColumnIOData *col,
 
 		case TYPECAT_DOMAIN:
 			return populate_domain(&col->io.domain, typid, colname, mcxt,
-								   jsv, isnull, escontext);
+								   jsv, isnull, escontext, omit_scalar_quotes);
 
 		default:
 			elog(ERROR, "unrecognized type category '%c'", typcat);
@@ -3595,7 +3613,8 @@ populate_record(TupleDesc tupdesc,
 										  nulls[i] ? (Datum) 0 : values[i],
 										  &field,
 										  &nulls[i],
-										  escontext);
+										  escontext,
+										  false);
 	}
 
 	res = heap_form_tuple(tupdesc, values, nulls);
