@@ -209,6 +209,7 @@ CONTEXT:  COPY agg_bad, line 3, column b: "aaa"
 -- on_error and log_verbosity tests
 ALTER FOREIGN TABLE agg_bad OPTIONS (ADD on_error 'ignore');
 SELECT * FROM agg_bad;
+NOTICE:  1 row was skipped due to data type incompatibility
   a  |   b    
 -----+--------
  100 | 99.097
