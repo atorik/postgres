@@ -160,6 +160,8 @@ typedef enum ExprEvalOp
 	EEOP_PARAM_EXEC,
 	EEOP_PARAM_EXTERN,
 	EEOP_PARAM_CALLBACK,
+	/* set PARAM_EXEC value */
+	EEOP_PARAM_SET,
 
 	/* return CaseTestExpr value */
 	EEOP_CASE_TESTVAL,
@@ -384,7 +386,7 @@ typedef struct ExprEvalStep
 			ExprEvalRowtypeCache rowcache;
 		}			nulltest_row;
 
-		/* for EEOP_PARAM_EXEC/EXTERN */
+		/* for EEOP_PARAM_EXEC/EXTERN and EEOP_PARAM_SET */
 		struct
 		{
 			int			paramid;	/* numeric ID for parameter */
@@ -708,7 +710,11 @@ typedef struct ExprEvalStep
 			Oid			targettype;
 			int32		targettypmod;
 			bool		omit_quotes;
-			void	   *json_populate_type_cache;
+			/* exists_* fields only relevant for JSON_EXISTS_OP. */
+			bool		exists_coerce;
+			bool		exists_cast_to_int;
+			bool		exists_check_domain;
+			void	   *json_coercion_cache;
 			ErrorSaveContext *escontext;
 		}			jsonexpr_coercion;
 	}			d;
@@ -796,6 +802,8 @@ extern void ExecEvalFuncExprStrictFusage(ExprState *state, ExprEvalStep *op,
 										 ExprContext *econtext);
 extern void ExecEvalParamExec(ExprState *state, ExprEvalStep *op,
 							  ExprContext *econtext);
+extern void ExecEvalParamSet(ExprState *state, ExprEvalStep *op,
+							 ExprContext *econtext);
 extern void ExecEvalParamExtern(ExprState *state, ExprEvalStep *op,
 								ExprContext *econtext);
 extern void ExecEvalCoerceViaIOSafe(ExprState *state, ExprEvalStep *op);

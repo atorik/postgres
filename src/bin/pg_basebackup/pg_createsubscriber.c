@@ -226,7 +226,7 @@ usage(void)
 	printf(_("  -n, --dry-run                   dry run, just show what would be done\n"));
 	printf(_("  -p, --subscriber-port=PORT      subscriber port number (default %s)\n"), DEFAULT_SUB_PORT);
 	printf(_("  -P, --publisher-server=CONNSTR  publisher connection string\n"));
-	printf(_("  -s, --socket-directory=DIR      socket directory to use (default current directory)\n"));
+	printf(_("  -s, --socketdir=DIR             socket directory to use (default current dir.)\n"));
 	printf(_("  -t, --recovery-timeout=SECS     seconds to wait for recovery to end\n"));
 	printf(_("  -U, --subscriber-username=NAME  subscriber username\n"));
 	printf(_("  -v, --verbose                   output verbose messages\n"));
@@ -778,6 +778,28 @@ setup_publisher(struct LogicalRepInfo *dbinfo)
 		else
 			exit(1);
 
+		/*
+		 * Since we are using the LSN returned by the last replication slot as
+		 * recovery_target_lsn, this LSN is ahead of the current WAL position
+		 * and the recovery waits until the publisher writes a WAL record to
+		 * reach the target and ends the recovery. On idle systems, this wait
+		 * time is unpredictable and could lead to failure in promoting the
+		 * subscriber. To avoid that, insert a harmless WAL record.
+		 */
+		if (i == num_dbs - 1 && !dry_run)
+		{
+			PGresult   *res;
+
+			res = PQexec(conn, "SELECT pg_log_standby_snapshot()");
+			if (PQresultStatus(res) != PGRES_TUPLES_OK)
+			{
+				pg_log_error("could not write an additional WAL record: %s",
+							 PQresultErrorMessage(res));
+				disconnect_database(conn, true);
+			}
+			PQclear(res);
+		}
+
 		disconnect_database(conn, false);
 	}
 
@@ -1063,7 +1085,7 @@ drop_existing_subscriptions(PGconn *conn, const char *subname, const char *dbnam
 
 		if (PQresultStatus(res) != PGRES_COMMAND_OK)
 		{
-			pg_log_error("could not drop a subscription \"%s\" settings: %s",
+			pg_log_error("could not drop subscription \"%s\": %s",
 						 subname, PQresultErrorMessage(res));
 			disconnect_database(conn, true);
 		}
@@ -1849,7 +1871,7 @@ main(int argc, char **argv)
 		{"dry-run", no_argument, NULL, 'n'},
 		{"subscriber-port", required_argument, NULL, 'p'},
 		{"publisher-server", required_argument, NULL, 'P'},
-		{"socket-directory", required_argument, NULL, 's'},
+		{"socketdir", required_argument, NULL, 's'},
 		{"recovery-timeout", required_argument, NULL, 't'},
 		{"subscriber-username", required_argument, NULL, 'U'},
 		{"verbose", no_argument, NULL, 'v'},
@@ -1882,7 +1904,7 @@ main(int argc, char **argv)
 	pg_logging_init(argv[0]);
 	pg_logging_set_level(PG_LOG_WARNING);
 	progname = get_progname(argv[0]);
-	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_createsubscriber"));
+	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_basebackup"));
 
 	if (argc > 1)
 	{
@@ -2061,13 +2083,13 @@ main(int argc, char **argv)
 		pg_log_error_hint("Try \"%s --help\" for more information.", progname);
 		exit(1);
 	}
-	pg_log_info("validating connection string on publisher");
+	pg_log_info("validating publisher connection string");
 	pub_base_conninfo = get_base_conninfo(opt.pub_conninfo_str,
 										  &dbname_conninfo);
 	if (pub_base_conninfo == NULL)
 		exit(1);
 
-	pg_log_info("validating connection string on subscriber");
+	pg_log_info("validating subscriber connection string");
 	sub_base_conninfo = get_sub_conninfo(&opt);
 
 	if (opt.database_names.head == NULL)
@@ -2185,12 +2207,7 @@ main(int argc, char **argv)
 	pg_log_info("stopping the subscriber");
 	stop_standby_server(subscriber_dir);
 
-	/*
-	 * Create the required objects for each database on publisher. This step
-	 * is here mainly because if we stop the standby we cannot verify if the
-	 * primary slot is in use. We could use an extra connection for it but it
-	 * doesn't seem worth.
-	 */
+	/* Create the required objects for each database on publisher */
 	consistent_lsn = setup_publisher(dbinfo);
 
 	/* Write the required recovery parameters */

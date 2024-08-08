@@ -66,6 +66,7 @@
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
+#include "commands/waitlsn.h"
 #include "common/controldata_utils.h"
 #include "common/file_utils.h"
 #include "executor/instrument.h"
@@ -4314,7 +4315,7 @@ ReadControlFile(void)
 {
 	pg_crc32c	crc;
 	int			fd;
-	static char wal_segsz_str[20];
+	char		wal_segsz_str[20];
 	int			r;
 
 	/*
@@ -5168,9 +5169,9 @@ BootStrapXLOG(uint32 data_checksum_version)
 static char *
 str_time(pg_time_t tnow)
 {
-	static char buf[128];
+	char	   *buf = palloc(128);
 
-	pg_strftime(buf, sizeof(buf),
+	pg_strftime(buf, 128,
 				"%Y-%m-%d %H:%M:%S %Z",
 				pg_localtime(&tnow, log_timezone));
 
@@ -5652,7 +5653,7 @@ StartupXLOG(void)
 	if (didCrash)
 		pgstat_discard_stats();
 	else
-		pgstat_restore_stats();
+		pgstat_restore_stats(checkPoint.redo);
 
 	lastFullPageWrites = checkPoint.fullPageWrites;
 
@@ -6142,6 +6143,12 @@ StartupXLOG(void)
 
 	UpdateControlFile();
 	LWLockRelease(ControlFileLock);
+
+	/*
+	 * Wake up all waiters for replay LSN.  They need to report an error that
+	 * recovery was ended before achieving the target LSN.
+	 */
+	WaitLSNSetLatches(InvalidXLogRecPtr);
 
 	/*
 	 * Shutdown the recovery environment.  This must occur after
