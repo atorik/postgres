@@ -22,8 +22,10 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_foreign_table.h"
 #include "commands/copy.h"
+#include "commands/copyfrom_internal.h"
 #include "commands/defrem.h"
 #include "commands/explain.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "foreign/fdwapi.h"
 #include "foreign/foreign.h"
@@ -34,6 +36,7 @@
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
 #include "utils/acl.h"
+#include "utils/backend_progress.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/sampling.h"
@@ -74,6 +77,8 @@ static const struct FileFdwOption valid_options[] = {
 	{"null", ForeignTableRelationId},
 	{"default", ForeignTableRelationId},
 	{"encoding", ForeignTableRelationId},
+	{"on_error", ForeignTableRelationId},
+	{"log_verbosity", ForeignTableRelationId},
 	{"force_not_null", AttributeRelationId},
 	{"force_null", AttributeRelationId},
 
@@ -724,12 +729,13 @@ fileIterateForeignScan(ForeignScanState *node)
 	ExprContext *econtext;
 	MemoryContext oldcontext;
 	TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
-	bool		found;
+	CopyFromState cstate = festate->cstate;
+	int64	skipped = 0;
 	ErrorContextCallback errcallback;
 
 	/* Set up callback to identify error line number. */
 	errcallback.callback = CopyFromErrorCallback;
-	errcallback.arg = (void *) festate->cstate;
+	errcallback.arg = (void *) cstate;
 	errcallback.previous = error_context_stack;
 	error_context_stack = &errcallback;
 
@@ -750,10 +756,40 @@ fileIterateForeignScan(ForeignScanState *node)
 	 * switch in case we are doing that.
 	 */
 	oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-	found = NextCopyFrom(festate->cstate, econtext,
-						 slot->tts_values, slot->tts_isnull);
-	if (found)
+
+	for(;;)
+	{
+		if (!NextCopyFrom(cstate, econtext,
+					 slot->tts_values, slot->tts_isnull))
+			break;
+
+		if (cstate->opts.on_error != COPY_ON_ERROR_STOP &&
+			cstate->escontext->error_occurred)
+		{
+			/*
+			 * Soft error occurred, skip this tuple and deal with error
+			 * information according to ON_ERROR.
+			 */
+			if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE)
+
+				/*
+				 * Just make ErrorSaveContext ready for the next NextCopyFrom.
+				 * Since we don't set details_wanted and error_data is not to
+				 * be filled, just resetting error_occurred is enough.
+				 */
+				cstate->escontext->error_occurred = false;
+
+			/* Report that this tuple was skipped by the ON_ERROR clause */
+			pgstat_progress_update_param(PROGRESS_COPY_TUPLES_SKIPPED,
+										 ++skipped);
+
+			/* Repeat NextCopyFrom() until no soft error occurs */
+			continue;
+		}
+
 		ExecStoreVirtualTuple(slot);
+		break;
+	}
 
 	/* Switch back to original memory context */
 	MemoryContextSwitchTo(oldcontext);
@@ -795,8 +831,19 @@ fileEndForeignScan(ForeignScanState *node)
 	FileFdwExecutionState *festate = (FileFdwExecutionState *) node->fdw_state;
 
 	/* if festate is NULL, we are in EXPLAIN; nothing to do */
-	if (festate)
-		EndCopyFrom(festate->cstate);
+	if (!festate)
+		return;
+
+	if (festate->cstate->opts.on_error != COPY_ON_ERROR_STOP &&
+		festate->cstate->num_errors > 0 &&
+		festate->cstate->opts.log_verbosity != COPY_LOG_VERBOSITY_SILENT)
+		ereport(NOTICE,
+				errmsg_plural("%llu row was skipped due to data type incompatibility",
+							  "%llu rows were skipped due to data type incompatibility",
+							  (unsigned long long) festate->cstate->num_errors,
+							  (unsigned long long) festate->cstate->num_errors));
+
+	EndCopyFrom(festate->cstate);
 }
 
 /*
