@@ -1318,7 +1318,8 @@ CopyFrom(CopyFromState cstate)
 	error_context_stack = errcallback.previous;
 
 	if (cstate->opts.on_error != COPY_ON_ERROR_STOP &&
-		cstate->num_errors > 0)
+		cstate->num_errors > 0 &&
+		cstate->opts.log_verbosity != COPY_LOG_VERBOSITY_SILENT)
 		ereport(NOTICE,
 				errmsg_plural("%llu row was skipped due to data type incompatibility",
 							  "%llu rows were skipped due to data type incompatibility",
