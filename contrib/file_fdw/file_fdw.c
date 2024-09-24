@@ -763,27 +763,21 @@ fileIterateForeignScan(ForeignScanState *node)
 					 slot->tts_values, slot->tts_isnull))
 			break;
 
-		if (cstate->opts.on_error != COPY_ON_ERROR_STOP &&
+		if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE &&
 			cstate->escontext->error_occurred)
 		{
 			/*
-			 * Soft error occurred, skip this tuple and deal with error
-			 * information according to ON_ERROR.
+			 * Soft error occurred, skip this tuple and just make
+			 * ErrorSaveContext ready for the next NextCopyFrom. Since we don't
+			 * set details_wanted and error_data is not to be filled, just
+			 * resetting error_occurred is enough.
 			 */
-			if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE)
-
-				/*
-				 * Just make ErrorSaveContext ready for the next NextCopyFrom.
-				 * Since we don't set details_wanted and error_data is not to
-				 * be filled, just resetting error_occurred is enough.
-				 */
-				cstate->escontext->error_occurred = false;
+			cstate->escontext->error_occurred = false;
 
 			/* Report that this tuple was skipped by the ON_ERROR clause */
 			pgstat_progress_update_param(PROGRESS_COPY_TUPLES_SKIPPED,
 										cstate->num_errors);
 
-			/* Repeat NextCopyFrom() until no soft error occurs */
 			continue;
 		}
 
