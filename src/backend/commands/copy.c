@@ -419,40 +419,27 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 }
 
 /*
- * Extract a CopyRejectLimits values from a DefElem.
+ * Extract REJECT_LIMIT value from a DefElem.
  */
-static CopyRejectLimits
+static int64
 defGetCopyRejectLimitOptions(DefElem *def)
 {
-	CopyRejectLimits	limits;
-	int64					num_err;
+	int64					reject_limit;
 
-	switch(nodeTag(def->arg))
+	if (nodeTag(def->arg) == T_Integer)
 	{
-		case T_Integer:
-			num_err = defGetInt64(def);
-			if (num_err <= 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("number for REJECT_LIMIT must be greater than zero")));
-			break;
-		case T_String:
-			if (pg_strcasecmp(defGetString(def), "INFINITY") == 0)
-				/* when set to 0, it is treated as no limit */
-				num_err = 0;
-			else
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("string for REJECT_LIMIT must be 'INFINITY'")));
-			break;
-		default:
+		reject_limit = defGetInt64(def);
+		if (reject_limit <= 0)
 			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("value for REJECT_LIMIT must be positive integer or 'INFINITY'")));
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("number for REJECT_LIMIT must be greater than zero")));
 	}
-	limits.num_err = num_err;
+	else
+		ereport(ERROR,
+			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			 errmsg("value for REJECT_LIMIT must be positive integer")));
 
-	return limits;
+	return reject_limit;
 }
 
 /*
@@ -678,12 +665,8 @@ ProcessCopyOptions(ParseState *pstate,
 		{
 			if (reject_limit_specified)
 				errorConflictingDefElem(defel, pstate);
-			if (!opts_out->on_error)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("REJECT_LIMIT requires ON_ERROR to be set to other than stop")));
 			reject_limit_specified = true;
-			opts_out->reject_limits = defGetCopyRejectLimitOptions(defel);
+			opts_out->reject_limit = defGetCopyRejectLimitOptions(defel);
 		}
 		else
 			ereport(ERROR,
@@ -717,6 +700,15 @@ ProcessCopyOptions(ParseState *pstate,
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("only ON_ERROR STOP is allowed in BINARY mode")));
+
+	if (opts_out->reject_limit && !opts_out->on_error)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		/*- translator: first and second %s are the names of COPY
+		 * option, e.g. ON_ERROR, thrid is the value of the COPY option,
+		 * e.g. IGNORE */
+				 errmsg("COPY %s requires %s to be set to %s",
+						 "REJECT_LIMIT", "ON_ERROR", "IGNORE")));
 
 	/* Set defaults for omitted options */
 	if (!opts_out->delim)
