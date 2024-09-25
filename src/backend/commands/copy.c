@@ -426,18 +426,29 @@ defGetCopyRejectLimitOptions(DefElem *def)
 {
 	int64					reject_limit;
 
+	if (def->arg == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("REJECT_LIMIT requires a positive integer",
+						def->defname)));
+
 	if (nodeTag(def->arg) == T_Integer)
 	{
 		reject_limit = defGetInt64(def);
 		if (reject_limit <= 0)
 			ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("number for REJECT_LIMIT must be greater than zero")));
+				 errmsg("REJECT_LIMIT (%lld) must be greater than zero",
+					 (long long) reject_limit)));
 	}
 	else
+	{
+		char	   *sval = defGetString(def);
 		ereport(ERROR,
 			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-			 errmsg("value for REJECT_LIMIT must be positive integer")));
+			 errmsg("REJECT_LIMIT (%s) must be a positive integer",
+				 sval)));
+	}
 
 	return reject_limit;
 }

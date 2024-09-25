@@ -119,7 +119,7 @@ LINE 1: COPY x to stdout (log_verbosity unsupported);
 COPY x from stdin with (reject_limit 1);
 ERROR:  COPY REJECT_LIMIT requires ON_ERROR to be set to IGNORE
 COPY x from stdin with (on_error ignore, reject_limit 0);
-ERROR:  number for REJECT_LIMIT must be greater than zero
+ERROR:  REJECT_LIMIT (0) must be greater than zero
 -- too many columns in column list: should fail
 COPY x (a, b, c, d, e, d, c) from stdin;
 ERROR:  column "d" specified more than once
