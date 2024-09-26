@@ -715,7 +715,7 @@ ProcessCopyOptions(ParseState *pstate,
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 		/*- translator: first and second %s are the names of COPY
-		 * option, e.g. ON_ERROR, thrid is the value of the COPY option,
+		 * option, e.g. ON_ERROR, third is the value of the COPY option,
 		 * e.g. IGNORE */
 				 errmsg("COPY %s requires %s to be set to %s",
 						 "REJECT_LIMIT", "ON_ERROR", "IGNORE")));
