@@ -429,8 +429,7 @@ defGetCopyRejectLimitOptions(DefElem *def)
 	if (def->arg == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("REJECT_LIMIT requires a positive integer",
-						def->defname)));
+				 errmsg("REJECT_LIMIT requires a positive integer")));
 
 	if (nodeTag(def->arg) == T_Integer)
 	{
