@@ -422,32 +422,15 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
  * Extract REJECT_LIMIT value from a DefElem.
  */
 static int64
-defGetCopyRejectLimitOptions(DefElem *def)
+defGetCopyRejectLimitOption(DefElem *def)
 {
-	int64					reject_limit;
+	int64	reject_limit = defGetInt64(def);
 
-	if (def->arg == NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("REJECT_LIMIT requires a positive integer")));
-
-	if (nodeTag(def->arg) == T_Integer)
-	{
-		reject_limit = defGetInt64(def);
-		if (reject_limit <= 0)
-			ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("REJECT_LIMIT (%lld) must be greater than zero",
-					 (long long) reject_limit)));
-	}
-	else
-	{
-		char	   *sval = defGetString(def);
+	if (reject_limit <= 0)
 		ereport(ERROR,
 			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-			 errmsg("REJECT_LIMIT (%s) must be a positive integer",
-				 sval)));
-	}
+			 errmsg("REJECT_LIMIT (%lld) must be greater than zero",
+				 (long long) reject_limit)));
 
 	return reject_limit;
 }
@@ -676,7 +659,7 @@ ProcessCopyOptions(ParseState *pstate,
 			if (reject_limit_specified)
 				errorConflictingDefElem(defel, pstate);
 			reject_limit_specified = true;
-			opts_out->reject_limit = defGetCopyRejectLimitOptions(defel);
+			opts_out->reject_limit = defGetCopyRejectLimitOption(defel);
 		}
 		else
 			ereport(ERROR,
