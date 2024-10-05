@@ -1024,8 +1024,8 @@ CopyFrom(CopyFromState cstate)
 						(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 						 errmsg_plural("skipped more than REJECT_LIMIT (%lld) row due to data type incompatibility",
 									   "skipped more than REJECT_LIMIT (%lld) row due to data type incompatibility",
-										(long long) cstate->opts.reject_limit,
-										(long long) cstate->opts.reject_limit)));
+									   (long long) cstate->opts.reject_limit,
+									   (long long) cstate->opts.reject_limit)));
 
 			/* Repeat NextCopyFrom() until no soft error occurs */
 			continue;
