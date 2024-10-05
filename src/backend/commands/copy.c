@@ -696,15 +696,6 @@ ProcessCopyOptions(ParseState *pstate,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("only ON_ERROR STOP is allowed in BINARY mode")));
 
-	if (opts_out->reject_limit && !opts_out->on_error)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-		/*- translator: first and second %s are the names of COPY
-		 * option, e.g. ON_ERROR, third is the value of the COPY option,
-		 * e.g. IGNORE */
-				 errmsg("COPY %s requires %s to be set to %s",
-						 "REJECT_LIMIT", "ON_ERROR", "IGNORE")));
-
 	/* Set defaults for omitted options */
 	if (!opts_out->delim)
 		opts_out->delim = opts_out->csv_mode ? "," : "\t";
@@ -908,6 +899,14 @@ ProcessCopyOptions(ParseState *pstate,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("NULL specification and DEFAULT specification cannot be the same")));
 	}
+
+	if (opts_out->reject_limit && !opts_out->on_error)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		/*- translator: first and second %s are the names of COPY option, e.g.
+		 * ON_ERROR, third is the value of the COPY option, e.g. IGNORE */
+				 errmsg("COPY %s requires %s to be set to %s",
+						 "REJECT_LIMIT", "ON_ERROR", "IGNORE")));
 }
 
 /*
