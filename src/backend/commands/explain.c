@@ -5641,8 +5641,8 @@ ExecProcNodeWithExplain(PlanState *ps)
 	es->signaled = true;
 
 	// for testing
-	if (ActiveQueryDesc == NULL)
-		return ps->ExecProcNodeOriginal(ps);
+//	if (ActiveQueryDesc == NULL)
+//		return ps->ExecProcNodeOriginal(ps);
 
 	ExplainAssembleLogOutput(es, ActiveQueryDesc, EXPLAIN_FORMAT_TEXT, 0, -1);
 
@@ -5686,11 +5686,12 @@ ProcessLogQueryPlanInterrupt(void)
 
 	if (ActiveQueryDesc == NULL)
 	{
-		ereport(LOG_SERVER_ONLY,
-				errmsg("backend with PID %d is not running a query or a subtransaction is aborted",
-					MyProcPid),
-				errhidestmt(true),
-				errhidecontext(true));
+	// for speeding up test
+	//	ereport(LOG_SERVER_ONLY,
+	//			errmsg("backend with PID %d is not running a query or a subtransaction is aborted",
+	//				MyProcPid),
+	//			errhidestmt(true),
+	//			errhidecontext(true));
 
 		ProcessLogQueryPlanInterruptActive = false;
 		return;
