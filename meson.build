@@ -268,6 +268,10 @@ elif host_system == 'windows'
   exesuffix = '.exe'
   dlsuffix = '.dll'
   library_path_var = ''
+  if cc.get_id() != 'msvc'
+    # define before including <time.h> for getting localtime_r() etc. on MinGW
+    cppflags += '-D_POSIX_C_SOURCE'
+  endif
 
   export_file_format = 'win'
   export_file_suffix = 'def'
@@ -788,7 +792,7 @@ endif
 llvmopt = get_option('llvm')
 llvm = not_found_dep
 if add_languages('cpp', required: llvmopt, native: false)
-  llvm = dependency('llvm', version: '>=10', method: 'config-tool', required: llvmopt)
+  llvm = dependency('llvm', version: '>=14', method: 'config-tool', required: llvmopt)
 
   if llvm.found()
 
@@ -799,7 +803,10 @@ if add_languages('cpp', required: llvmopt, native: false)
     llvm_binpath = llvm.get_variable(configtool: 'bindir')
 
     ccache = find_program('ccache', native: true, required: false)
-    clang = find_program(llvm_binpath / 'clang', required: true)
+
+    # Some distros put LLVM and clang in different paths, so fallback to
+    # find via PATH, too.
+    clang = find_program(llvm_binpath / 'clang', 'clang', required: true)
   endif
 elif llvmopt.auto()
   message('llvm requires a C++ compiler')
@@ -1051,7 +1058,10 @@ if not perlopt.disabled()
       if cc.get_id() == 'msvc'
         # prevent binary mismatch between MSVC built plperl and Strawberry or
         # msys ucrt perl libraries
-        perl_ccflags += ['-DNO_THREAD_SAFE_LOCALE']
+        perl_v = run_command(perl, '-V').stdout()
+        if not perl_v.contains('USE_THREAD_SAFE_LOCALE')
+          perl_ccflags += ['-DNO_THREAD_SAFE_LOCALE']
+        endif
       endif
     endif
 
@@ -1062,20 +1072,19 @@ if not perlopt.disabled()
     # Config's ccdlflags and ldflags.  (Those are the choices of those who
     # built the Perl installation, which are not necessarily appropriate
     # for building PostgreSQL.)
-    ldopts = run_command(perl, '-MExtUtils::Embed', '-e', 'ldopts', check: true).stdout().strip()
-    undesired = run_command(perl_conf_cmd, 'ccdlflags', check: true).stdout().split()
-    undesired += run_command(perl_conf_cmd, 'ldflags', check: true).stdout().split()
+    perl_ldopts = run_command(perl, '-e', '''
+use ExtUtils::Embed;
+use Text::ParseWords;
+# tell perl to suppress including these in ldopts
+*ExtUtils::Embed::_ldflags =*ExtUtils::Embed::_ccdlflags = sub { return ""; };
+# adding an argument to ldopts makes it return a value instead of printing
+# print one of these per line so splitting will preserve spaces in file names.
+# shellwords eats backslashes, so we need to escape them.
+(my $opts = ldopts(undef)) =~ s!\\!\\\\!g;
+print "$_\n" foreach shellwords($opts);
+''',
+     check: true).stdout().strip().split('\n')
 
-    perl_ldopts = []
-    foreach ldopt : ldopts.split(' ')
-      if ldopt == '' or ldopt in undesired
-        continue
-      endif
-
-      perl_ldopts += ldopt.strip('"')
-    endforeach
-
-    message('LDFLAGS recommended by perl: "@0@"'.format(ldopts))
     message('LDFLAGS for embedding perl: "@0@"'.format(' '.join(perl_ldopts)))
 
     perl_dep_int = declare_dependency(
@@ -1146,15 +1155,26 @@ endif
 
 if not get_option('readline').disabled()
   libedit_preferred = get_option('libedit_preferred')
-  # Set the order of readline dependencies
-  check_readline_deps = libedit_preferred ? \
-    ['libedit', 'readline'] : ['readline', 'libedit']
+  # Set the order of readline dependencies.
+  # cc.find_library breaks and throws on the first dependency which
+  # is marked as required=true and can't be found. Thus, we only mark
+  # the last dependency to look up as required, to not throw too early.
+  check_readline_deps = [
+    {
+      'name': libedit_preferred ? 'libedit' : 'readline',
+      'required': false
+    },
+    {
+      'name': libedit_preferred ? 'readline' : 'libedit',
+      'required': get_option('readline')
+    }
+  ]
 
   foreach readline_dep : check_readline_deps
-    readline = dependency(readline_dep, required: false)
+    readline = dependency(readline_dep['name'], required: false)
     if not readline.found()
-      readline = cc.find_library(readline_dep,
-        required: get_option('readline'),
+      readline = cc.find_library(readline_dep['name'],
+        required: readline_dep['required'],
         dirs: test_lib_d)
     endif
     if readline.found()
@@ -1341,26 +1361,17 @@ if sslopt in ['auto', 'openssl']
       ['CRYPTO_new_ex_data', {'required': true}],
       ['SSL_new', {'required': true}],
 
-      # Function introduced in OpenSSL 1.0.2, not in LibreSSL.
-      ['SSL_CTX_set_cert_cb'],
-
       # Functions introduced in OpenSSL 1.1.0. We used to check for
       # OPENSSL_VERSION_NUMBER, but that didn't work with 1.1.0, because LibreSSL
       # defines OPENSSL_VERSION_NUMBER to claim version 2.0.0, even though it
       # doesn't have these OpenSSL 1.1.0 functions. So check for individual
       # functions.
-      ['OPENSSL_init_ssl'],
-      ['BIO_meth_new'],
-      ['ASN1_STRING_get0_data'],
-      ['HMAC_CTX_new'],
-      ['HMAC_CTX_free'],
+      ['OPENSSL_init_ssl', {'required': true}],
 
-      # OpenSSL versions before 1.1.0 required setting callback functions, for
-      # thread-safety. In 1.1.0, it's no longer required, and CRYPTO_lock()
-      # function was removed.
-      ['CRYPTO_lock'],
+      # Function introduced in OpenSSL 1.0.2, not in LibreSSL.
+      ['SSL_CTX_set_cert_cb'],
 
-      # Function introduced in OpenSSL 1.1.1
+      # Function introduced in OpenSSL 1.1.1, not in LibreSSL.
       ['X509_get_signature_info'],
       ['SSL_CTX_set_num_tickets'],
     ]
@@ -1384,7 +1395,7 @@ if sslopt in ['auto', 'openssl']
     if are_openssl_funcs_complete
       cdata.set('USE_OPENSSL', 1,
                 description: 'Define to 1 to build with OpenSSL support. (-Dssl=openssl)')
-      cdata.set('OPENSSL_API_COMPAT', '0x10002000L',
+      cdata.set('OPENSSL_API_COMPAT', '0x10100000L',
                 description: 'Define to the OpenSSL API version in use. This avoids deprecation warnings from newer OpenSSL versions.')
       ssl_library = 'openssl'
     else
@@ -1416,7 +1427,9 @@ if uuidopt != 'none'
     uuidfunc = 'uuid_to_string'
     uuidheader = 'uuid.h'
   elif uuidopt == 'ossp'
-    uuid = dependency('ossp-uuid', required: false)
+    # In upstream, the package and library is called just 'uuid', but many
+    # distros change it to 'ossp-uuid'.
+    uuid = dependency('ossp-uuid', 'uuid', required: false)
     uuidfunc = 'uuid_export'
     uuidheader = 'uuid.h'
 
@@ -1424,8 +1437,6 @@ if uuidopt != 'none'
     # windows installs neither a pkg-config nor a cmake dependency
     # information. Nor is there another supported uuid implementation
     # available on windows.
-    #
-    # Sometimes the ossp-uuid library is named 'uuid' sometimes 'ossp-uuid'
     if not uuid.found()
       uuid = cc.find_library('ossp-uuid',
         required: false, dirs: test_lib_d,
@@ -1972,6 +1983,16 @@ if cc.has_argument('-Wdeclaration-after-statement')
   cflags_no_decl_after_statement += '-Wno-declaration-after-statement'
 endif
 
+# Some code is not clean for -Wmissing-variable-declarations, so we
+# make the "no" option available.  Also, while clang supports this
+# option for C++, gcc does not, so for consistency, leave it off for
+# C++.
+cflags_no_missing_var_decls = []
+if cc.has_argument('-Wmissing-variable-declarations')
+  cflags_warn += '-Wmissing-variable-declarations'
+  cflags_no_missing_var_decls += '-Wno-missing-variable-declarations'
+endif
+
 
 # The following tests want to suppress various unhelpful warnings by adding
 # -Wno-foo switches.  But gcc won't complain about unrecognized -Wno-foo
@@ -2075,76 +2096,61 @@ endif
 # Atomics
 ###############################################################
 
-if not get_option('spinlocks')
-  warning('Not using spinlocks will cause poor performance')
-else
-  cdata.set('HAVE_SPINLOCKS', 1)
-endif
-
-if not get_option('atomics')
-  warning('Not using atomics will cause poor performance')
-else
-  # XXX: perhaps we should require some atomics support in this case these
-  # days?
-  cdata.set('HAVE_ATOMICS', 1)
-
-  atomic_checks = [
-    {'name': 'HAVE_GCC__SYNC_CHAR_TAS',
-     'desc': '__sync_lock_test_and_set(char)',
-     'test': '''
+atomic_checks = [
+  {'name': 'HAVE_GCC__SYNC_CHAR_TAS',
+   'desc': '__sync_lock_test_and_set(char)',
+   'test': '''
 char lock = 0;
 __sync_lock_test_and_set(&lock, 1);
 __sync_lock_release(&lock);'''},
 
-    {'name': 'HAVE_GCC__SYNC_INT32_TAS',
-     'desc': '__sync_lock_test_and_set(int32)',
-     'test': '''
+  {'name': 'HAVE_GCC__SYNC_INT32_TAS',
+   'desc': '__sync_lock_test_and_set(int32)',
+   'test': '''
 int lock = 0;
 __sync_lock_test_and_set(&lock, 1);
 __sync_lock_release(&lock);'''},
 
-    {'name': 'HAVE_GCC__SYNC_INT32_CAS',
-     'desc': '__sync_val_compare_and_swap(int32)',
-     'test': '''
+  {'name': 'HAVE_GCC__SYNC_INT32_CAS',
+   'desc': '__sync_val_compare_and_swap(int32)',
+   'test': '''
 int val = 0;
 __sync_val_compare_and_swap(&val, 0, 37);'''},
 
-    {'name': 'HAVE_GCC__SYNC_INT64_CAS',
-     'desc': '__sync_val_compare_and_swap(int64)',
-     'test': '''
+  {'name': 'HAVE_GCC__SYNC_INT64_CAS',
+   'desc': '__sync_val_compare_and_swap(int64)',
+   'test': '''
 INT64 val = 0;
 __sync_val_compare_and_swap(&val, 0, 37);'''},
 
-    {'name': 'HAVE_GCC__ATOMIC_INT32_CAS',
-     'desc': ' __atomic_compare_exchange_n(int32)',
-     'test': '''
+  {'name': 'HAVE_GCC__ATOMIC_INT32_CAS',
+   'desc': ' __atomic_compare_exchange_n(int32)',
+   'test': '''
 int val = 0;
 int expect = 0;
 __atomic_compare_exchange_n(&val, &expect, 37, 0, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED);'''},
 
-    {'name': 'HAVE_GCC__ATOMIC_INT64_CAS',
-     'desc': ' __atomic_compare_exchange_n(int64)',
-     'test': '''
+  {'name': 'HAVE_GCC__ATOMIC_INT64_CAS',
+   'desc': ' __atomic_compare_exchange_n(int64)',
+   'test': '''
 INT64 val = 0;
 INT64 expect = 0;
 __atomic_compare_exchange_n(&val, &expect, 37, 0, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED);'''},
-  ]
+]
 
-  foreach check : atomic_checks
-    test = '''
+foreach check : atomic_checks
+  test = '''
 int main(void)
 {
 @0@
 }'''.format(check['test'])
 
-    cdata.set(check['name'],
-      cc.links(test,
-        name: check['desc'],
-        args: test_c_args + ['-DINT64=@0@'.format(cdata.get('PG_INT64_TYPE'))]) ? 1 : false
-    )
-  endforeach
-
-endif
+  cdata.set(check['name'],
+    cc.links(test,
+      name: check['desc'],
+      args: test_c_args + ['-DINT64=@0@'.format(cdata.get('PG_INT64_TYPE'))]) ? 1 : false
+  )
+endforeach
 
 
 ###############################################################
@@ -2385,7 +2391,6 @@ header_checks = [
   'execinfo.h',
   'getopt.h',
   'ifaddrs.h',
-  'langinfo.h',
   'mbarrier.h',
   'stdbool.h',
   'strings.h',
@@ -2398,6 +2403,7 @@ header_checks = [
   'sys/ucred.h',
   'termios.h',
   'ucred.h',
+  'xlocale.h',
 ]
 
 foreach header : header_checks
@@ -2541,15 +2547,6 @@ else
   cdata.set('STRERROR_R_INT', false)
 endif
 
-# Find the right header file for the locale_t type.  macOS needs xlocale.h;
-# standard is locale.h, but glibc <= 2.25 also had an xlocale.h file that
-# we should not use so we check the standard header first.  MSVC has a
-# replacement defined in src/include/port/win32_port.h.
-if not cc.has_type('locale_t', prefix: '#include <locale.h>') and \
-   cc.has_type('locale_t', prefix: '#include <xlocale.h>')
-  cdata.set('LOCALE_T_IN_XLOCALE', 1)
-endif
-
 # Check if the C compiler understands typeof or a variant.  Define
 # HAVE_TYPEOF if so, and define 'typeof' to the actual key word.
 foreach kw : ['typeof', '__typeof__', 'decltype']
@@ -2573,29 +2570,6 @@ int main(void)
     break
   endif
 endforeach
-
-
-# Try to find a declaration for wcstombs_l().  It might be in stdlib.h
-# (following the POSIX requirement for wcstombs()), or in locale.h, or in
-# xlocale.h.  If it's in the latter, define WCSTOMBS_L_IN_XLOCALE.
-wcstombs_l_test = '''
-#include <stdlib.h>
-#include <locale.h>
-@0@
-
-void main(void)
-{
-#ifndef wcstombs_l
-    (void) wcstombs_l;
-#endif
-}
-'''
-if (not cc.compiles(wcstombs_l_test.format(''),
-      name: 'wcstombs_l') and
-    cc.compiles(wcstombs_l_test.format('#include <xlocale.h>'),
-      name: 'wcstombs_l in xlocale.h'))
-    cdata.set('WCSTOMBS_L_IN_XLOCALE', 1)
-endif
 
 
 # MSVC doesn't cope well with defining restrict to __restrict, the spelling it
@@ -3028,7 +3002,7 @@ frontend_common_code = declare_dependency(
   compile_args: ['-DFRONTEND'],
   include_directories: [postgres_inc],
   sources: generated_headers,
-  dependencies: [os_deps, zlib, zstd],
+  dependencies: [os_deps, zlib, zstd, lz4],
 )
 
 backend_common_code = declare_dependency(
@@ -3267,15 +3241,17 @@ test_install_destdir = meson.build_root() / 'tmp_install/'
 if build_system != 'windows'
   # On unixoid systems this is trivial, we just prepend the destdir
   assert(dir_prefix.startswith('/')) # enforced by meson
-  test_install_location = '@0@@1@'.format(test_install_destdir, dir_prefix)
+  temp_install_bindir = '@0@@1@'.format(test_install_destdir, dir_prefix / dir_bin)
+  temp_install_libdir = '@0@@1@'.format(test_install_destdir, dir_prefix / dir_lib)
 else
   # drives, drive-relative paths, etc make this complicated on windows, call
   # into a copy of meson's logic for it
   command = [
     python, '-c',
     'import sys; from pathlib import PurePath; d1=sys.argv[1]; d2=sys.argv[2]; print(str(PurePath(d1, *PurePath(d2).parts[1:])))',
-    test_install_destdir, dir_prefix]
-  test_install_location = run_command(command, check: true).stdout().strip()
+    test_install_destdir]
+  temp_install_bindir = run_command(command, dir_prefix / dir_bin, check: true).stdout().strip()
+  temp_install_libdir = run_command(command, dir_prefix / dir_lib, check: true).stdout().strip()
 endif
 
 meson_install_args = meson_args + ['install'] + {
@@ -3312,7 +3288,6 @@ testport = 40000
 
 test_env = environment()
 
-temp_install_bindir = test_install_location / get_option('bindir')
 test_initdb_template = meson.build_root() / 'tmp_install' / 'initdb-template'
 test_env.set('PG_REGRESS', pg_regress.full_path())
 test_env.set('REGRESS_SHLIB', regress_module.full_path())
@@ -3327,7 +3302,7 @@ test_env.set('PG_TEST_EXTRA', get_option('PG_TEST_EXTRA'))
 # that works (everything but windows, basically). On windows everything
 # library-like gets installed into bindir, solving that issue.
 if library_path_var != ''
-  test_env.prepend(library_path_var, test_install_location / get_option('libdir'))
+  test_env.prepend(library_path_var, temp_install_libdir)
 endif
 
 

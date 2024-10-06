@@ -18,6 +18,7 @@
 
 #include "access/htup_details.h"
 #include "catalog/pg_type.h"
+#include "common/int.h"
 #include "common/jsonapi.h"
 #include "common/string.h"
 #include "fmgr.h"
@@ -514,7 +515,7 @@ static JsonParseErrorType transform_string_values_scalar(void *state, char *toke
  * returned when escontext is an ErrorSaveContext).
  */
 bool
-pg_parse_json_or_errsave(JsonLexContext *lex, JsonSemAction *sem,
+pg_parse_json_or_errsave(JsonLexContext *lex, const JsonSemAction *sem,
 						 Node *escontext)
 {
 	JsonParseErrorType result;
@@ -946,7 +947,7 @@ jsonb_array_element(PG_FUNCTION_ARGS)
 	{
 		uint32		nelements = JB_ROOT_COUNT(jb);
 
-		if (-element > nelements)
+		if (pg_abs_s32(element) > nelements)
 			PG_RETURN_NULL();
 		else
 			element += nelements;
@@ -989,7 +990,7 @@ jsonb_array_element_text(PG_FUNCTION_ARGS)
 	{
 		uint32		nelements = JB_ROOT_COUNT(jb);
 
-		if (-element > nelements)
+		if (pg_abs_s32(element) > nelements)
 			PG_RETURN_NULL();
 		else
 			element += nelements;
@@ -3133,18 +3134,6 @@ populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv,
 
 		json = jsv->val.json.str;
 		Assert(json);
-		if (len >= 0)
-		{
-			/* Need to copy non-null-terminated string */
-			str = palloc(len + 1 * sizeof(char));
-			memcpy(str, json, len);
-			str[len] = '\0';
-		}
-		else
-		{
-			/* string is already null-terminated */
-			str = unconstify(char *, json);
-		}
 
 		/* If converting to json/jsonb, make string into valid JSON literal */
 		if ((typid == JSONOID || typid == JSONBOID) &&
@@ -3153,11 +3142,23 @@ populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv,
 			StringInfoData buf;
 
 			initStringInfo(&buf);
-			escape_json(&buf, str);
-			/* free temporary buffer */
-			if (str != json)
-				pfree(str);
+			if (len >= 0)
+				escape_json_with_len(&buf, json, len);
+			else
+				escape_json(&buf, json);
 			str = buf.data;
+		}
+		else if (len >= 0)
+		{
+			/* create a NUL-terminated version */
+			str = palloc(len + 1);
+			memcpy(str, json, len);
+			str[len] = '\0';
+		}
+		else
+		{
+			/* string is already NUL-terminated */
+			str = unconstify(char *, json);
 		}
 	}
 	else
@@ -4810,7 +4811,7 @@ jsonb_delete_idx(PG_FUNCTION_ARGS)
 
 	if (idx < 0)
 	{
-		if (-idx > n)
+		if (pg_abs_s32(idx) > n)
 			idx = n;
 		else
 			idx = n + idx;
@@ -5426,7 +5427,7 @@ setPathArray(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 
 	if (idx < 0)
 	{
-		if (-idx > nelems)
+		if (pg_abs_s32(idx) > nelems)
 		{
 			/*
 			 * If asked to keep elements position consistent, it's not allowed
@@ -5438,7 +5439,7 @@ setPathArray(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 						 errmsg("path element at position %d is out of range: %d",
 								level + 1, idx)));
 			else
-				idx = INT_MIN;
+				idx = PG_INT32_MIN;
 		}
 		else
 			idx = nelems + idx;
@@ -5936,7 +5937,7 @@ transform_string_values_scalar(void *state, char *token, JsonTokenType tokentype
 	{
 		text	   *out = _state->action(_state->action_state, token, strlen(token));
 
-		escape_json(_state->strval, text_to_cstring(out));
+		escape_json_text(_state->strval, out);
 	}
 	else
 		appendStringInfoString(_state->strval, token);

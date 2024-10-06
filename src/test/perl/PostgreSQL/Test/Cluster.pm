@@ -2181,6 +2181,11 @@ returned.  Set B<on_error_stop> to 0 to ignore errors instead.
 Set a timeout for a background psql session. By default, timeout of
 $PostgreSQL::Test::Utils::timeout_default is set up.
 
+=item connstr => B<value>
+
+If set, use this as the connection string for the connection to the
+backend.
+
 =item replication => B<value>
 
 If set, add B<replication=value> to the conninfo string.
@@ -2204,14 +2209,21 @@ sub background_psql
 	my $replication = $params{replication};
 	my $timeout = undef;
 
+	# Build the connection string.
+	my $psql_connstr;
+	if (defined $params{connstr})
+	{
+		$psql_connstr = $params{connstr};
+	}
+	else
+	{
+		$psql_connstr = $self->connstr($dbname);
+	}
+	$psql_connstr .= defined $replication ? " replication=$replication" : "";
+
 	my @psql_params = (
 		$self->installed_command('psql'),
-		'-XAtq',
-		'-d',
-		$self->connstr($dbname)
-		  . (defined $replication ? " replication=$replication" : ""),
-		'-f',
-		'-');
+		'-XAtq', '-d', $psql_connstr, '-f', '-');
 
 	$params{on_error_stop} = 1 unless defined $params{on_error_stop};
 	$timeout = $params{timeout} if defined $params{timeout};
@@ -2837,6 +2849,28 @@ sub lsn
 
 =pod
 
+=item $node->check_extension(extension_name)
+
+Scan pg_available_extensions to check that an extension is available in an
+installation.
+
+Returns 1 if the extension is available, 0 otherwise.
+
+=cut
+
+sub check_extension
+{
+	my ($self, $extension_name) = @_;
+
+	my $result = $self->safe_psql('postgres',
+		"SELECT count(*) > 0 FROM pg_available_extensions WHERE name = '$extension_name';"
+	);
+
+	return $result eq 't' ? 1 : 0;
+}
+
+=pod
+
 =item $node->wait_for_event(wait_event_name, backend_type)
 
 Poll pg_stat_activity until backend_type reaches wait_event_name.
@@ -2948,6 +2982,11 @@ sub wait_for_catchup
 		}
 		else
 		{
+			# Fetch additional detail for debugging purposes
+			$query = qq[SELECT * FROM pg_catalog.pg_stat_replication];
+			my $details = $self->safe_psql('postgres', $query);
+			diag qq(Last pg_stat_replication contents:
+${details});
 			croak "timed out waiting for catchup";
 		}
 	}
@@ -3015,8 +3054,15 @@ sub wait_for_slot_catchup
 	  . $self->name . "\n";
 	my $query =
 	  qq[SELECT '$target_lsn' <= ${mode}_lsn FROM pg_catalog.pg_replication_slots WHERE slot_name = '$slot_name';];
-	$self->poll_query_until('postgres', $query)
-	  or croak "timed out waiting for catchup";
+	if (!$self->poll_query_until('postgres', $query))
+	{
+		# Fetch additional detail for debugging purposes
+		$query = qq[SELECT * FROM pg_catalog.pg_replication_slots];
+		my $details = $self->safe_psql('postgres', $query);
+		diag qq(Last pg_replication_slots contents:
+${details});
+		croak "timed out waiting for catchup";
+	}
 	print "done\n";
 	return;
 }
@@ -3051,8 +3097,15 @@ sub wait_for_subscription_sync
 	print "Waiting for all subscriptions in \"$name\" to synchronize data\n";
 	my $query =
 	  qq[SELECT count(1) = 0 FROM pg_subscription_rel WHERE srsubstate NOT IN ('r', 's');];
-	$self->poll_query_until($dbname, $query)
-	  or croak "timed out waiting for subscriber to synchronize data";
+	if (!$self->poll_query_until($dbname, $query))
+	{
+		# Fetch additional detail for debugging purposes
+		$query = qq[SELECT * FROM pg_subscription_rel];
+		my $details = $self->safe_psql($dbname, $query);
+		diag qq(Last pg_subscription_rel contents:
+${details});
+		croak "timed out waiting for subscriber to synchronize data";
+	}
 
 	# Then, wait for the replication to catchup if required.
 	if (defined($publisher))

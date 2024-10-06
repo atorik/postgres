@@ -493,6 +493,12 @@ bool		Debug_print_parse = false;
 bool		Debug_print_rewritten = false;
 bool		Debug_pretty_print = true;
 
+#ifdef DEBUG_NODE_TESTS_ENABLED
+bool		Debug_copy_parse_plan_trees;
+bool		Debug_write_read_parse_plan_trees;
+bool		Debug_raw_expression_coverage_test;
+#endif
+
 bool		log_parser_stats = false;
 bool		log_planner_stats = false;
 bool		log_executor_stats = false;
@@ -570,6 +576,7 @@ static char *server_encoding_string;
 static char *server_version_string;
 static int	server_version_num;
 static char *debug_io_direct_string;
+static char *restrict_nonsystem_relation_kind_string;
 
 #ifdef HAVE_SYSLOG
 #define	DEFAULT_SYSLOG_FACILITY LOG_LOCAL0
@@ -1008,7 +1015,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"is_superuser", PGC_INTERNAL, UNGROUPED,
 			gettext_noop("Shows whether the current user is a superuser."),
 			NULL,
-			GUC_REPORT | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_REPORT | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_ALLOW_IN_PARALLEL
 		},
 		&current_role_is_superuser,
 		false,
@@ -1294,6 +1301,59 @@ struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, NULL, NULL
 	},
+#ifdef DEBUG_NODE_TESTS_ENABLED
+	{
+		{"debug_copy_parse_plan_trees", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Set this to force all parse and plan trees to be passed through "
+						 "copyObject(), to facilitate catching errors and omissions in "
+						 "copyObject()."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&Debug_copy_parse_plan_trees,
+/* support for legacy compile-time setting */
+#ifdef COPY_PARSE_PLAN_TREES
+		true,
+#else
+		false,
+#endif
+		NULL, NULL, NULL
+	},
+	{
+		{"debug_write_read_parse_plan_trees", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Set this to force all parse and plan trees to be passed through "
+						 "outfuncs.c/readfuncs.c, to facilitate catching errors and omissions in "
+						 "those modules."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&Debug_write_read_parse_plan_trees,
+/* support for legacy compile-time setting */
+#ifdef WRITE_READ_PARSE_PLAN_TREES
+		true,
+#else
+		false,
+#endif
+		NULL, NULL, NULL
+	},
+	{
+		{"debug_raw_expression_coverage_test", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Set this to force all raw parse trees for DML statements to be scanned "
+						 "by raw_expression_tree_walker(), to facilitate catching errors and "
+						 "omissions in that function."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&Debug_raw_expression_coverage_test,
+/* support for legacy compile-time setting */
+#ifdef RAW_EXPRESSION_COVERAGE_TEST
+		true,
+#else
+		false,
+#endif
+		NULL, NULL, NULL
+	},
+#endif							/* DEBUG_NODE_TESTS_ENABLED */
 	{
 		{"debug_print_parse", PGC_USERSET, LOGGING_WHAT,
 			gettext_noop("Logs each query's parse tree."),
@@ -1638,7 +1698,6 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
-#ifdef TRACE_SORT
 	{
 		{"trace_sort", PGC_USERSET, DEVELOPER_OPTIONS,
 			gettext_noop("Emit information about resource usage in sorting."),
@@ -1649,7 +1708,6 @@ struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, NULL, NULL
 	},
-#endif
 
 #ifdef TRACE_SYNCSCAN
 	/* this is undocumented because not exposed in a standard build */
@@ -2011,7 +2069,7 @@ struct config_bool ConfigureNamesBool[] =
 
 	{
 		{"sync_replication_slots", PGC_SIGHUP, REPLICATION_STANDBY,
-			gettext_noop("Enables a physical standby to synchronize logical failover slots from the primary server."),
+			gettext_noop("Enables a physical standby to synchronize logical failover replication slots from the primary server."),
 		},
 		&sync_replication_slots,
 		false,
@@ -2298,7 +2356,7 @@ struct config_int ConfigureNamesInt[] =
 	{
 		{"commit_timestamp_buffers", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Sets the size of the dedicated buffer pool used for the commit timestamp cache."),
-			gettext_noop("Specify 0 to have this value determined as a fraction of shared_buffers."),
+			gettext_noop("Specify 0 to have this value determined as a fraction of \"shared_buffers\"."),
 			GUC_UNIT_BLOCKS
 		},
 		&commit_timestamp_buffers,
@@ -2352,8 +2410,8 @@ struct config_int ConfigureNamesInt[] =
 
 	{
 		{"subtransaction_buffers", PGC_POSTMASTER, RESOURCES_MEM,
-			gettext_noop("Sets the size of the dedicated buffer pool used for the sub-transaction cache."),
-			gettext_noop("Specify 0 to have this value determined as a fraction of shared_buffers."),
+			gettext_noop("Sets the size of the dedicated buffer pool used for the subtransaction cache."),
+			gettext_noop("Specify 0 to have this value determined as a fraction of \"shared_buffers\"."),
 			GUC_UNIT_BLOCKS
 		},
 		&subtransaction_buffers,
@@ -2364,7 +2422,7 @@ struct config_int ConfigureNamesInt[] =
 	{
 		{"transaction_buffers", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Sets the size of the dedicated buffer pool used for the transaction status cache."),
-			gettext_noop("Specify 0 to have this value determined as a fraction of shared_buffers."),
+			gettext_noop("Specify 0 to have this value determined as a fraction of \"shared_buffers\"."),
 			GUC_UNIT_BLOCKS
 		},
 		&transaction_buffers,
@@ -2450,6 +2508,11 @@ struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	/*
+	 * Dynamic shared memory has a higher overhead than local memory contexts,
+	 * so when testing low-memory scenarios that could use shared memory, the
+	 * recommended minimum is 1MB.
+	 */
 	{
 		{"maintenance_work_mem", PGC_USERSET, RESOURCES_MEM,
 			gettext_noop("Sets the maximum memory to be used for maintenance operations."),
@@ -2457,7 +2520,7 @@ struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_KB
 		},
 		&maintenance_work_mem,
-		65536, 1024, MAX_KILOBYTES,
+		65536, 64, MAX_KILOBYTES,
 		NULL, NULL, NULL
 	},
 
@@ -2879,7 +2942,7 @@ struct config_int ConfigureNamesInt[] =
 	{
 		{"wal_buffers", PGC_POSTMASTER, WAL_SETTINGS,
 			gettext_noop("Sets the number of disk-page buffers in shared memory for WAL."),
-			gettext_noop("Specify -1 to have this value determined as a fraction of shared_buffers."),
+			gettext_noop("Specify -1 to have this value determined as a fraction of \"shared_buffers\"."),
 			GUC_UNIT_XBLOCKS
 		},
 		&XLOGbuffers,
@@ -3005,7 +3068,7 @@ struct config_int ConfigureNamesInt[] =
 		{"log_min_duration_sample", PGC_SUSET, LOGGING_WHEN,
 			gettext_noop("Sets the minimum execution time above which "
 						 "a sample of statements will be logged."
-						 " Sampling is determined by log_statement_sample_rate."),
+						 " Sampling is determined by \"log_statement_sample_rate\"."),
 			gettext_noop("Zero logs a sample of all queries. -1 turns this feature off."),
 			GUC_UNIT_MS
 		},
@@ -4268,7 +4331,7 @@ struct config_string ConfigureNamesString[] =
 		{"search_path", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Sets the schema search order for names that are not schema-qualified."),
 			NULL,
-			GUC_LIST_INPUT | GUC_LIST_QUOTE | GUC_EXPLAIN
+			GUC_LIST_INPUT | GUC_LIST_QUOTE | GUC_EXPLAIN | GUC_REPORT
 		},
 		&namespace_search_path,
 		"\"$user\", public",
@@ -4697,16 +4760,27 @@ struct config_string ConfigureNamesString[] =
 
 	{
 		{"synchronized_standby_slots", PGC_SIGHUP, REPLICATION_PRIMARY,
-			gettext_noop("Lists streaming replication standby server slot "
+			gettext_noop("Lists streaming replication standby server replication slot "
 						 "names that logical WAL sender processes will wait for."),
 			gettext_noop("Logical WAL sender processes will send decoded "
-						 "changes to plugins only after the specified  "
-						 "replication slots confirm receiving WAL."),
+						 "changes to output plugins only after the specified "
+						 "replication slots have confirmed receiving WAL."),
 			GUC_LIST_INPUT
 		},
 		&synchronized_standby_slots,
 		"",
 		check_synchronized_standby_slots, assign_synchronized_standby_slots, NULL
+	},
+
+	{
+		{"restrict_nonsystem_relation_kind", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Prohibits access to non-system relations of specified kinds."),
+			NULL,
+			GUC_LIST_INPUT | GUC_NOT_IN_SAMPLE
+		},
+		&restrict_nonsystem_relation_kind_string,
+		"",
+		check_restrict_nonsystem_relation_kind, assign_restrict_nonsystem_relation_kind, NULL
 	},
 
 	/* End-of-list marker */

@@ -57,12 +57,13 @@
 typedef struct PVShared
 {
 	/*
-	 * Target table relid and log level (for messages about parallel workers
-	 * launched during VACUUM VERBOSE).  These fields are not modified during
-	 * the parallel vacuum.
+	 * Target table relid, log level (for messages about parallel workers
+	 * launched during VACUUM VERBOSE) and query ID.  These fields are not
+	 * modified during the parallel vacuum.
 	 */
 	Oid			relid;
 	int			elevel;
+	uint64		queryid;
 
 	/*
 	 * Fields for both index vacuum and cleanup.
@@ -369,6 +370,7 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	MemSet(shared, 0, est_shared_len);
 	shared->relid = RelationGetRelid(rel);
 	shared->elevel = elevel;
+	shared->queryid = pgstat_get_my_query_id();
 	shared->maintenance_work_mem_worker =
 		(nindexes_mwm > 0) ?
 		maintenance_work_mem / Min(parallel_workers, nindexes_mwm) :
@@ -1014,6 +1016,9 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	debug_query_string = sharedquery;
 	pgstat_report_activity(STATE_RUNNING, debug_query_string);
 
+	/* Track query ID */
+	pgstat_report_query_id(shared->queryid, false);
+
 	/*
 	 * Open table.  The lock mode is the same as the leader process.  It's
 	 * okay because the lock mode does not conflict among the parallel
@@ -1043,9 +1048,6 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	/* Set cost-based vacuum delay */
 	VacuumUpdateCosts();
 	VacuumCostBalance = 0;
-	VacuumPageHit = 0;
-	VacuumPageMiss = 0;
-	VacuumPageDirty = 0;
 	VacuumCostBalanceLocal = 0;
 	VacuumSharedCostBalance = &(shared->cost_balance);
 	VacuumActiveNWorkers = &(shared->active_nworkers);

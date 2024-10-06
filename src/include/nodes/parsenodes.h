@@ -160,6 +160,8 @@ typedef struct Query
 	bool		hasForUpdate pg_node_attr(query_jumble_ignore);
 	/* rewriter has applied some RLS policy */
 	bool		hasRowSecurity pg_node_attr(query_jumble_ignore);
+	/* parser has added an RTE_GROUP RTE */
+	bool		hasGroupRTE pg_node_attr(query_jumble_ignore);
 	/* is a RETURN statement */
 	bool		isReturn pg_node_attr(query_jumble_ignore);
 
@@ -938,17 +940,6 @@ typedef struct PartitionRangeDatum
 } PartitionRangeDatum;
 
 /*
- * PartitionDesc - info about single partition for ALTER TABLE SPLIT PARTITION command
- */
-typedef struct SinglePartitionSpec
-{
-	NodeTag		type;
-
-	RangeVar   *name;			/* name of partition */
-	PartitionBoundSpec *bound;	/* FOR VALUES, if attaching */
-} SinglePartitionSpec;
-
-/*
  * PartitionCmd - info for ALTER TABLE/INDEX ATTACH/DETACH PARTITION commands
  */
 typedef struct PartitionCmd
@@ -956,8 +947,6 @@ typedef struct PartitionCmd
 	NodeTag		type;
 	RangeVar   *name;			/* name of partition to attach/detach */
 	PartitionBoundSpec *bound;	/* FOR VALUES, if attaching */
-	List	   *partlist;		/* list of partitions, for MERGE/SPLIT
-								 * PARTITION command */
 	bool		concurrent;
 } PartitionCmd;
 
@@ -1036,6 +1025,7 @@ typedef enum RTEKind
 	RTE_RESULT,					/* RTE represents an empty FROM clause; such
 								 * RTEs are added by the planner, they're not
 								 * present during parsing or rewriting */
+	RTE_GROUP,					/* the grouping step */
 } RTEKind;
 
 typedef struct RangeTblEntry
@@ -1241,6 +1231,12 @@ typedef struct RangeTblEntry
 	char	   *enrname;
 	/* estimated or actual from caller */
 	Cardinality enrtuples pg_node_attr(query_jumble_ignore);
+
+	/*
+	 * Fields valid for a GROUP RTE (else NIL):
+	 */
+	/* list of grouping expressions */
+	List	   *groupexprs pg_node_attr(query_jumble_ignore);
 
 	/*
 	 * Fields valid in all RTEs:
@@ -2413,8 +2409,6 @@ typedef enum AlterTableType
 	AT_AttachPartition,			/* ATTACH PARTITION */
 	AT_DetachPartition,			/* DETACH PARTITION */
 	AT_DetachPartitionFinalize, /* DETACH PARTITION FINALIZE */
-	AT_SplitPartition,			/* SPLIT PARTITION */
-	AT_MergePartitions,			/* MERGE PARTITIONS */
 	AT_AddIdentity,				/* ADD IDENTITY */
 	AT_SetIdentity,				/* SET identity column options */
 	AT_DropIdentity,			/* DROP IDENTITY */
@@ -2622,11 +2616,26 @@ typedef enum VariableSetKind
 
 typedef struct VariableSetStmt
 {
+	pg_node_attr(custom_query_jumble)
+
 	NodeTag		type;
 	VariableSetKind kind;
-	char	   *name;			/* variable to be set */
-	List	   *args;			/* List of A_Const nodes */
-	bool		is_local;		/* SET LOCAL? */
+	/* variable to be set */
+	char	   *name;
+	/* List of A_Const nodes */
+	List	   *args;
+
+	/*
+	 * True if arguments should be accounted for in query jumbling.  We use a
+	 * separate flag rather than query_jumble_ignore on "args" as several
+	 * grammar flavors of SET rely on a list of values that are parsed
+	 * directly from the grammar's keywords.
+	 */
+	bool		jumble_args;
+	/* SET LOCAL? */
+	bool		is_local;
+	/* token location, or -1 if unknown */
+	ParseLoc	location pg_node_attr(query_jumble_location);
 } VariableSetStmt;
 
 /* ----------------------
@@ -2750,6 +2759,7 @@ typedef struct Constraint
 	bool		nulls_not_distinct; /* null treatment for UNIQUE constraints */
 	List	   *keys;			/* String nodes naming referenced key
 								 * column(s); for UNIQUE/PK/NOT NULL */
+	bool		without_overlaps;	/* WITHOUT OVERLAPS specified */
 	List	   *including;		/* String nodes naming referenced nonkey
 								 * column(s); for UNIQUE/PK */
 	List	   *exclusions;		/* list of (IndexElem, operator name) pairs;
@@ -2766,6 +2776,8 @@ typedef struct Constraint
 	RangeVar   *pktable;		/* Primary key table */
 	List	   *fk_attrs;		/* Attributes of foreign key */
 	List	   *pk_attrs;		/* Corresponding attrs in PK table */
+	bool		fk_with_period; /* Last attribute of FK uses PERIOD */
+	bool		pk_with_period; /* Last attribute of PK uses PERIOD */
 	char		fk_matchtype;	/* FULL, PARTIAL, SIMPLE */
 	char		fk_upd_action;	/* ON UPDATE action */
 	char		fk_del_action;	/* ON DELETE action */
@@ -3373,6 +3385,7 @@ typedef struct IndexStmt
 	bool		nulls_not_distinct; /* null treatment for UNIQUE constraints */
 	bool		primary;		/* is index a primary key? */
 	bool		isconstraint;	/* is it for a pkey/unique constraint? */
+	bool		iswithoutoverlaps;	/* is the constraint WITHOUT OVERLAPS? */
 	bool		deferrable;		/* is the constraint DEFERRABLE? */
 	bool		initdeferred;	/* is the constraint INITIALLY DEFERRED? */
 	bool		transformed;	/* true when transformIndexStmt is finished */

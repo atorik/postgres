@@ -510,6 +510,12 @@ struct PlannerInfo
 	bool		hasRecursion;
 
 	/*
+	 * The rangetable index for the RTE_GROUP RTE, or 0 if there is no
+	 * RTE_GROUP RTE.
+	 */
+	int			group_rtindex;
+
+	/*
 	 * Information about aggregates. Filled by preprocess_aggrefs().
 	 */
 	/* AggInfo structs */
@@ -1658,6 +1664,7 @@ typedef struct Path
 
 	/* estimated size/costs for path (see costsize.c for more info) */
 	Cardinality rows;			/* estimated number of result tuples */
+	int			disabled_nodes; /* count of disabled nodes */
 	Cost		startup_cost;	/* cost expended before fetching any tuples */
 	Cost		total_cost;		/* total cost (assuming all tuples fetched) */
 
@@ -3333,6 +3340,7 @@ typedef struct
 typedef struct JoinCostWorkspace
 {
 	/* Preliminary cost estimates --- must not be larger than final ones! */
+	int			disabled_nodes;
 	Cost		startup_cost;	/* cost expended before fetching any tuples */
 	Cost		total_cost;		/* total cost (assuming all tuples fetched) */
 

@@ -58,7 +58,7 @@ typedef struct
 {
 	uint32		status;
 	const char *path;
-	size_t		size;
+	uint64		size;
 } backup_file_entry;
 
 static uint32 hash_string_pointer(const char *s);
@@ -133,7 +133,7 @@ static void manifest_process_system_identifier(JsonManifestParseContext *context
 											   uint64 manifest_system_identifier);
 static void manifest_process_file(JsonManifestParseContext *context,
 								  const char *pathname,
-								  size_t size,
+								  uint64 size,
 								  pg_checksum_type checksum_type,
 								  int checksum_length,
 								  uint8 *checksum_payload);
@@ -953,7 +953,7 @@ manifest_process_system_identifier(JsonManifestParseContext *context,
 
 	if (manifest_system_identifier != system_identifier)
 		context->error_cb(context,
-						  "manifest system identifier is %llu, but database system identifier is %llu",
+						  "system identifier in backup manifest is %llu, but database system identifier is %llu",
 						  (unsigned long long) manifest_system_identifier,
 						  (unsigned long long) system_identifier);
 }
@@ -966,7 +966,7 @@ manifest_process_system_identifier(JsonManifestParseContext *context,
  */
 static void
 manifest_process_file(JsonManifestParseContext *context,
-					  const char *pathname, size_t size,
+					  const char *pathname, uint64 size,
 					  pg_checksum_type checksum_type,
 					  int checksum_length,
 					  uint8 *checksum_payload)

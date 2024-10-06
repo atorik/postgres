@@ -125,6 +125,8 @@ static void show_sort_group_keys(PlanState *planstate, const char *qlabel,
 								 List *ancestors, ExplainState *es);
 static void show_sortorder_options(StringInfo buf, Node *sortexpr,
 								   Oid sortOperator, Oid collation, bool nullsFirst);
+static void show_storage_info(char *maxStorageType, int64 maxSpaceUsed,
+							  ExplainState *es);
 static void show_tablesample(TableSampleClause *tsc, PlanState *planstate,
 							 List *ancestors, ExplainState *es);
 static void show_sort_info(SortState *sortstate, ExplainState *es);
@@ -132,6 +134,12 @@ static void show_incremental_sort_info(IncrementalSortState *incrsortstate,
 									   ExplainState *es);
 static void show_hash_info(HashState *hashstate, ExplainState *es);
 static void show_material_info(MaterialState *mstate, ExplainState *es);
+static void show_windowagg_info(WindowAggState *winstate, ExplainState *es);
+static void show_ctescan_info(CteScanState *ctescanstate, ExplainState *es);
+static void show_table_func_scan_info(TableFuncScanState *tscanstate,
+									  ExplainState *es);
+static void show_recursive_union_info(RecursiveUnionState *rstate,
+									  ExplainState *es);
 static void show_memoize_info(MemoizeState *mstate, List *ancestors,
 							  ExplainState *es);
 static void show_hashagg_info(AggState *aggstate, ExplainState *es);
@@ -918,6 +926,7 @@ ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 {
 	Bitmapset  *rels_used = NULL;
 	PlanState  *ps;
+	ListCell   *lc;
 
 	/* Set up ExplainState fields associated with this plan tree */
 	Assert(queryDesc->plannedstmt != NULL);
@@ -928,6 +937,17 @@ ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 	es->deparse_cxt = deparse_context_for_plan_tree(queryDesc->plannedstmt,
 													es->rtable_names);
 	es->printed_subplans = NULL;
+	es->rtable_size = list_length(es->rtable);
+	foreach(lc, es->rtable)
+	{
+		RangeTblEntry *rte = lfirst_node(RangeTblEntry, lc);
+
+		if (rte->rtekind == RTE_GROUP)
+		{
+			es->rtable_size--;
+			break;
+		}
+	}
 
 	/*
 	 * Sometimes we mark a Gather node as "invisible", which means that it's
@@ -1936,6 +1956,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	if (es->format == EXPLAIN_FORMAT_TEXT)
 		appendStringInfoChar(es->str, '\n');
 
+	if (plan->disabled_nodes != 0)
+		ExplainPropertyInteger("Disabled Nodes", NULL, plan->disabled_nodes,
+							   es);
+
 	/* prepare per-worker general execution details */
 	if (es->workers_state && es->verbose)
 	{
@@ -2070,6 +2094,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
 										   planstate, es);
+			if (IsA(plan, CteScan))
+				show_ctescan_info(castNode(CteScanState, planstate), es);
 			break;
 		case T_Gather:
 			{
@@ -2151,6 +2177,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
 										   planstate, es);
+			show_table_func_scan_info(castNode(TableFuncScanState,
+											   planstate), es);
 			break;
 		case T_TidScan:
 			{
@@ -2257,6 +2285,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 										   planstate, es);
 			show_upper_qual(((WindowAgg *) plan)->runConditionOrig,
 							"Run Condition", planstate, ancestors, es);
+			show_windowagg_info(castNode(WindowAggState, planstate), es);
 			break;
 		case T_Group:
 			show_group_keys(castNode(GroupState, planstate), ancestors, es);
@@ -2300,6 +2329,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_Memoize:
 			show_memoize_info(castNode(MemoizeState, planstate), ancestors,
 							  es);
+			break;
+		case T_RecursiveUnion:
+			show_recursive_union_info(castNode(RecursiveUnionState,
+											   planstate), es);
 			break;
 		default:
 			break;
@@ -2512,7 +2545,7 @@ show_plan_tlist(PlanState *planstate, List *ancestors, ExplainState *es)
 	context = set_deparse_context_plan(es->deparse_cxt,
 									   plan,
 									   ancestors);
-	useprefix = list_length(es->rtable) > 1;
+	useprefix = es->rtable_size > 1;
 
 	/* Deparse each result column (we now include resjunk ones) */
 	foreach(lc, plan->targetlist)
@@ -2596,7 +2629,7 @@ show_upper_qual(List *qual, const char *qlabel,
 {
 	bool		useprefix;
 
-	useprefix = (list_length(es->rtable) > 1 || es->verbose);
+	useprefix = (es->rtable_size > 1 || es->verbose);
 	show_qual(qual, qlabel, planstate, ancestors, useprefix, es);
 }
 
@@ -2686,7 +2719,7 @@ show_grouping_sets(PlanState *planstate, Agg *agg,
 	context = set_deparse_context_plan(es->deparse_cxt,
 									   planstate->plan,
 									   ancestors);
-	useprefix = (list_length(es->rtable) > 1 || es->verbose);
+	useprefix = (es->rtable_size > 1 || es->verbose);
 
 	ExplainOpenGroup("Grouping Sets", "Grouping Sets", false, es);
 
@@ -2826,7 +2859,7 @@ show_sort_group_keys(PlanState *planstate, const char *qlabel,
 	context = set_deparse_context_plan(es->deparse_cxt,
 									   plan,
 									   ancestors);
-	useprefix = (list_length(es->rtable) > 1 || es->verbose);
+	useprefix = (es->rtable_size > 1 || es->verbose);
 
 	for (keyno = 0; keyno < nkeys; keyno++)
 	{
@@ -2921,6 +2954,29 @@ show_sortorder_options(StringInfo buf, Node *sortexpr,
 }
 
 /*
+ * Show information on storage method and maximum memory/disk space used.
+ */
+static void
+show_storage_info(char *maxStorageType, int64 maxSpaceUsed, ExplainState *es)
+{
+	int64		maxSpaceUsedKB = BYTES_TO_KILOBYTES(maxSpaceUsed);
+
+	if (es->format != EXPLAIN_FORMAT_TEXT)
+	{
+		ExplainPropertyText("Storage", maxStorageType, es);
+		ExplainPropertyInteger("Maximum Storage", "kB", maxSpaceUsedKB, es);
+	}
+	else
+	{
+		ExplainIndentText(es);
+		appendStringInfo(es->str,
+						 "Storage: %s  Maximum Storage: " INT64_FORMAT "kB\n",
+						 maxStorageType,
+						 maxSpaceUsedKB);
+	}
+}
+
+/*
  * Show TABLESAMPLE properties
  */
 static void
@@ -2938,7 +2994,7 @@ show_tablesample(TableSampleClause *tsc, PlanState *planstate,
 	context = set_deparse_context_plan(es->deparse_cxt,
 									   planstate->plan,
 									   ancestors);
-	useprefix = list_length(es->rtable) > 1;
+	useprefix = es->rtable_size > 1;
 
 	/* Get the tablesample method name */
 	method_name = get_func_name(tsc->tsmhandler);
@@ -3375,9 +3431,10 @@ show_hash_info(HashState *hashstate, ExplainState *es)
 static void
 show_material_info(MaterialState *mstate, ExplainState *es)
 {
+	char	   *maxStorageType;
+	int64		maxSpaceUsed;
+
 	Tuplestorestate *tupstore = mstate->tuplestorestate;
-	const char *storageType;
-	int64		spaceUsedKB;
 
 	/*
 	 * Nothing to show if ANALYZE option wasn't used or if execution didn't
@@ -3386,22 +3443,101 @@ show_material_info(MaterialState *mstate, ExplainState *es)
 	if (!es->analyze || tupstore == NULL)
 		return;
 
-	storageType = tuplestore_storage_type_name(tupstore);
-	spaceUsedKB = BYTES_TO_KILOBYTES(tuplestore_space_used(tupstore));
+	tuplestore_get_stats(tupstore, &maxStorageType, &maxSpaceUsed);
+	show_storage_info(maxStorageType, maxSpaceUsed, es);
+}
 
-	if (es->format != EXPLAIN_FORMAT_TEXT)
-	{
-		ExplainPropertyText("Storage", storageType, es);
-		ExplainPropertyInteger("Maximum Storage", "kB", spaceUsedKB, es);
-	}
-	else
-	{
-		ExplainIndentText(es);
-		appendStringInfo(es->str,
-						 "Storage: %s  Maximum Storage: " INT64_FORMAT "kB\n",
-						 storageType,
-						 spaceUsedKB);
-	}
+/*
+ * Show information on WindowAgg node, storage method and maximum memory/disk
+ * space used.
+ */
+static void
+show_windowagg_info(WindowAggState *winstate, ExplainState *es)
+{
+	char	   *maxStorageType;
+	int64		maxSpaceUsed;
+
+	Tuplestorestate *tupstore = winstate->buffer;
+
+	/*
+	 * Nothing to show if ANALYZE option wasn't used or if execution didn't
+	 * get as far as creating the tuplestore.
+	 */
+	if (!es->analyze || tupstore == NULL)
+		return;
+
+	tuplestore_get_stats(tupstore, &maxStorageType, &maxSpaceUsed);
+	show_storage_info(maxStorageType, maxSpaceUsed, es);
+}
+
+/*
+ * Show information on CTE Scan node, storage method and maximum memory/disk
+ * space used.
+ */
+static void
+show_ctescan_info(CteScanState *ctescanstate, ExplainState *es)
+{
+	char	   *maxStorageType;
+	int64		maxSpaceUsed;
+
+	Tuplestorestate *tupstore = ctescanstate->leader->cte_table;
+
+	if (!es->analyze || tupstore == NULL)
+		return;
+
+	tuplestore_get_stats(tupstore, &maxStorageType, &maxSpaceUsed);
+	show_storage_info(maxStorageType, maxSpaceUsed, es);
+}
+
+/*
+ * Show information on Table Function Scan node, storage method and maximum
+ * memory/disk space used.
+ */
+static void
+show_table_func_scan_info(TableFuncScanState *tscanstate, ExplainState *es)
+{
+	char	   *maxStorageType;
+	int64		maxSpaceUsed;
+
+	Tuplestorestate *tupstore = tscanstate->tupstore;
+
+	if (!es->analyze || tupstore == NULL)
+		return;
+
+	tuplestore_get_stats(tupstore, &maxStorageType, &maxSpaceUsed);
+	show_storage_info(maxStorageType, maxSpaceUsed, es);
+}
+
+/*
+ * Show information on Recursive Union node, storage method and maximum
+ * memory/disk space used.
+ */
+static void
+show_recursive_union_info(RecursiveUnionState *rstate, ExplainState *es)
+{
+	char	   *maxStorageType,
+			   *tempStorageType;
+	int64		maxSpaceUsed,
+				tempSpaceUsed;
+
+	if (!es->analyze)
+		return;
+
+	/*
+	 * Recursive union node uses two tuplestores.  We employ the storage type
+	 * from one of them which consumed more memory/disk than the other.  The
+	 * storage size is sum of the two.
+	 */
+	tuplestore_get_stats(rstate->working_table, &tempStorageType,
+						 &tempSpaceUsed);
+	tuplestore_get_stats(rstate->intermediate_table, &maxStorageType,
+						 &maxSpaceUsed);
+
+	if (tempSpaceUsed > maxSpaceUsed)
+		maxStorageType = tempStorageType;
+
+	maxSpaceUsed += tempSpaceUsed;
+	show_storage_info(maxStorageType, maxSpaceUsed, es);
 }
 
 /*
@@ -3424,7 +3560,7 @@ show_memoize_info(MemoizeState *mstate, List *ancestors, ExplainState *es)
 	 * It's hard to imagine having a memoize node with fewer than 2 RTEs, but
 	 * let's just keep the same useprefix logic as elsewhere in this file.
 	 */
-	useprefix = list_length(es->rtable) > 1 || es->verbose;
+	useprefix = es->rtable_size > 1 || es->verbose;
 
 	/* Set up deparsing context */
 	context = set_deparse_context_plan(es->deparse_cxt,

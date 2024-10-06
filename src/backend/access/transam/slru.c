@@ -716,9 +716,12 @@ SlruInternalWritePage(SlruCtl ctl, int slotno, SlruWriteAll fdata)
 	if (!ok)
 		SlruReportIOError(ctl, pageno, InvalidTransactionId);
 
-	/* If part of a checkpoint, count this as a buffer written. */
+	/* If part of a checkpoint, count this as a SLRU buffer written. */
 	if (fdata)
-		CheckpointStats.ckpt_bufs_written++;
+	{
+		CheckpointStats.ckpt_slru_written++;
+		PendingCheckpointerStats.slru_written++;
+	}
 }
 
 /*
@@ -1184,7 +1187,7 @@ SlruSelectLRUPage(SlruCtl ctl, int64 pageno)
 		Assert(LWLockHeldByMe(SimpleLruGetBankLock(ctl, pageno)));
 
 		/* See if page already has a buffer assigned */
-		for (int slotno = 0; slotno < shared->num_slots; slotno++)
+		for (int slotno = bankstart; slotno < bankend; slotno++)
 		{
 			if (shared->page_status[slotno] != SLRU_PAGE_EMPTY &&
 				shared->page_number[slotno] == pageno)
@@ -1532,7 +1535,7 @@ restart:
 	did_write = false;
 	for (int slotno = 0; slotno < shared->num_slots; slotno++)
 	{
-		int			pagesegno;
+		int64		pagesegno;
 		int			curbank = SlotGetBankNumber(slotno);
 
 		/*

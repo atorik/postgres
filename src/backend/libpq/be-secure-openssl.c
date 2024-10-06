@@ -44,6 +44,7 @@
  * include <wincrypt.h>, but some other Windows headers do.)
  */
 #include "common/openssl.h"
+#include <openssl/bn.h>
 #include <openssl/conf.h>
 #include <openssl/dh.h>
 #ifndef OPENSSL_NO_ECDH
@@ -80,7 +81,6 @@ static const char *SSLerrmessage(unsigned long ecode);
 static char *X509_NAME_to_cstring(X509_NAME *name);
 
 static SSL_CTX *SSL_context = NULL;
-static bool SSL_initialized = false;
 static bool dummy_ssl_passwd_cb_called = false;
 static bool ssl_is_server_start;
 
@@ -100,19 +100,6 @@ be_tls_init(bool isServerStart)
 	SSL_CTX    *context;
 	int			ssl_ver_min = -1;
 	int			ssl_ver_max = -1;
-
-	/* This stuff need be done only once. */
-	if (!SSL_initialized)
-	{
-#ifdef HAVE_OPENSSL_INIT_SSL
-		OPENSSL_init_ssl(OPENSSL_INIT_LOAD_CONFIG, NULL);
-#else
-		OPENSSL_config(NULL);
-		SSL_library_init();
-		SSL_load_error_strings();
-#endif
-		SSL_initialized = true;
-	}
 
 	/*
 	 * Create a new SSL context into which we'll load all the configuration
@@ -270,9 +257,8 @@ be_tls_init(bool isServerStart)
 	 */
 #ifdef HAVE_SSL_CTX_SET_NUM_TICKETS
 	SSL_CTX_set_num_tickets(context, 0);
-#else
-	SSL_CTX_set_options(context, SSL_OP_NO_TICKET);
 #endif
+	SSL_CTX_set_options(context, SSL_OP_NO_TICKET);
 
 	/* disallow SSL session caching, too */
 	SSL_CTX_set_session_cache_mode(context, SSL_SESS_CACHE_OFF);
@@ -953,7 +939,6 @@ my_BIO_s_socket(void)
 	if (!my_bio_methods)
 	{
 		BIO_METHOD *biom = (BIO_METHOD *) BIO_s_socket();
-#ifdef HAVE_BIO_METH_NEW
 		int			my_bio_index;
 
 		my_bio_index = BIO_get_new_index();
@@ -976,14 +961,6 @@ my_BIO_s_socket(void)
 			my_bio_methods = NULL;
 			return NULL;
 		}
-#else
-		my_bio_methods = malloc(sizeof(BIO_METHOD));
-		if (!my_bio_methods)
-			return NULL;
-		memcpy(my_bio_methods, biom, sizeof(BIO_METHOD));
-		my_bio_methods->bread = my_sock_read;
-		my_bio_methods->bwrite = my_sock_write;
-#endif
 	}
 	return my_bio_methods;
 }
@@ -1098,7 +1075,7 @@ load_dh_buffer(const char *buffer, size_t len)
 	BIO		   *bio;
 	DH		   *dh = NULL;
 
-	bio = BIO_new_mem_buf(unconstify(char *, buffer), len);
+	bio = BIO_new_mem_buf(buffer, len);
 	if (bio == NULL)
 		return NULL;
 	dh = PEM_read_bio_DHparams(bio, NULL, NULL, NULL);
@@ -1466,10 +1443,11 @@ SSLerrmessage(unsigned long ecode)
 		return errreason;
 
 	/*
-	 * In OpenSSL 3.0.0 and later, ERR_reason_error_string randomly refuses to
-	 * map system errno values.  We can cover that shortcoming with this bit
-	 * of code.  Older OpenSSL versions don't have the ERR_SYSTEM_ERROR macro,
-	 * but that's okay because they don't have the shortcoming either.
+	 * In OpenSSL 3.0.0 and later, ERR_reason_error_string does not map system
+	 * errno values anymore.  (See OpenSSL source code for the explanation.)
+	 * We can cover that shortcoming with this bit of code.  Older OpenSSL
+	 * versions don't have the ERR_SYSTEM_ERROR macro, but that's okay because
+	 * they don't have the shortcoming either.
 	 */
 #ifdef ERR_SYSTEM_ERROR
 	if (ERR_SYSTEM_ERROR(ecode))

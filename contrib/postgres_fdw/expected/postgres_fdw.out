@@ -637,6 +637,17 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ft_empty ORDER BY c1;
    Remote SQL: SELECT c1, c2 FROM public.loct_empty ORDER BY c1 ASC NULLS LAST
 (3 rows)
 
+-- test restriction on non-system foreign tables.
+SET restrict_nonsystem_relation_kind TO 'foreign-table';
+SELECT * from ft1 where c1 < 1; -- ERROR
+ERROR:  access to non-system foreign table is restricted
+INSERT INTO ft1 (c1) VALUES (1); -- ERROR
+ERROR:  access to non-system foreign table is restricted
+DELETE FROM ft1 WHERE c1 = 1; -- ERROR
+ERROR:  access to non-system foreign table is restricted
+TRUNCATE ft1; -- ERROR
+ERROR:  access to non-system foreign table is restricted
+RESET restrict_nonsystem_relation_kind;
 -- ===================================================================
 -- WHERE with remotely-executable conditions
 -- ===================================================================
@@ -10461,13 +10472,15 @@ NOTICE:  drop cascades to 2 other objects
 DETAIL:  drop cascades to user mapping for public on server loopback3
 drop cascades to foreign table ft7
 -- List all the existing cached connections. loopback and loopback3
--- should be output as invalid connections. Also the server name for
--- loopback3 should be NULL because the server was dropped.
-SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
- server_name | valid | used_in_xact | closed 
--------------+-------+--------------+--------
- loopback    | f     | t            | 
-             | f     | t            | 
+-- should be output as invalid connections. Also the server name and user name
+-- for loopback3 should be NULL because both server and user mapping were
+-- dropped.
+SELECT server_name, user_name = CURRENT_USER as "user_name = CURRENT_USER", valid, used_in_xact, closed
+FROM postgres_fdw_get_connections() ORDER BY 1;
+ server_name | user_name = CURRENT_USER | valid | used_in_xact | closed 
+-------------+--------------------------+-------+--------------+--------
+ loopback    | t                        | f     | t            | 
+             |                          | f     | t            | 
 (2 rows)
 
 -- The invalid connections get closed in pgfdw_xact_callback during commit.

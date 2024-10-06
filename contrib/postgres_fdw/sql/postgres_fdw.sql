@@ -327,6 +327,14 @@ DELETE FROM loct_empty;
 ANALYZE ft_empty;
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ft_empty ORDER BY c1;
 
+-- test restriction on non-system foreign tables.
+SET restrict_nonsystem_relation_kind TO 'foreign-table';
+SELECT * from ft1 where c1 < 1; -- ERROR
+INSERT INTO ft1 (c1) VALUES (1); -- ERROR
+DELETE FROM ft1 WHERE c1 = 1; -- ERROR
+TRUNCATE ft1; -- ERROR
+RESET restrict_nonsystem_relation_kind;
+
 -- ===================================================================
 -- WHERE with remotely-executable conditions
 -- ===================================================================
@@ -3374,9 +3382,11 @@ SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
 ALTER SERVER loopback OPTIONS (ADD use_remote_estimate 'off');
 DROP SERVER loopback3 CASCADE;
 -- List all the existing cached connections. loopback and loopback3
--- should be output as invalid connections. Also the server name for
--- loopback3 should be NULL because the server was dropped.
-SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
+-- should be output as invalid connections. Also the server name and user name
+-- for loopback3 should be NULL because both server and user mapping were
+-- dropped.
+SELECT server_name, user_name = CURRENT_USER as "user_name = CURRENT_USER", valid, used_in_xact, closed
+FROM postgres_fdw_get_connections() ORDER BY 1;
 -- The invalid connections get closed in pgfdw_xact_callback during commit.
 COMMIT;
 -- All cached connections were closed while committing above xact, so no

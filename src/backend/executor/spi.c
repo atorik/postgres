@@ -2044,6 +2044,8 @@ SPI_result_code_string(int code)
  * SPI_plan_get_plan_sources --- get a SPI plan's underlying list of
  * CachedPlanSources.
  *
+ * CAUTION: there is no check on whether the CachedPlanSources are up-to-date.
+ *
  * This is exported so that PL/pgSQL can use it (this beats letting PL/pgSQL
  * look directly into the SPIPlan for itself).  It's not documented in
  * spi.sgml because we'd just as soon not have too many places using this.
@@ -2976,7 +2978,7 @@ _SPI_error_callback(void *arg)
 		switch (carg->mode)
 		{
 			case RAW_PARSE_PLPGSQL_EXPR:
-				errcontext("SQL expression \"%s\"", query);
+				errcontext("PL/pgSQL expression \"%s\"", query);
 				break;
 			case RAW_PARSE_PLPGSQL_ASSIGN1:
 			case RAW_PARSE_PLPGSQL_ASSIGN2:
