@@ -5668,6 +5668,23 @@ HandleLogQueryPlanInterrupt(void)
 	/* latch will be set by procsignal_sigusr1_handler */
 }
 
+static void
+WrapChildExecProcNodesWithExplain(PlanState **planstates, int nplans)
+{
+	int			i;
+
+	for (i = 0; i < nplans; i++)
+		WrapExecProcNodeWithExplain(planstates[i]);
+}
+
+static void
+WrapCustomChildrenExecProcNodesWithExplain(CustomScanState *css)
+{
+	ListCell   *cell;
+
+	foreach(cell, css->custom_ps)
+		UnWrapExecProcNodeWithExplain((PlanState *) lfirst(cell));
+}
 /*
  * WrapExecProcNodeWithExplain -
  *	  Wrap ExecProcNode with ExecProcNodeWithExplain recursively
@@ -5686,6 +5703,66 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 		WrapExecProcNodeWithExplain(ps->lefttree);
 	if (ps->righttree != NULL)
 		WrapExecProcNodeWithExplain(ps->righttree);
+
+	/* special child plans */
+	switch (nodeTag(ps->plan))
+	{
+		case T_Append:
+			ereport(LOG,
+				errmsg("wrapping append.."));
+
+			WrapChildExecProcNodesWithExplain(((AppendState *) ps)->appendplans,
+											((AppendState *) ps)->as_nplans);
+			break;
+		case T_MergeAppend:
+			ereport(LOG,
+				errmsg("wrapping MergeAppend.."));
+			WrapChildExecProcNodesWithExplain(((MergeAppendState *) ps)->mergeplans,
+											((MergeAppendState *) ps)->ms_nplans);
+			break;
+		case T_BitmapAnd:
+			ereport(LOG,
+				errmsg("wrapping BitmapAndState.."));
+			WrapChildExecProcNodesWithExplain(((BitmapAndState *) ps)->bitmapplans,
+											((BitmapAndState *) ps)->nplans);
+			break;
+		case T_BitmapOr:
+			ereport(LOG,
+				errmsg("wrapping BitmapOrtate.."));
+			WrapChildExecProcNodesWithExplain(((BitmapOrState *) ps)->bitmapplans,
+											((BitmapOrState *) ps)->nplans);
+			break;
+		case T_SubqueryScan:
+			ereport(LOG,
+				errmsg("wrapping Subquery.."));
+			WrapExecProcNodeWithExplain(((SubqueryScanState *) ps)->subplan);
+			break;
+		case T_CustomScan:
+			ereport(LOG,
+				errmsg("wrapping CustomScanState.."));
+			WrapCustomChildrenExecProcNodesWithExplain((CustomScanState *) ps);
+			break;
+		default:
+			break;
+	}
+}
+
+static void
+UnWrapChildExecProcNodesWithExplain(PlanState **planstates, int nplans)
+{
+	int			i;
+
+	for (i = 0; i < nplans; i++)
+		UnWrapExecProcNodeWithExplain(planstates[i]);
+}
+
+static void
+UnWrapCustomChildrenExecProcNodesWithExplain(CustomScanState *css)
+{
+	ListCell   *cell;
+
+	foreach(cell, css->custom_ps)
+		UnWrapExecProcNodeWithExplain((PlanState *) lfirst(cell));
 }
 
 /*
@@ -5704,6 +5781,48 @@ UnWrapExecProcNodeWithExplain(PlanState *ps)
 		UnWrapExecProcNodeWithExplain(ps->lefttree);
 	if (ps->righttree != NULL)
 		UnWrapExecProcNodeWithExplain(ps->righttree);
+
+	/* special child plans */
+	switch (nodeTag(ps->plan))
+	{
+		case T_Append:
+			ereport(LOG,
+				errmsg("unwrapping Append.."));
+
+			UnWrapChildExecProcNodesWithExplain(((AppendState *) ps)->appendplans,
+												((AppendState *) ps)->as_nplans);
+			break;
+		case T_MergeAppend:
+			ereport(LOG,
+				errmsg("unwrapping MergeAppend.."));
+			UnWrapChildExecProcNodesWithExplain(((MergeAppendState *) ps)->mergeplans,
+												((MergeAppendState *) ps)->ms_nplans);
+			break;
+		case T_BitmapAnd:
+			ereport(LOG,
+				errmsg("unwrapping BitmapAndState.."));
+			UnWrapChildExecProcNodesWithExplain(((BitmapAndState *) ps)->bitmapplans,
+												((BitmapAndState *) ps)->nplans);
+			break;
+		case T_BitmapOr:
+			ereport(LOG,
+				errmsg("unwrapping BitmapOrtate.."));
+			UnWrapChildExecProcNodesWithExplain(((BitmapOrState *) ps)->bitmapplans,
+												((BitmapOrState *) ps)->nplans);
+			break;
+		case T_SubqueryScan:
+			ereport(LOG,
+				errmsg("unwrapping Subquery.."));
+			UnWrapExecProcNodeWithExplain(((SubqueryScanState *) ps)->subplan);
+			break;
+		case T_CustomScan:
+			ereport(LOG,
+				errmsg("unwrapping CustomScanState.."));
+			UnWrapCustomChildrenExecProcNodesWithExplain((CustomScanState *) ps);
+			break;
+		default:
+			break;
+	}
 }
 
 /*
@@ -5778,12 +5897,11 @@ ProcessLogQueryPlanInterrupt(void)
 
 	if (ActiveQueryDesc == NULL)
 	{
-	// for speeding up test
-	//	ereport(LOG_SERVER_ONLY,
-	//			errmsg("backend with PID %d is not running a query or a subtransaction is aborted",
-	//				MyProcPid),
-	//			errhidestmt(true),
-	//			errhidecontext(true));
+		ereport(LOG_SERVER_ONLY,
+				errmsg("backend with PID %d is not running a query or a subtransaction is aborted",
+					MyProcPid),
+				errhidestmt(true),
+				errhidecontext(true));
 
 		ProcessLogQueryPlanInterruptActive = false;
 		return;
