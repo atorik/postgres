@@ -424,7 +424,17 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 static int64
 defGetCopyRejectLimitOption(DefElem *def)
 {
-	int64		reject_limit = defGetInt64(def);
+	int64		reject_limit;
+
+	// error message is odd.
+	// =# create foreign table on_error_ignr_rl (i int, t text) server f_fdw options (   filename 'test.data', format 'csv', on_error 'ignore', reject_limit '9999999999999999999999999999999999999');
+	//ERROR:  REJECT_LIMIT (-1) must be greater than zero
+
+	if (!nodeTag(def->arg) == T_String)
+		reject_limit = defGetInt64(def);
+	else
+		// atoi() should be other func?
+		reject_limit = atoi(defGetString(def));
 
 	if (reject_limit <= 0)
 		ereport(ERROR,
