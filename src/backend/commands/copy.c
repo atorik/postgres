@@ -426,15 +426,15 @@ defGetCopyRejectLimitOption(DefElem *def)
 {
 	int64		reject_limit;
 
-	// error message is odd.
-	// =# create foreign table on_error_ignr_rl (i int, t text) server f_fdw options (   filename 'test.data', format 'csv', on_error 'ignore', reject_limit '9999999999999999999999999999999999999');
-	//ERROR:  REJECT_LIMIT (-1) must be greater than zero
-
-	if (!nodeTag(def->arg) == T_String)
-		reject_limit = defGetInt64(def);
+	if (def->arg == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("%s requires a numeric value",
+						def->defname)));
+	else if (nodeTag(def->arg) == T_String)
+		reject_limit = pg_strtoint64(strVal(def->arg));
 	else
-		// atoi() should be other func?
-		reject_limit = atoi(defGetString(def));
+		reject_limit = defGetInt64(def);
 
 	if (reject_limit <= 0)
 		ereport(ERROR,
