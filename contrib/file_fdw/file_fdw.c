@@ -76,8 +76,8 @@ static const struct FileFdwOption valid_options[] = {
 	{"default", ForeignTableRelationId},
 	{"encoding", ForeignTableRelationId},
 	{"on_error", ForeignTableRelationId},
-	{"reject_limit", ForeignTableRelationId},
 	{"log_verbosity", ForeignTableRelationId},
+	{"reject_limit", ForeignTableRelationId},
 	{"force_not_null", AttributeRelationId},
 	{"force_null", AttributeRelationId},
 

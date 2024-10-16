@@ -224,6 +224,14 @@ SELECT * FROM agg_bad;
   42 | 324.78
 (2 rows)
 
+ALTER FOREIGN TABLE agg_bad OPTIONS (REJECT_LIMIT '1');
+SELECT * FROM agg_bad;
+  a  |   b    
+-----+--------
+ 100 | 99.097
+  42 | 324.78
+(2 rows)
+
 ANALYZE agg_bad;
 -- misc query tests
 \t on

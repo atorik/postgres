@@ -155,6 +155,8 @@ ALTER FOREIGN TABLE agg_bad OPTIONS (ADD on_error 'ignore');
 SELECT * FROM agg_bad;
 ALTER FOREIGN TABLE agg_bad OPTIONS (ADD log_verbosity 'silent');
 SELECT * FROM agg_bad;
+ALTER FOREIGN TABLE agg_bad OPTIONS (REJECT_LIMIT '1');
+SELECT * FROM agg_bad;
 ANALYZE agg_bad;
 
 -- misc query tests
