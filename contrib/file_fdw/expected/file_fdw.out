@@ -206,7 +206,7 @@ SELECT * FROM agg_csv c JOIN agg_text t ON (t.a = c.a) ORDER BY c.a;
 SELECT * FROM agg_bad;               -- ERROR
 ERROR:  invalid input syntax for type real: "aaa"
 CONTEXT:  COPY agg_bad, line 3, column b: "aaa"
--- on_error and log_verbosity tests
+-- on_error, log_verbosity and reject_limit tests
 ALTER FOREIGN TABLE agg_bad OPTIONS (ADD on_error 'ignore');
 SELECT * FROM agg_bad;
 NOTICE:  1 row was skipped due to data type incompatibility
@@ -217,6 +217,14 @@ NOTICE:  1 row was skipped due to data type incompatibility
 (2 rows)
 
 ALTER FOREIGN TABLE agg_bad OPTIONS (ADD log_verbosity 'silent');
+SELECT * FROM agg_bad;
+  a  |   b    
+-----+--------
+ 100 | 99.097
+  42 | 324.78
+(2 rows)
+
+ALTER FOREIGN TABLE agg_bad OPTIONS (reject_limit '1');
 SELECT * FROM agg_bad;
   a  |   b    
 -----+--------

@@ -424,7 +424,17 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 static int64
 defGetCopyRejectLimitOption(DefElem *def)
 {
-	int64		reject_limit = defGetInt64(def);
+	int64		reject_limit;
+
+	if (def->arg == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("%s requires a numeric value",
+						def->defname)));
+	else if (nodeTag(def->arg) == T_String)
+		reject_limit = pg_strtoint64(strVal(def->arg));
+	else
+		reject_limit = defGetInt64(def);
 
 	if (reject_limit <= 0)
 		ereport(ERROR,
