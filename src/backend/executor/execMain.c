@@ -73,7 +73,7 @@ ExecutorEnd_hook_type ExecutorEnd_hook = NULL;
 ExecutorCheckPerms_hook_type ExecutorCheckPerms_hook = NULL;
 
 /* Currently executing query's QueryDesc */
-QueryDesc *ActiveQueryDesc = NULL;
+QueryDesc  *ActiveQueryDesc = NULL;
 
 /* decls for local routines only used within this module */
 static void InitPlan(QueryDesc *queryDesc, int eflags);
@@ -304,7 +304,7 @@ ExecutorRun(QueryDesc *queryDesc,
 	 * Update ActiveQueryDesc here to enable retrieval of the currently
 	 * running queryDesc for nested queries.
 	 */
-	QueryDesc *save_ActiveQueryDesc;
+	QueryDesc  *save_ActiveQueryDesc;
 
 	save_ActiveQueryDesc = ActiveQueryDesc;
 	ActiveQueryDesc = queryDesc;

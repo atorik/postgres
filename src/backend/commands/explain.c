@@ -45,7 +45,7 @@
 #include "utils/typcache.h"
 #include "utils/xml.h"
 
-bool ProcessLogQueryPlanInterruptActive = false;
+bool		ProcessLogQueryPlanInterruptActive = false;
 
 /* Hook for plugins to get control in ExplainOneQuery() */
 ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
@@ -1981,10 +1981,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 
 	/*
 	 * We have to forcibly clean up the instrumentation state because we
-	 * haven't done ExecutorEnd yet.  This is pretty grotty ...
-	 * This cleanup should not be done when the query has already been
-	 * executed and explain has been called by signal, as the target query
-	 * may use instrumentation and clean itself up.
+	 * haven't done ExecutorEnd yet.  This is pretty grotty ... This cleanup
+	 * should not be done when the query has already been executed and explain
+	 * has been called by signal, as the target query may use instrumentation
+	 * and clean itself up.
 	 *
 	 * Note: contrib/auto_explain could cause instrumentation to be set up
 	 * even though we didn't ask for it here.  Be careful not to print any
@@ -5685,6 +5685,7 @@ WrapCustomChildrenExecProcNodesWithExplain(CustomScanState *css)
 	foreach(cell, css->custom_ps)
 		UnWrapExecProcNodeWithExplain((PlanState *) lfirst(cell));
 }
+
 /*
  * WrapExecProcNodeWithExplain -
  *	  Wrap ExecProcNode with ExecProcNodeWithExplain recursively
@@ -5709,37 +5710,37 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 	{
 		case T_Append:
 			ereport(LOG,
-				errmsg("wrapping append.."));
+					errmsg("wrapping append.."));
 
 			WrapChildExecProcNodesWithExplain(((AppendState *) ps)->appendplans,
-											((AppendState *) ps)->as_nplans);
+											  ((AppendState *) ps)->as_nplans);
 			break;
 		case T_MergeAppend:
 			ereport(LOG,
-				errmsg("wrapping MergeAppend.."));
+					errmsg("wrapping MergeAppend.."));
 			WrapChildExecProcNodesWithExplain(((MergeAppendState *) ps)->mergeplans,
-											((MergeAppendState *) ps)->ms_nplans);
+											  ((MergeAppendState *) ps)->ms_nplans);
 			break;
 		case T_BitmapAnd:
 			ereport(LOG,
-				errmsg("wrapping BitmapAndState.."));
+					errmsg("wrapping BitmapAndState.."));
 			WrapChildExecProcNodesWithExplain(((BitmapAndState *) ps)->bitmapplans,
-											((BitmapAndState *) ps)->nplans);
+											  ((BitmapAndState *) ps)->nplans);
 			break;
 		case T_BitmapOr:
 			ereport(LOG,
-				errmsg("wrapping BitmapOrtate.."));
+					errmsg("wrapping BitmapOrtate.."));
 			WrapChildExecProcNodesWithExplain(((BitmapOrState *) ps)->bitmapplans,
-											((BitmapOrState *) ps)->nplans);
+											  ((BitmapOrState *) ps)->nplans);
 			break;
 		case T_SubqueryScan:
 			ereport(LOG,
-				errmsg("wrapping Subquery.."));
+					errmsg("wrapping Subquery.."));
 			WrapExecProcNodeWithExplain(((SubqueryScanState *) ps)->subplan);
 			break;
 		case T_CustomScan:
 			ereport(LOG,
-				errmsg("wrapping CustomScanState.."));
+					errmsg("wrapping CustomScanState.."));
 			WrapCustomChildrenExecProcNodesWithExplain((CustomScanState *) ps);
 			break;
 		default:
@@ -5787,37 +5788,37 @@ UnWrapExecProcNodeWithExplain(PlanState *ps)
 	{
 		case T_Append:
 			ereport(LOG,
-				errmsg("unwrapping Append.."));
+					errmsg("unwrapping Append.."));
 
 			UnWrapChildExecProcNodesWithExplain(((AppendState *) ps)->appendplans,
 												((AppendState *) ps)->as_nplans);
 			break;
 		case T_MergeAppend:
 			ereport(LOG,
-				errmsg("unwrapping MergeAppend.."));
+					errmsg("unwrapping MergeAppend.."));
 			UnWrapChildExecProcNodesWithExplain(((MergeAppendState *) ps)->mergeplans,
 												((MergeAppendState *) ps)->ms_nplans);
 			break;
 		case T_BitmapAnd:
 			ereport(LOG,
-				errmsg("unwrapping BitmapAndState.."));
+					errmsg("unwrapping BitmapAndState.."));
 			UnWrapChildExecProcNodesWithExplain(((BitmapAndState *) ps)->bitmapplans,
 												((BitmapAndState *) ps)->nplans);
 			break;
 		case T_BitmapOr:
 			ereport(LOG,
-				errmsg("unwrapping BitmapOrtate.."));
+					errmsg("unwrapping BitmapOrtate.."));
 			UnWrapChildExecProcNodesWithExplain(((BitmapOrState *) ps)->bitmapplans,
 												((BitmapOrState *) ps)->nplans);
 			break;
 		case T_SubqueryScan:
 			ereport(LOG,
-				errmsg("unwrapping Subquery.."));
+					errmsg("unwrapping Subquery.."));
 			UnWrapExecProcNodeWithExplain(((SubqueryScanState *) ps)->subplan);
 			break;
 		case T_CustomScan:
 			ereport(LOG,
-				errmsg("unwrapping CustomScanState.."));
+					errmsg("unwrapping CustomScanState.."));
 			UnWrapCustomChildrenExecProcNodesWithExplain((CustomScanState *) ps);
 			break;
 		default:
@@ -5851,17 +5852,17 @@ ExecProcNodeWithExplain(PlanState *ps)
 	es->verbose = true;
 	es->signaled = true;
 
-	// for testing
-//	if (ActiveQueryDesc == NULL)
-//		return ps->ExecProcNodeOriginal(ps);
+	/* for testing */
+/* 	if (ActiveQueryDesc == NULL) */
+/* 		return ps->ExecProcNodeOriginal(ps); */
 
 	ExplainAssembleLogOutput(es, ActiveQueryDesc, EXPLAIN_FORMAT_TEXT, 0, -1);
 
 	ereport(LOG_SERVER_ONLY,
 			errmsg("query plan running on backend with PID %d is:\n%s",
-					MyProcPid, es->str->data),
-			 errhidestmt(true),
-			 errhidecontext(true));
+				   MyProcPid, es->str->data),
+			errhidestmt(true),
+			errhidecontext(true));
 
 	MemoryContextSwitchTo(old_cxt);
 	MemoryContextDelete(cxt);
@@ -5899,7 +5900,7 @@ ProcessLogQueryPlanInterrupt(void)
 	{
 		ereport(LOG_SERVER_ONLY,
 				errmsg("backend with PID %d is not running a query or a subtransaction is aborted",
-					MyProcPid),
+					   MyProcPid),
 				errhidestmt(true),
 				errhidecontext(true));
 
@@ -5925,7 +5926,7 @@ pg_log_query_plan(PG_FUNCTION_ARGS)
 {
 	int			pid = PG_GETARG_INT32(0);
 	PGPROC	   *proc;
-	PgBackendStatus	*be_status;
+	PgBackendStatus *be_status;
 
 	proc = BackendPidGetProc(pid);
 

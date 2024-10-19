@@ -101,7 +101,7 @@ extern PGDLLEXPORT void injection_notice(const char *name,
 extern PGDLLEXPORT void injection_wait(const char *name,
 									   const void *private_data);
 extern PGDLLEXPORT void injection_HandleLogQueryPlanInterrupt(const char *name,
-									   const void *private_data);
+															  const void *private_data);
 
 /* track if injection points attached in this process are linked to it */
 static bool injection_point_local = false;
