@@ -31,7 +31,6 @@
 #include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
 #include "storage/procarray.h"
-#include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
 #include "utils/backend_status.h"
 #include "utils/builtins.h"

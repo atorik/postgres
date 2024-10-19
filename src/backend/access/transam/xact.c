@@ -62,7 +62,6 @@
 #include "storage/procarray.h"
 #include "storage/sinvaladt.h"
 #include "storage/smgr.h"
-#include "tcop/pquery.h"
 #include "utils/builtins.h"
 #include "utils/combocid.h"
 #include "utils/guc.h"

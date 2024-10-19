@@ -18,6 +18,7 @@
 #include "parser/parse_node.h"
 
 extern PGDLLIMPORT bool ProcessLogQueryPlanInterruptActive;
+extern PGDLLIMPORT QueryDesc *ActiveQueryDesc;
 
 typedef enum ExplainSerializeOption
 {
