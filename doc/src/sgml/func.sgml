@@ -29039,12 +29039,15 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
    </para>
 
    <table id="recovery-synchronization-procedure-table">
-    <title>Recovery Synchronization Procedure</title>
+    <title>Recovery Synchronization Procedure and Function</title>
     <tgroup cols="1">
      <thead>
       <row>
        <entry role="func_table_entry"><para role="func_signature">
-        Procedure
+        Procedure or Function
+       </para>
+       <para>
+        Type
        </para>
        <para>
         Description
@@ -29060,8 +29063,11 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
         </indexterm>
         <function>pg_wal_replay_wait</function> (
           <parameter>target_lsn</parameter> <type>pg_lsn</type>,
-          <parameter>timeout</parameter> <type>bigint</type> <literal>DEFAULT</literal> <literal>0</literal>)
-        <returnvalue>void</returnvalue>
+          <parameter>timeout</parameter> <type>bigint</type> <literal>DEFAULT</literal> <literal>0</literal>,
+          <parameter>no_error</parameter> <type>bool</type> <literal>DEFAULT</literal> <literal>false</literal>)
+       </para>
+       <para>
+        Procedure
        </para>
        <para>
         Waits until recovery replays <literal>target_lsn</literal>.
@@ -29072,7 +29078,30 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
         procedure waits until <literal>target_lsn</literal> is reached or
         the specified <parameter>timeout</parameter> has elapsed.
         On timeout, or if the server is promoted before
-        <literal>target_lsn</literal> is reached, an error is emitted.
+        <literal>target_lsn</literal> is reached, an error is emitted,
+        as soon as <parameter>no_error</parameter> is false.
+        If <parameter>no_error</parameter> is set to true, then the procedure
+        doesn't throw errors.  The last result status could be read
+        with <function>pg_wal_replay_wait_status</function>.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_wal_replay_wait_status</primary>
+        </indexterm>
+        <function>pg_wal_replay_wait_status</function> ()
+        <returnvalue>text</returnvalue>
+       </para>
+       <para>
+        Function
+       </para>
+       <para>
+        Returns the last result status for
+        <function>pg_wal_replay_wait</function> procedure.  The possible
+        values are <literal>success</literal>, <literal>timeout</literal>,
+        and <literal>not in recovery</literal>.
        </para></entry>
       </row>
      </tbody>
@@ -29094,7 +29123,8 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
    <para>
     <function>pg_wal_replay_wait</function> should be called on standby.
     If a user calls <function>pg_wal_replay_wait</function> on primary, it
-    will error out.  However, if <function>pg_wal_replay_wait</function> is
+    will error out as soon as <parameter>no_error</parameter> is false.
+    However, if <function>pg_wal_replay_wait</function> is
     called on primary promoted from standby and <literal>target_lsn</literal>
     was already replayed, then <function>pg_wal_replay_wait</function> just
     exits immediately.
@@ -29138,6 +29168,20 @@ postgres=# SELECT * FROM movie WHERE genre = 'Drama';
    <programlisting>
 postgres=# CALL pg_wal_replay_wait('0/306EE20', 100);
 ERROR:  timed out while waiting for target LSN 0/306EE20 to be replayed; current replay LSN 0/306EA60
+    </programlisting>
+
+   The same example uses <function>pg_wal_replay_wait</function> with
+   <parameter>no_error</parameter> set to true.  In this case, the result
+   status must be read with <function>pg_wal_replay_wait_status</function>.
+
+   <programlisting>
+postgres=# CALL pg_wal_replay_wait('0/306EE20', 100, true);
+CALL
+postgres=# SELECT pg_wal_replay_wait_status();
+ pg_wal_replay_wait_status
+---------------------------
+ timeout
+(1 row)
     </programlisting>
 
    </para>
@@ -30224,15 +30268,13 @@ DETAIL:  Make sure pg_wal_replay_wait() isn't called within a transaction with a
          <optional>, <parameter>relpages</parameter> <type>integer</type></optional>
          <optional>, <parameter>reltuples</parameter> <type>real</type></optional>
          <optional>, <parameter>relallvisible</parameter> <type>integer</type></optional> )
-         <returnvalue>boolean</returnvalue>
+         <returnvalue>void</returnvalue>
         </para>
         <para>
          Updates relation-level statistics for the given relation to the
          specified values. The parameters correspond to columns in <link
          linkend="catalog-pg-class"><structname>pg_class</structname></link>. Unspecified
-         or <literal>NULL</literal> values leave the setting
-         unchanged. Returns <literal>true</literal> if a change was made;
-         <literal>false</literal> otherwise.
+         or <literal>NULL</literal> values leave the setting unchanged.
         </para>
         <para>
          Ordinarily, these statistics are collected automatically or updated
@@ -30247,7 +30289,7 @@ DETAIL:  Make sure pg_wal_replay_wait() isn't called within a transaction with a
         </para>
         <para>
          The value of <structfield>relpages</structfield> must be greater than
-         or equal to <literal>0</literal>,
+         or equal to <literal>-1</literal>,
          <structfield>reltuples</structfield> must be greater than or equal to
          <literal>-1.0</literal>, and <structfield>relallvisible</structfield>
          must be greater than or equal to <literal>0</literal>.
@@ -30262,16 +30304,187 @@ DETAIL:  Make sure pg_wal_replay_wait() isn't called within a transaction with a
           <primary>pg_clear_relation_stats</primary>
          </indexterm>
          <function>pg_clear_relation_stats</function> ( <parameter>relation</parameter> <type>regclass</type> )
-         <returnvalue>boolean</returnvalue>
+         <returnvalue>void</returnvalue>
         </para>
         <para>
          Clears table-level statistics for the given relation, as though the
-         table was newly created. Returns <literal>true</literal> if a change
-         was made; <literal>false</literal> otherwise.
+         table was newly created.
         </para>
         <para>
          The caller must have the <literal>MAINTAIN</literal> privilege on
          the table or be the owner of the database.
+        </para>
+       </entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_restore_relation_stats</primary>
+        </indexterm>
+        <function>pg_restore_relation_stats</function> (
+        <literal>VARIADIC</literal> <parameter>kwargs</parameter> <type>"any"</type> )
+        <returnvalue>boolean</returnvalue>
+        </para>
+        <para>
+         Similar to <function>pg_set_relation_stats()</function>, but intended
+         for bulk restore of relation statistics. The tracked statistics may
+         change from version to version, so the primary purpose of this
+         function is to maintain a consistent function signature to avoid
+         errors when restoring statistics from previous versions.
+        </para>
+        <para>
+         Arguments are passed as pairs of <replaceable>argname</replaceable>
+         and <replaceable>argvalue</replaceable>, where
+         <replaceable>argname</replaceable> corresponds to a named argument in
+         <function>pg_set_relation_stats()</function> and
+         <replaceable>argvalue</replaceable> is of the corresponding type.
+        </para>
+        <para>
+         Additionally, this function supports argument name
+         <literal>version</literal> of type <type>integer</type>, which
+         specifies the version from which the statistics originated, improving
+         interpretation of older statistics.
+        </para>
+        <para>
+         For example, to set the <structname>relpages</structname> and
+         <structname>reltuples</structname> of the table
+         <structname>mytable</structname>:
+<programlisting>
+ SELECT pg_restore_relation_stats(
+    'relation',  'mytable'::regclass,
+    'relpages',  173::integer,
+    'reltuples', 10000::float4);
+</programlisting>
+        </para>
+        <para>
+         Minor errors are reported as a <literal>WARNING</literal> and
+         ignored, and remaining statistics will still be restored. If all
+         specified statistics are successfully restored, return
+         <literal>true</literal>, otherwise <literal>false</literal>.
+        </para>
+       </entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry">
+        <para role="func_signature">
+         <indexterm>
+          <primary>pg_set_attribute_stats</primary>
+         </indexterm>
+         <function>pg_set_attribute_stats</function> (
+         <parameter>relation</parameter> <type>regclass</type>,
+         <parameter>attname</parameter> <type>name</type>,
+         <parameter>inherited</parameter> <type>boolean</type>
+         <optional>, <parameter>null_frac</parameter> <type>real</type></optional>
+         <optional>, <parameter>avg_width</parameter> <type>integer</type></optional>
+         <optional>, <parameter>n_distinct</parameter> <type>real</type></optional>
+         <optional>, <parameter>most_common_vals</parameter> <type>text</type>, <parameter>most_common_freqs</parameter> <type>real[]</type> </optional>
+         <optional>, <parameter>histogram_bounds</parameter> <type>text</type> </optional>
+         <optional>, <parameter>correlation</parameter> <type>real</type> </optional>
+         <optional>, <parameter>most_common_elems</parameter> <type>text</type>, <parameter>most_common_elem_freqs</parameter> <type>real[]</type> </optional>
+         <optional>, <parameter>elem_count_histogram</parameter> <type>real[]</type> </optional>
+         <optional>, <parameter>range_length_histogram</parameter> <type>text</type> </optional>
+         <optional>, <parameter>range_empty_frac</parameter> <type>real</type> </optional>
+         <optional>, <parameter>range_bounds_histogram</parameter> <type>text</type> </optional> )
+         <returnvalue>void</returnvalue>
+        </para>
+        <para>
+         Creates or updates attribute-level statistics for the given relation
+         and attribute name to the specified values. The parameters correspond
+         to attributes of the same name found in the <link
+         linkend="view-pg-stats"><structname>pg_stats</structname></link>
+         view.
+        </para>
+        <para>
+         Optional parameters default to <literal>NULL</literal>, which leave
+         the corresponding statistic unchanged.
+        </para>
+        <para>
+         Ordinarily, these statistics are collected automatically or updated
+         as a part of <xref linkend="sql-vacuum"/> or <xref
+         linkend="sql-analyze"/>, so it's not necessary to call this
+         function. However, it may be useful when testing the effects of
+         statistics on the planner to understand or anticipate plan changes.
+        </para>
+        <para>
+         The caller must have the <literal>MAINTAIN</literal> privilege on
+         the table or be the owner of the database.
+        </para>
+       </entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry">
+        <para role="func_signature">
+         <indexterm>
+          <primary>pg_clear_attribute_stats</primary>
+         </indexterm>
+         <function>pg_clear_attribute_stats</function> (
+         <parameter>relation</parameter> <type>regclass</type>,
+         <parameter>attname</parameter> <type>name</type>,
+         <parameter>inherited</parameter> <type>boolean</type> )
+         <returnvalue>void</returnvalue>
+        </para>
+        <para>
+         Clears table-level statistics for the given relation attribute, as
+         though the table was newly created.
+        </para>
+        <para>
+         The caller must have the <literal>MAINTAIN</literal> privilege on
+         the table or be the owner of the database.
+        </para>
+       </entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_restore_attribute_stats</primary>
+        </indexterm>
+        <function>pg_restore_attribute_stats</function> (
+        <literal>VARIADIC</literal> <parameter>kwargs</parameter> <type>"any"</type> )
+        <returnvalue>boolean</returnvalue>
+        </para>
+        <para>
+         Similar to <function>pg_set_attribute_stats()</function>, but
+         intended for bulk restore of attribute statistics. The tracked
+         statistics may change from version to version, so the primary purpose
+         of this function is to maintain a consistent function signature to
+         avoid errors when restoring statistics from previous versions.
+        </para>
+        <para>
+         Arguments are passed as pairs of <replaceable>argname</replaceable>
+         and <replaceable>argvalue</replaceable>, where
+         <replaceable>argname</replaceable> corresponds to a named argument in
+         <function>pg_set_attribute_stats()</function> and
+         <replaceable>argvalue</replaceable> is of the corresponding type.
+        </para>
+        <para>
+         Additionally, this function supports argument name
+         <literal>version</literal> of type <type>integer</type>, which
+         specifies the version from which the statistics originated, improving
+         interpretation of older statistics.
+        </para>
+        <para>
+         For example, to set the <structname>avg_width</structname> and
+         <structname>null_frac</structname> for the attribute
+         <structname>col1</structname> of the table
+         <structname>mytable</structname>:
+<programlisting>
+ SELECT pg_restore_attribute_stats(
+    'relation',    'mytable'::regclass,
+    'attname',     'col1'::name,
+    'inherited',   false,
+    'avg_width',   125::integer,
+    'null_frac',   0.5::real);
+</programlisting>
+        </para>
+        <para>
+         Minor errors are reported as a <literal>WARNING</literal> and
+         ignored, and remaining statistics will still be restored. If all
+         specified statistics are successfully restored, return
+         <literal>true</literal>, otherwise <literal>false</literal>.
         </para>
        </entry>
       </row>
