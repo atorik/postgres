@@ -63,6 +63,9 @@
 #include "utils/snapmgr.h"
 
 
+/* Currently executing query's QueryDesc */
+QueryDesc *ActiveQueryDesc = NULL;
+
 /* Hooks for plugins to get control in ExecutorStart/Run/Finish/End */
 ExecutorStart_hook_type ExecutorStart_hook = NULL;
 ExecutorRun_hook_type ExecutorRun_hook = NULL;
@@ -71,9 +74,6 @@ ExecutorEnd_hook_type ExecutorEnd_hook = NULL;
 
 /* Hook for plugin to get control in ExecCheckPermissions() */
 ExecutorCheckPerms_hook_type ExecutorCheckPerms_hook = NULL;
-
-/* Currently executing query's QueryDesc */
-QueryDesc  *ActiveQueryDesc = NULL;
 
 /* decls for local routines only used within this module */
 static void InitPlan(QueryDesc *queryDesc, int eflags);

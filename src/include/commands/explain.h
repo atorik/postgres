@@ -17,8 +17,8 @@
 #include "lib/stringinfo.h"
 #include "parser/parse_node.h"
 
-extern PGDLLIMPORT bool ProcessLogQueryPlanInterruptActive;
 extern PGDLLIMPORT QueryDesc *ActiveQueryDesc;
+extern PGDLLIMPORT bool ProcessLogQueryPlanInterruptActive;
 
 typedef enum ExplainSerializeOption
 {
