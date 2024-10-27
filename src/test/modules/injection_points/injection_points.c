@@ -17,7 +17,6 @@
 
 #include "postgres.h"
 
-#include "commands/explain.h"
 #include "fmgr.h"
 #include "injection_stats.h"
 #include "miscadmin.h"
@@ -100,8 +99,6 @@ extern PGDLLEXPORT void injection_notice(const char *name,
 										 const void *private_data);
 extern PGDLLEXPORT void injection_wait(const char *name,
 									   const void *private_data);
-extern PGDLLEXPORT void injection_HandleLogQueryPlanInterrupt(const char *name,
-															  const void *private_data);
 
 /* track if injection points attached in this process are linked to it */
 static bool injection_point_local = false;
@@ -333,19 +330,6 @@ injection_wait(const char *name, const void *private_data)
 	SpinLockRelease(&inj_state->lock);
 }
 
-void
-injection_HandleLogQueryPlanInterrupt(const char *name, const void *private_data)
-{
-	InjectionPointCondition *condition = (InjectionPointCondition *) private_data;
-
-	if (!injection_point_allowed(condition))
-		return;
-
-	HandleLogQueryPlanInterrupt();
-
-	elog(LOG, "triggered injection_HandleLogQueryPlanInterrupt for injection point %s", name);
-}
-
 /*
  * SQL function for creating an injection point.
  */
@@ -364,8 +348,6 @@ injection_points_attach(PG_FUNCTION_ARGS)
 		function = "injection_notice";
 	else if (strcmp(action, "wait") == 0)
 		function = "injection_wait";
-	else if (strcmp(action, "logqueryplan") == 0)
-		function = "injection_HandleLogQueryPlanInterrupt";
 	else
 		elog(ERROR, "incorrect action \"%s\" for injection point creation", action);
 

@@ -6281,4 +6281,3 @@ pg_log_query_plan(PG_FUNCTION_ARGS)
 
 	PG_RETURN_BOOL(true);
 }
-
