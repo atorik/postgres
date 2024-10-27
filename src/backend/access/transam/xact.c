@@ -2869,14 +2869,6 @@ AbortTransaction(void)
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
 	/*
-	 * Reset pg_log_query_plan() related global variables. When
-	 * ActiveQueryDesc is referenced after abort, some of its elements are
-	 * freed. To avoid accessing them, reset ActiveQueryDesc here.
-	 */
-	ActiveQueryDesc = NULL;
-	ProcessLogQueryPlanInterruptActive = false;
-
-	/*
 	 * check the current transaction state
 	 */
 	is_parallel_worker = (s->blockState == TBLOCK_PARALLEL_INPROGRESS);
@@ -2911,6 +2903,9 @@ AbortTransaction(void)
 
 	/* Reset snapshot export state. */
 	SnapBuildResetExportedSnapshotState();
+
+	/* Reset pg_log_query_plan() related state. */
+	ResetLogQueryPlanState();
 
 	/*
 	 * If this xact has started any unfinished parallel operation, clean up
@@ -5291,14 +5286,6 @@ AbortSubTransaction(void)
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
 	/*
-	 * Reset pg_log_query_plan() related global variables. When
-	 * ActiveQueryDesc is referenced after abort, some of its elements are
-	 * freed. To avoid accessing them, reset ActiveQueryDesc here.
-	 */
-	ActiveQueryDesc = NULL;
-	ProcessLogQueryPlanInterruptActive = false;
-
-	/*
 	 * check the current transaction state
 	 */
 	ShowTransactionState("AbortSubTransaction");
@@ -5320,6 +5307,9 @@ AbortSubTransaction(void)
 
 	/* Reset logical streaming state. */
 	ResetLogicalStreamingState();
+
+	/* Reset pg_log_query_plan() related state. */
+	ResetLogQueryPlanState();
 
 	/*
 	 * No need for SnapBuildResetExportedSnapshotState() here, snapshot

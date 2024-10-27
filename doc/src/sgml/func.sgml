@@ -28440,8 +28440,8 @@ LOG:  query plan running on backend with PID 201116 is:
         Settings: work_mem = '1MB'
         Query Identifier: 8621255546560739680
 </screen>
-    Note that when statements are executed inside a function, only the
-    plan of the most deeply nested query is logged.
+    Note that when the target is executing nested statements(statements executed
+    inside a function), only the innermost query plan is logged.
    </para>
 
    <para>
