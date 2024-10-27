@@ -46,6 +46,10 @@
 
 bool		ProcessLogQueryPlanInterruptActive = false;
 
+/* Currently executing query's QueryDesc */
+QueryDesc *ActiveQueryDesc = NULL;
+
+
 /* Hook for plugins to get control in ExplainOneQuery() */
 ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
 

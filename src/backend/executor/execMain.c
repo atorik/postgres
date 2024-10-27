@@ -43,6 +43,7 @@
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
+#include "commands/explain.h"
 #include "commands/matview.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
@@ -62,9 +63,6 @@
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
 
-
-/* Currently executing query's QueryDesc */
-QueryDesc *ActiveQueryDesc = NULL;
 
 /* Hooks for plugins to get control in ExecutorStart/Run/Finish/End */
 ExecutorStart_hook_type ExecutorStart_hook = NULL;
