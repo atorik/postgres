@@ -789,7 +789,7 @@ retry:
 			 */
 			ResetPerTupleExprContext(estate);
 
-			if (cstate->opts.reject_limit > 0 && \
+			if (cstate->opts.reject_limit > 0 &&
 				cstate->num_errors > cstate->opts.reject_limit)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),

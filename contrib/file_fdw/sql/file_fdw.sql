@@ -155,7 +155,10 @@ ALTER FOREIGN TABLE agg_bad OPTIONS (ADD on_error 'ignore');
 SELECT * FROM agg_bad;
 ALTER FOREIGN TABLE agg_bad OPTIONS (ADD log_verbosity 'silent');
 SELECT * FROM agg_bad;
-ALTER FOREIGN TABLE agg_bad OPTIONS (reject_limit '1');
+\set filename :abs_srcdir '/data/agg.bad2'
+ALTER FOREIGN TABLE agg_bad OPTIONS (SET filename :'filename', ADD reject_limit '1');
+SELECT * FROM agg_bad;
+ALTER FOREIGN TABLE agg_bad OPTIONS (SET reject_limit '2');
 SELECT * FROM agg_bad;
 ANALYZE agg_bad;
 
