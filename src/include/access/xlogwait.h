@@ -1,21 +1,21 @@
 /*-------------------------------------------------------------------------
  *
- * waitlsn.h
+ * xlogwait.h
  *	  Declarations for LSN replay waiting routines.
  *
  * Copyright (c) 2024, PostgreSQL Global Development Group
  *
- * src/include/commands/waitlsn.h
+ * src/include/access/xlogwait.h
  *
  *-------------------------------------------------------------------------
  */
-#ifndef WAIT_LSN_H
-#define WAIT_LSN_H
+#ifndef XLOG_WAIT_H
+#define XLOG_WAIT_H
 
 #include "lib/pairingheap.h"
 #include "postgres.h"
 #include "port/atomics.h"
-#include "storage/latch.h"
+#include "storage/procnumber.h"
 #include "storage/spin.h"
 #include "tcop/dest.h"
 
@@ -29,11 +29,8 @@ typedef struct WaitLSNProcInfo
 	/* LSN, which this process is waiting for */
 	XLogRecPtr	waitLSN;
 
-	/*
-	 * A pointer to the latch, which should be set once the waitLSN is
-	 * replayed.
-	 */
-	Latch	   *latch;
+	/* Process to wake up once the waitLSN is replayed */
+	ProcNumber	procno;
 
 	/* A pairing heap node for participation in waitLSNState->waitersHeap */
 	pairingheap_node phNode;
@@ -70,12 +67,23 @@ typedef struct WaitLSNState
 	WaitLSNProcInfo procInfos[FLEXIBLE_ARRAY_MEMBER];
 } WaitLSNState;
 
+/*
+ * Result statuses for WaitForLSNReplay().
+ */
+typedef enum
+{
+	WAIT_LSN_RESULT_SUCCESS,	/* Target LSN is reached */
+	WAIT_LSN_RESULT_TIMEOUT,	/* Timeout occurred */
+	WAIT_LSN_RESULT_NOT_IN_RECOVERY,	/* Recovery ended before or during our
+										 * wait */
+} WaitLSNResult;
+
 extern PGDLLIMPORT WaitLSNState *waitLSNState;
 
 extern Size WaitLSNShmemSize(void);
 extern void WaitLSNShmemInit(void);
-extern void WaitLSNSetLatches(XLogRecPtr currentLSN);
+extern void WaitLSNWakeup(XLogRecPtr currentLSN);
 extern void WaitLSNCleanup(void);
-extern void WaitForLSNReplay(XLogRecPtr targetLSN, int64 timeout);
+extern WaitLSNResult WaitForLSNReplay(XLogRecPtr targetLSN, int64 timeout);
 
-#endif							/* WAIT_LSN_H */
+#endif							/* XLOG_WAIT_H */

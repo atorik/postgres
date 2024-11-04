@@ -1258,6 +1258,7 @@ Interval
 IntervalAggState
 IntoClause
 InvalMessageArray
+InvalidationInfo
 InvalidationMsgsGroup
 IpcMemoryId
 IpcMemoryKey
@@ -2378,6 +2379,7 @@ RelFileLocator
 RelFileLocatorBackend
 RelFileNumber
 RelIdCacheEnt
+RelIdToTypeIdCacheEntry
 RelInfo
 RelInfoArr
 RelMapFile
@@ -3125,6 +3127,7 @@ WaitEventIPC
 WaitEventSet
 WaitEventTimeout
 WaitLSNProcInfo
+WaitLSNResult
 WaitLSNState
 WaitPMResult
 WalCloseMethod
@@ -3271,6 +3274,7 @@ _stringlist
 access_vector_t
 acquireLocksOnSubLinks_context
 add_nulling_relids_context
+addFkConstraintSides
 adjust_appendrel_attrs_context
 allocfunc
 amadjustmembers_function
@@ -3885,6 +3889,7 @@ saophash_hash
 save_buffer
 scram_state
 scram_state_enum
+script_error_callback_arg
 security_class_t
 sem_t
 sepgsql_context_info_t

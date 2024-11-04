@@ -62,11 +62,11 @@
 #include "access/xlogreader.h"
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
+#include "access/xlogwait.h"
 #include "backup/basebackup.h"
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
-#include "commands/waitlsn.h"
 #include "common/controldata_utils.h"
 #include "common/file_utils.h"
 #include "executor/instrument.h"
@@ -74,7 +74,6 @@
 #include "pg_trace.h"
 #include "pgstat.h"
 #include "port/atomics.h"
-#include "port/pg_iovec.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/startup.h"
 #include "postmaster/walsummarizer.h"
@@ -98,13 +97,16 @@
 #include "utils/guc_hooks.h"
 #include "utils/guc_tables.h"
 #include "utils/injection_point.h"
-#include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/relmapper.h"
 #include "utils/snapmgr.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 #include "utils/varlena.h"
+
+#ifdef WAL_DEBUG
+#include "utils/memutils.h"
+#endif
 
 /* timeline ID to be used when bootstrapping */
 #define BootstrapTimeLineID		1
@@ -2669,8 +2671,14 @@ XLogSetAsyncXactLSN(XLogRecPtr asyncXactLSN)
 			wakeup = true;
 	}
 
-	if (wakeup && ProcGlobal->walwriterLatch)
-		SetLatch(ProcGlobal->walwriterLatch);
+	if (wakeup)
+	{
+		volatile PROC_HDR *procglobal = ProcGlobal;
+		ProcNumber	walwriterProc = procglobal->walwriterProc;
+
+		if (walwriterProc != INVALID_PROC_NUMBER)
+			SetLatch(&GetPGProcByNumber(walwriterProc)->procLatch);
+	}
 }
 
 /*
@@ -6170,7 +6178,7 @@ StartupXLOG(void)
 	 * Wake up all waiters for replay LSN.  They need to report an error that
 	 * recovery was ended before reaching the target LSN.
 	 */
-	WaitLSNSetLatches(InvalidXLogRecPtr);
+	WaitLSNWakeup(InvalidXLogRecPtr);
 
 	/*
 	 * Shutdown the recovery environment.  This must occur after
@@ -7295,7 +7303,7 @@ CreateCheckPoint(int flags)
 	 * until after the above call that flushes the XLOG_CHECKPOINT_ONLINE
 	 * record.
 	 */
-	SetWalSummarizerLatch();
+	WakeupWalSummarizer();
 
 	/*
 	 * Let smgr do post-checkpoint cleanup (eg, deleting old files).
