@@ -421,8 +421,9 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 /*
  * Extract REJECT_LIMIT value from a DefElem.
  *
- * Since foreign table options must be single-quoted values, this function
- * accepts both int64 and string value.
+ * REJECT_LIMIT can be specified in two ways: as an int64 for the COPY command
+ * option or as a single-quoted string for the foreign table option using
+ * file_fdw. Therefore this function needs to handle both formats.
  */
 static int64
 defGetCopyRejectLimitOption(DefElem *def)
