@@ -793,7 +793,7 @@ retry:
 				cstate->num_errors > cstate->opts.reject_limit)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-						 errmsg("skipped more than REJECT_LIMIT (%lld) rows due to data type incompatibility",
+						 errmsg("skipped more than reject_limit (%lld) rows due to data type incompatibility",
 								(long long) cstate->opts.reject_limit)));
 
 			/* Repeat NextCopyFrom() until no soft error occurs */
