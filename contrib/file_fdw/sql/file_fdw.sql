@@ -77,6 +77,8 @@ CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (format 'csv', delimiter 
 ');       -- ERROR
 CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (format 'csv', null '
 ');       -- ERROR
+CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (on_error 'aaa');       -- ERROR
+CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (format 'binary', on_error 'ignore');       -- ERROR
 CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (reject_limit '1');       -- ERROR
 CREATE FOREIGN TABLE tbl () SERVER file_server;  -- ERROR
 
