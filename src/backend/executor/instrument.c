@@ -75,6 +75,15 @@ InstrStartNode(Instrumentation *instr)
 	if (instr->need_bufusage)
 		instr->bufusage_start = pgBufferUsage;
 
+	if (instr->need_bufusage) // NEED ANOTHER OPTION
+	{
+		struct	rusage	rusage;
+
+		getrusage(RUSAGE_SELF, &rusage);
+		instr->kcacheusage_start.ru_minflt = rusage.ru_minflt;
+		instr->kcacheusage_start.ru_majflt = rusage.ru_majflt;
+	}
+
 	if (instr->need_walusage)
 		instr->walusage_start = pgWalUsage;
 }
@@ -105,6 +114,19 @@ InstrStopNode(Instrumentation *instr, double nTuples)
 	if (instr->need_bufusage)
 		BufferUsageAccumDiff(&instr->bufusage,
 							 &pgBufferUsage, &instr->bufusage_start);
+
+	if (instr->need_bufusage)
+	{
+		struct	rusage	rusage;
+		KcacheUsage kcacheusage;
+
+		getrusage(RUSAGE_SELF, &rusage);
+		kcacheusage.ru_minflt = rusage.ru_minflt;
+		kcacheusage.ru_majflt = rusage.ru_majflt;
+
+		KcacheUsageAccumDiff(&instr->kcacheusage,
+							 &kcacheusage, &instr->kcacheusage_start);
+	}
 
 	if (instr->need_walusage)
 		WalUsageAccumDiff(&instr->walusage,
@@ -271,6 +293,16 @@ BufferUsageAccumDiff(BufferUsage *dst,
 						  add->temp_blk_read_time, sub->temp_blk_read_time);
 	INSTR_TIME_ACCUM_DIFF(dst->temp_blk_write_time,
 						  add->temp_blk_write_time, sub->temp_blk_write_time);
+}
+/* helper functions for XXXXXX */
+/* should be static? */
+void
+KcacheUsageAccumDiff(KcacheUsage *dst,
+					 const KcacheUsage *add,
+					 const KcacheUsage *sub)
+{
+	dst->ru_minflt += add->ru_minflt - sub->ru_minflt;
+	dst->ru_majflt += add->ru_majflt - sub->ru_majflt;
 }
 
 /* helper functions for WAL usage accumulation */

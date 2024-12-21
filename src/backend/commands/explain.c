@@ -145,6 +145,7 @@ static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static bool peek_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
+static void show_kcache_usage(ExplainState *es, const KcacheUsage *usage);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void show_memory_counters(ExplainState *es,
 								 const MemoryContextCounters *mem_counters);
@@ -2429,6 +2430,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	/* Show buffer/WAL usage */
 	if (es->buffers && planstate->instrument)
 		show_buffer_usage(es, &planstate->instrument->bufusage);
+	if (es->buffers && planstate->instrument) // Add another option
+		show_kcache_usage(es, &planstate->instrument->kcacheusage);
 	if (es->wal && planstate->instrument)
 		show_wal_usage(es, &planstate->instrument->walusage);
 
@@ -4230,6 +4233,21 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
 								 3, es);
 		}
 	}
+}
+
+/*
+ * Show kernel cache usage. ??? This better be sync with peek_buffer_usage.
+ */
+static void
+show_kcache_usage(ExplainState *es, const KcacheUsage *usage)
+{
+	ExplainIndentText(es);
+	appendStringInfoString(es->str, "Kernel Cache:");
+
+	appendStringInfo(es->str, " minflt=%ld", (long) usage->ru_minflt);
+	appendStringInfo(es->str, " majflt=%ld", (long) usage->ru_majflt);
+
+	appendStringInfoChar(es->str, '\n');
 }
 
 /*

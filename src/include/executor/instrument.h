@@ -65,6 +65,12 @@ typedef enum InstrumentOption
 	INSTRUMENT_ALL = PG_INT32_MAX
 } InstrumentOption;
 
+typedef struct KcacheUsage
+{
+	long		ru_minflt;	/* # of page faults which were serviced without requiring any I/O */
+	long		ru_majflt;	/* # of page faults which were serviced by doing I/O */
+} KcacheUsage;
+
 typedef struct Instrumentation
 {
 	/* Parameters set at node creation: */
@@ -79,6 +85,7 @@ typedef struct Instrumentation
 	double		firsttuple;		/* time for first tuple of this cycle */
 	double		tuplecount;		/* # of tuples emitted so far this cycle */
 	BufferUsage bufusage_start; /* buffer usage at start */
+	KcacheUsage	kcacheusage_start;
 	WalUsage	walusage_start; /* WAL usage at start */
 	/* Accumulated statistics across all completed cycles: */
 	double		startup;		/* total startup time (in seconds) */
@@ -90,6 +97,7 @@ typedef struct Instrumentation
 	double		nfiltered2;		/* # of tuples removed by "other" quals */
 	BufferUsage bufusage;		/* total buffer usage */
 	WalUsage	walusage;		/* total WAL usage */
+	KcacheUsage kcacheusage;
 } Instrumentation;
 
 typedef struct WorkerInstrumentation
@@ -114,6 +122,8 @@ extern void InstrEndParallelQuery(BufferUsage *bufusage, WalUsage *walusage);
 extern void InstrAccumParallelQuery(BufferUsage *bufusage, WalUsage *walusage);
 extern void BufferUsageAccumDiff(BufferUsage *dst,
 								 const BufferUsage *add, const BufferUsage *sub);
+extern void KcacheUsageAccumDiff(KcacheUsage *dst,
+								 const KcacheUsage *add, const KcacheUsage *sub);
 extern void WalUsageAccumDiff(WalUsage *dst, const WalUsage *add,
 							  const WalUsage *sub);
 
