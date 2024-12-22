@@ -34,9 +34,10 @@ InstrAlloc(int n, int instrument_options, bool async_mode)
 
 	/* initialize all fields to zeroes, then modify as needed */
 	instr = palloc0(n * sizeof(Instrumentation));
-	if (instrument_options & (INSTRUMENT_BUFFERS | INSTRUMENT_TIMER | INSTRUMENT_WAL))
+	if (instrument_options & (INSTRUMENT_BUFFERS | INSTRUMENT_TIMER | INSTRUMENT_WAL | INSTRUMENT_PAGEFAULTS))
 	{
 		bool		need_buffers = (instrument_options & INSTRUMENT_BUFFERS) != 0;
+		bool		need_pagefault = (instrument_options & INSTRUMENT_PAGEFAULTS) != 0;
 		bool		need_wal = (instrument_options & INSTRUMENT_WAL) != 0;
 		bool		need_timer = (instrument_options & INSTRUMENT_TIMER) != 0;
 		int			i;
@@ -44,6 +45,7 @@ InstrAlloc(int n, int instrument_options, bool async_mode)
 		for (i = 0; i < n; i++)
 		{
 			instr[i].need_bufusage = need_buffers;
+			instr[i].need_pagefault = need_pagefault;
 			instr[i].need_walusage = need_wal;
 			instr[i].need_timer = need_timer;
 			instr[i].async_mode = async_mode;
@@ -59,6 +61,7 @@ InstrInit(Instrumentation *instr, int instrument_options)
 {
 	memset(instr, 0, sizeof(Instrumentation));
 	instr->need_bufusage = (instrument_options & INSTRUMENT_BUFFERS) != 0;
+	instr->need_pagefault = (instrument_options & INSTRUMENT_PAGEFAULTS) != 0;
 	instr->need_walusage = (instrument_options & INSTRUMENT_WAL) != 0;
 	instr->need_timer = (instrument_options & INSTRUMENT_TIMER) != 0;
 }
@@ -75,13 +78,13 @@ InstrStartNode(Instrumentation *instr)
 	if (instr->need_bufusage)
 		instr->bufusage_start = pgBufferUsage;
 
-	if (instr->need_bufusage) // NEED ANOTHER OPTION
+	if (instr->need_pagefault)
 	{
 		struct	rusage	rusage;
 
 		getrusage(RUSAGE_SELF, &rusage);
-		instr->kcacheusage_start.ru_minflt = rusage.ru_minflt;
-		instr->kcacheusage_start.ru_majflt = rusage.ru_majflt;
+		instr->pagefaults_start.ru_minflt = rusage.ru_minflt;
+		instr->pagefaults_start.ru_majflt = rusage.ru_majflt;
 	}
 
 	if (instr->need_walusage)
@@ -115,17 +118,17 @@ InstrStopNode(Instrumentation *instr, double nTuples)
 		BufferUsageAccumDiff(&instr->bufusage,
 							 &pgBufferUsage, &instr->bufusage_start);
 
-	if (instr->need_bufusage)
+	if (instr->need_pagefault)
 	{
 		struct	rusage	rusage;
-		KcacheUsage kcacheusage;
+		PageFaults pagefaults;
 
 		getrusage(RUSAGE_SELF, &rusage);
-		kcacheusage.ru_minflt = rusage.ru_minflt;
-		kcacheusage.ru_majflt = rusage.ru_majflt;
+		pagefaults.ru_minflt = rusage.ru_minflt;
+		pagefaults.ru_majflt = rusage.ru_majflt;
 
-		KcacheUsageAccumDiff(&instr->kcacheusage,
-							 &kcacheusage, &instr->kcacheusage_start);
+		PageFaultsAccumDiff(&instr->pagefaults,
+							 &pagefaults, &instr->pagefaults_start);
 	}
 
 	if (instr->need_walusage)
@@ -297,9 +300,9 @@ BufferUsageAccumDiff(BufferUsage *dst,
 /* helper functions for XXXXXX */
 /* should be static? */
 void
-KcacheUsageAccumDiff(KcacheUsage *dst,
-					 const KcacheUsage *add,
-					 const KcacheUsage *sub)
+PageFaultsAccumDiff(PageFaults *dst,
+					 const PageFaults *add,
+					 const PageFaults *sub)
 {
 	dst->ru_minflt += add->ru_minflt - sub->ru_minflt;
 	dst->ru_majflt += add->ru_majflt - sub->ru_majflt;

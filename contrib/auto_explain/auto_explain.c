@@ -28,6 +28,7 @@ static int	auto_explain_log_parameter_max_length = -1; /* bytes or -1 */
 static bool auto_explain_log_analyze = false;
 static bool auto_explain_log_verbose = false;
 static bool auto_explain_log_buffers = false;
+static bool auto_explain_log_pagefault = false;
 static bool auto_explain_log_wal = false;
 static bool auto_explain_log_triggers = false;
 static bool auto_explain_log_timing = true;
@@ -158,6 +159,18 @@ _PG_init(void)
 							 NULL,
 							 NULL,
 							 NULL);
+
+	DefineCustomBoolVariable("auto_explain.log_pagefault",
+							 "Log page faults.",
+							 NULL,
+							 &auto_explain_log_pagefault,
+							 false,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
 
 	DefineCustomBoolVariable("auto_explain.log_wal",
 							 "Log WAL usage.",
@@ -290,6 +303,8 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 				queryDesc->instrument_options |= INSTRUMENT_BUFFERS;
 			if (auto_explain_log_wal)
 				queryDesc->instrument_options |= INSTRUMENT_WAL;
+			if (auto_explain_log_pagefault)
+				queryDesc->instrument_options |= INSTRUMENT_PAGEFAULTS;
 		}
 	}
 
@@ -391,6 +406,7 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 			es->analyze = (queryDesc->instrument_options && auto_explain_log_analyze);
 			es->verbose = auto_explain_log_verbose;
 			es->buffers = (es->analyze && auto_explain_log_buffers);
+			es->pagefault = (es->analyze && auto_explain_log_pagefault);
 			es->wal = (es->analyze && auto_explain_log_wal);
 			es->timing = (es->analyze && auto_explain_log_timing);
 			es->summary = es->analyze;

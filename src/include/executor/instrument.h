@@ -55,27 +55,29 @@ typedef struct WalUsage
 	uint64		wal_bytes;		/* size of WAL records produced */
 } WalUsage;
 
+typedef struct PageFaults
+{
+	long		ru_minflt;	/* # of page faults which were serviced without requiring any I/O */
+	long		ru_majflt;	/* # of page faults which were serviced by doing I/O */
+} PageFaults;
+
 /* Flag bits included in InstrAlloc's instrument_options bitmask */
 typedef enum InstrumentOption
 {
 	INSTRUMENT_TIMER = 1 << 0,	/* needs timer (and row counts) */
 	INSTRUMENT_BUFFERS = 1 << 1,	/* needs buffer usage */
-	INSTRUMENT_ROWS = 1 << 2,	/* needs row count */
-	INSTRUMENT_WAL = 1 << 3,	/* needs WAL usage */
+	INSTRUMENT_PAGEFAULTS = 1 << 2,	/* needs page fault count */
+	INSTRUMENT_ROWS = 1 << 3,	/* needs row count */
+	INSTRUMENT_WAL = 1 << 4,	/* needs WAL usage */
 	INSTRUMENT_ALL = PG_INT32_MAX
 } InstrumentOption;
-
-typedef struct KcacheUsage
-{
-	long		ru_minflt;	/* # of page faults which were serviced without requiring any I/O */
-	long		ru_majflt;	/* # of page faults which were serviced by doing I/O */
-} KcacheUsage;
 
 typedef struct Instrumentation
 {
 	/* Parameters set at node creation: */
 	bool		need_timer;		/* true if we need timer data */
 	bool		need_bufusage;	/* true if we need buffer usage data */
+	bool		need_pagefault;	/* true if we need page fault data */
 	bool		need_walusage;	/* true if we need WAL usage data */
 	bool		async_mode;		/* true if node is in async mode */
 	/* Info about current plan cycle: */
@@ -85,7 +87,7 @@ typedef struct Instrumentation
 	double		firsttuple;		/* time for first tuple of this cycle */
 	double		tuplecount;		/* # of tuples emitted so far this cycle */
 	BufferUsage bufusage_start; /* buffer usage at start */
-	KcacheUsage	kcacheusage_start;
+	PageFaults	pagefaults_start; /* page fault at start */
 	WalUsage	walusage_start; /* WAL usage at start */
 	/* Accumulated statistics across all completed cycles: */
 	double		startup;		/* total startup time (in seconds) */
@@ -96,8 +98,8 @@ typedef struct Instrumentation
 	double		nfiltered1;		/* # of tuples removed by scanqual or joinqual */
 	double		nfiltered2;		/* # of tuples removed by "other" quals */
 	BufferUsage bufusage;		/* total buffer usage */
+	PageFaults pagefaults;		/* total page fault */
 	WalUsage	walusage;		/* total WAL usage */
-	KcacheUsage kcacheusage;
 } Instrumentation;
 
 typedef struct WorkerInstrumentation
@@ -122,8 +124,8 @@ extern void InstrEndParallelQuery(BufferUsage *bufusage, WalUsage *walusage);
 extern void InstrAccumParallelQuery(BufferUsage *bufusage, WalUsage *walusage);
 extern void BufferUsageAccumDiff(BufferUsage *dst,
 								 const BufferUsage *add, const BufferUsage *sub);
-extern void KcacheUsageAccumDiff(KcacheUsage *dst,
-								 const KcacheUsage *add, const KcacheUsage *sub);
+extern void PageFaultsAccumDiff(PageFaults *dst,
+								 const PageFaults *add, const PageFaults *sub);
 extern void WalUsageAccumDiff(WalUsage *dst, const WalUsage *add,
 							  const WalUsage *sub);
 

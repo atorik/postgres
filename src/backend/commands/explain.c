@@ -145,7 +145,7 @@ static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static bool peek_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
-static void show_kcache_usage(ExplainState *es, const KcacheUsage *usage);
+static void show_pagefault(ExplainState *es, const PageFaults *usage);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void show_memory_counters(ExplainState *es,
 								 const MemoryContextCounters *mem_counters);
@@ -220,6 +220,8 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 		}
 		else if (strcmp(opt->defname, "wal") == 0)
 			es->wal = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "pagefault") == 0)
+			es->pagefault = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "settings") == 0)
 			es->settings = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "generic_plan") == 0)
@@ -665,6 +667,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	if (es->buffers)
 		instrument_option |= INSTRUMENT_BUFFERS;
+	if (es->pagefault)
+		instrument_option |= INSTRUMENT_PAGEFAULTS;
 	if (es->wal)
 		instrument_option |= INSTRUMENT_WAL;
 
@@ -2430,8 +2434,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	/* Show buffer/WAL usage */
 	if (es->buffers && planstate->instrument)
 		show_buffer_usage(es, &planstate->instrument->bufusage);
-	if (es->buffers && planstate->instrument) // Add another option
-		show_kcache_usage(es, &planstate->instrument->kcacheusage);
+	if (es->pagefault && planstate->instrument)
+		show_pagefault(es, &planstate->instrument->pagefaults);
 	if (es->wal && planstate->instrument)
 		show_wal_usage(es, &planstate->instrument->walusage);
 
@@ -4236,16 +4240,20 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
 }
 
 /*
- * Show kernel cache usage. ??? This better be sync with peek_buffer_usage.
+ * Show majar/minor page faults.
  */
 static void
-show_kcache_usage(ExplainState *es, const KcacheUsage *usage)
+show_pagefault(ExplainState *es, const PageFaults *usage)
 {
-	ExplainIndentText(es);
-	appendStringInfoString(es->str, "Kernel Cache:");
+	/* Show only positive counter values. */
+	if (usage->ru_minflt <= 0 && usage->ru_majflt <= 0)
+		return;
 
-	appendStringInfo(es->str, " minflt=%ld", (long) usage->ru_minflt);
-	appendStringInfo(es->str, " majflt=%ld", (long) usage->ru_majflt);
+	ExplainIndentText(es);
+	appendStringInfoString(es->str, "Page Faults:");
+
+	appendStringInfo(es->str, " minor=%ld", (long) usage->ru_minflt);
+	appendStringInfo(es->str, " major=%ld", (long) usage->ru_majflt);
 
 	appendStringInfoChar(es->str, '\n');
 }
