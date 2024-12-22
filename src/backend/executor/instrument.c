@@ -297,8 +297,7 @@ BufferUsageAccumDiff(BufferUsage *dst,
 	INSTR_TIME_ACCUM_DIFF(dst->temp_blk_write_time,
 						  add->temp_blk_write_time, sub->temp_blk_write_time);
 }
-/* helper functions for XXXXXX */
-/* should be static? */
+/* helper functions for page fault accumulation */
 void
 PageFaultsAccumDiff(PageFaults *dst,
 					 const PageFaults *add,
