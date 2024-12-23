@@ -301,10 +301,10 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 				queryDesc->instrument_options |= INSTRUMENT_ROWS;
 			if (auto_explain_log_buffers)
 				queryDesc->instrument_options |= INSTRUMENT_BUFFERS;
-			if (auto_explain_log_wal)
-				queryDesc->instrument_options |= INSTRUMENT_WAL;
 			if (auto_explain_log_pagefault)
 				queryDesc->instrument_options |= INSTRUMENT_PAGEFAULTS;
+			if (auto_explain_log_wal)
+				queryDesc->instrument_options |= INSTRUMENT_WAL;
 		}
 	}
 

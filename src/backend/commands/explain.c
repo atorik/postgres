@@ -145,7 +145,7 @@ static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static bool peek_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
-static void show_pagefault(ExplainState *es, const PageFaults *usage);
+static void show_pagefault(ExplainState *es, const PageFaults * usage);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void show_memory_counters(ExplainState *es,
 								 const MemoryContextCounters *mem_counters);
@@ -2431,7 +2431,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		}
 	}
 
-	/* Show buffer/WAL usage */
+	/* Show buffer/WAL usage and pagefaults */
 	if (es->buffers && planstate->instrument)
 		show_buffer_usage(es, &planstate->instrument->bufusage);
 	if (es->pagefault && planstate->instrument)
@@ -4243,7 +4243,7 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
  * Show majar/minor page faults.
  */
 static void
-show_pagefault(ExplainState *es, const PageFaults *usage)
+show_pagefault(ExplainState *es, const PageFaults * usage)
 {
 	/* Show only positive counter values. */
 	if (usage->ru_minflt <= 0 && usage->ru_majflt <= 0)

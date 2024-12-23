@@ -80,7 +80,7 @@ InstrStartNode(Instrumentation *instr)
 
 	if (instr->need_pagefault)
 	{
-		struct	rusage	rusage;
+		struct rusage rusage;
 
 		getrusage(RUSAGE_SELF, &rusage);
 		instr->pagefaults_start.ru_minflt = rusage.ru_minflt;
@@ -120,15 +120,15 @@ InstrStopNode(Instrumentation *instr, double nTuples)
 
 	if (instr->need_pagefault)
 	{
-		struct	rusage	rusage;
-		PageFaults pagefaults;
+		struct rusage rusage;
+		PageFaults	pagefaults;
 
 		getrusage(RUSAGE_SELF, &rusage);
 		pagefaults.ru_minflt = rusage.ru_minflt;
 		pagefaults.ru_majflt = rusage.ru_majflt;
 
 		PageFaultsAccumDiff(&instr->pagefaults,
-							 &pagefaults, &instr->pagefaults_start);
+							&pagefaults, &instr->pagefaults_start);
 	}
 
 	if (instr->need_walusage)
@@ -297,11 +297,12 @@ BufferUsageAccumDiff(BufferUsage *dst,
 	INSTR_TIME_ACCUM_DIFF(dst->temp_blk_write_time,
 						  add->temp_blk_write_time, sub->temp_blk_write_time);
 }
+
 /* helper functions for page fault accumulation */
 void
-PageFaultsAccumDiff(PageFaults *dst,
-					 const PageFaults *add,
-					 const PageFaults *sub)
+PageFaultsAccumDiff(PageFaults * dst,
+					const PageFaults * add,
+					const PageFaults * sub)
 {
 	dst->ru_minflt += add->ru_minflt - sub->ru_minflt;
 	dst->ru_majflt += add->ru_majflt - sub->ru_majflt;
