@@ -13,6 +13,8 @@
  */
 #include "postgres.h"
 
+#include <sys/resource.h>
+
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "commands/createas.h"
