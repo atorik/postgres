@@ -14,6 +14,7 @@
 #include "postgres.h"
 
 #include <unistd.h>
+#include <sys/resource.h>
 
 #include "executor/instrument.h"
 
