@@ -4295,8 +4295,12 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
 static bool
 peek_pagefault(ExplainState *es, const PageFaults * usage)
 {
+	if (usage == NULL)
+		return false;
+
 	if (usage->minflt <= 0 && usage->majflt <= 0)
 		return false;
+
 	else
 		return true;
 }
