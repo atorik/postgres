@@ -145,7 +145,7 @@ static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static bool peek_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
-static bool peek_pagefault(ExplainState *es, const PageFaults *usage);
+static bool peek_pagefault(ExplainState *es, const PageFaults * usage);
 static void show_pagefault(ExplainState *es, const PageFaults * usage);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void show_memory_counters(ExplainState *es,
@@ -479,8 +479,8 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 				planduration;
 	BufferUsage bufusage_start,
 				bufusage;
-	PageFaults pagefaults_start,
-			    pagefaults;
+	PageFaults	pagefaults_start,
+				pagefaults;
 	MemoryContextCounters mem_counters;
 	MemoryContext planner_ctx = NULL;
 	MemoryContext saved_ctx = NULL;
@@ -669,7 +669,7 @@ void
 ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
-			   const BufferUsage *bufusage, const PageFaults *planpagefaults,
+			   const BufferUsage *bufusage, const PageFaults * planpagefaults,
 			   const MemoryContextCounters *mem_counters)
 {
 	DestReceiver *dest;
@@ -679,8 +679,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	int			eflags;
 	int			instrument_option = 0;
 	SerializeMetrics serializeMetrics = {0};
-	PageFaults pagefaults;
-	PageFaults pagefaults_start;
+	PageFaults	pagefaults;
+	PageFaults	pagefaults_start;
 	struct rusage rusage;
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
@@ -785,7 +785,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	/* Show buffer and/or memory usage in planning */
 	if (peek_buffer_usage(es, bufusage) || peek_pagefault(es, planpagefaults) ||
-			mem_counters)
+		mem_counters)
 	{
 		ExplainOpenGroup("Planning", "Planning", true, es);
 
@@ -4291,33 +4291,33 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
 }
 
 static bool
-peek_pagefault(ExplainState *es, const PageFaults *usage)
+peek_pagefault(ExplainState *es, const PageFaults * usage)
 {
-       if (usage->minflt <= 0 && usage->majflt <= 0)
-               return false;
-	   else
-		   		return true;
+	if (usage->minflt <= 0 && usage->majflt <= 0)
+		return false;
+	else
+		return true;
 }
 
 /*
  * Show majar/minor page faults.
  */
 static void
-show_pagefault(ExplainState *es, const PageFaults *usage)
+show_pagefault(ExplainState *es, const PageFaults * usage)
 {
-       /* Show only positive counter values. */
-       if (usage->minflt <= 0 && usage->majflt <= 0)
-               return;
+	/* Show only positive counter values. */
+	if (usage->minflt <= 0 && usage->majflt <= 0)
+		return;
 
 	if (es->format == EXPLAIN_FORMAT_TEXT)
 	{
 
-       ExplainIndentText(es);
-       appendStringInfoString(es->str, "Page Faults:");
-       appendStringInfo(es->str, " minor=%ld", (long) usage->minflt);
-       appendStringInfo(es->str, " major=%ld", (long) usage->majflt);
+		ExplainIndentText(es);
+		appendStringInfoString(es->str, "Page Faults:");
+		appendStringInfo(es->str, " minor=%ld", (long) usage->minflt);
+		appendStringInfo(es->str, " major=%ld", (long) usage->majflt);
 
-       appendStringInfoChar(es->str, '\n');
+		appendStringInfoChar(es->str, '\n');
 	}
 }
 

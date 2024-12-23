@@ -76,11 +76,11 @@ typedef struct ExplainState
 
 typedef struct PageFaults
 {
-       long            minflt;              /* # of page faults which were serviced
-                                                                * without requiring any I/O */
-       long            majflt;              /* # of page faults which were serviced by
-                                                                * doing I/O */
-} PageFaults;
+	long		minflt;			/* # of page faults which were serviced
+								 * without requiring any I/O */
+	long		majflt;			/* # of page faults which were serviced by
+								 * doing I/O */
+}			PageFaults;
 
 
 /* Hook for plugins to get control in ExplainOneQuery() */
@@ -118,7 +118,7 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 						   ParamListInfo params, QueryEnvironment *queryEnv,
 						   const instr_time *planduration,
 						   const BufferUsage *bufusage,
-						   const PageFaults *planpagefaults,
+						   const PageFaults * planpagefaults,
 						   const MemoryContextCounters *mem_counters);
 
 extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);
