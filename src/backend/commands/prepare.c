@@ -17,6 +17,7 @@
 #include "postgres.h"
 
 #include <limits.h>
+#include <sys/resource.h>
 
 #include "access/xact.h"
 #include "catalog/pg_type.h"
