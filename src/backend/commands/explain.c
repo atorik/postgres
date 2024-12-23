@@ -145,6 +145,8 @@ static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static bool peek_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
+static bool peek_pagefault(ExplainState *es, const PageFaults *usage);
+static void show_pagefault(ExplainState *es, const PageFaults * usage);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void show_memory_counters(ExplainState *es,
 								 const MemoryContextCounters *mem_counters);
@@ -217,6 +219,8 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 			buffers_set = true;
 			es->buffers = defGetBoolean(opt);
 		}
+		else if (strcmp(opt->defname, "pagefaults") == 0)
+			es->pagefaults = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "wal") == 0)
 			es->wal = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "settings") == 0)
@@ -475,6 +479,8 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 				planduration;
 	BufferUsage bufusage_start,
 				bufusage;
+	PageFaults pagefaults_start,
+			    pagefaults;
 	MemoryContextCounters mem_counters;
 	MemoryContext planner_ctx = NULL;
 	MemoryContext saved_ctx = NULL;
@@ -499,6 +505,15 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 		bufusage_start = pgBufferUsage;
 	INSTR_TIME_SET_CURRENT(planstart);
 
+	if (es->pagefaults)
+	{
+		struct rusage rusage;
+
+		getrusage(RUSAGE_SELF, &rusage);
+		pagefaults_start.minflt = rusage.ru_minflt;
+		pagefaults_start.majflt = rusage.ru_majflt;
+	}
+
 	/* plan the query */
 	plan = pg_plan_query(query, queryString, cursorOptions, params);
 
@@ -518,9 +533,19 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
 	}
 
+	if (es->pagefaults)
+	{
+		struct rusage rusage;
+
+		getrusage(RUSAGE_SELF, &rusage);
+		pagefaults.minflt = rusage.ru_minflt - pagefaults_start.minflt;
+		pagefaults.majflt = rusage.ru_majflt - pagefaults_start.majflt;
+	}
+
 	/* run it (if needed) and produce output */
 	ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
 				   &planduration, (es->buffers ? &bufusage : NULL),
+				   (es->pagefaults ? &pagefaults : NULL),
 				   es->memory ? &mem_counters : NULL);
 }
 
@@ -644,7 +669,7 @@ void
 ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
-			   const BufferUsage *bufusage,
+			   const BufferUsage *bufusage, const PageFaults *planpagefaults,
 			   const MemoryContextCounters *mem_counters)
 {
 	DestReceiver *dest;
@@ -654,6 +679,9 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	int			eflags;
 	int			instrument_option = 0;
 	SerializeMetrics serializeMetrics = {0};
+	PageFaults pagefaults;
+	PageFaults pagefaults_start;
+	struct rusage rusage;
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
 
@@ -673,6 +701,14 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	 * this if !es->summary, but it's hardly worth the complication.)
 	 */
 	INSTR_TIME_SET_CURRENT(starttime);
+
+	if (es->pagefaults)
+	{
+		getrusage(RUSAGE_SELF, &rusage);
+
+		pagefaults_start.minflt = rusage.ru_minflt;
+		pagefaults_start.majflt = rusage.ru_majflt;
+	}
 
 	/*
 	 * Use a snapshot with an updated command ID to ensure this query sees
@@ -748,7 +784,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	ExplainPrintPlan(es, queryDesc);
 
 	/* Show buffer and/or memory usage in planning */
-	if (peek_buffer_usage(es, bufusage) || mem_counters)
+	if (peek_buffer_usage(es, bufusage) || peek_pagefault(es, planpagefaults) ||
+			mem_counters)
 	{
 		ExplainOpenGroup("Planning", "Planning", true, es);
 
@@ -758,9 +795,11 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			appendStringInfoString(es->str, "Planning:\n");
 			es->indent++;
 		}
-
 		if (bufusage)
 			show_buffer_usage(es, bufusage);
+
+		if (es->pagefaults)
+			show_pagefault(es, planpagefaults);
 
 		if (mem_counters)
 			show_memory_counters(es, mem_counters);
@@ -813,6 +852,26 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	totaltime += elapsed_time(&starttime);
 
+	if (es->pagefaults)
+	{
+		getrusage(RUSAGE_SELF, &rusage);
+
+		pagefaults.minflt = rusage.ru_minflt - pagefaults_start.minflt;
+		pagefaults.majflt = rusage.ru_majflt - pagefaults_start.majflt;
+
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+		{
+			ExplainIndentText(es);
+			appendStringInfoString(es->str, "Execution:\n");
+			es->indent++;
+		}
+		show_pagefault(es, &pagefaults);
+
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+			es->indent--;
+		ExplainCloseGroup("Execution", "Execution", true, es);
+	}
+
 	/*
 	 * We only report execution time if we actually ran the query (that is,
 	 * the user specified ANALYZE), and if summary reporting is enabled (the
@@ -822,7 +881,6 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	if (es->summary && es->analyze)
 		ExplainPropertyFloat("Execution Time", "ms", 1000.0 * totaltime, 3,
 							 es);
-
 	ExplainCloseGroup("Query", NULL, true, es);
 }
 
@@ -4229,6 +4287,37 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
 								 INSTR_TIME_GET_MILLISEC(usage->temp_blk_write_time),
 								 3, es);
 		}
+	}
+}
+
+static bool
+peek_pagefault(ExplainState *es, const PageFaults *usage)
+{
+       if (usage->minflt <= 0 && usage->majflt <= 0)
+               return false;
+	   else
+		   		return true;
+}
+
+/*
+ * Show majar/minor page faults.
+ */
+static void
+show_pagefault(ExplainState *es, const PageFaults *usage)
+{
+       /* Show only positive counter values. */
+       if (usage->minflt <= 0 && usage->majflt <= 0)
+               return;
+
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+
+       ExplainIndentText(es);
+       appendStringInfoString(es->str, "Page Faults:");
+       appendStringInfo(es->str, " minor=%ld", (long) usage->minflt);
+       appendStringInfo(es->str, " major=%ld", (long) usage->majflt);
+
+       appendStringInfoChar(es->str, '\n');
 	}
 }
 

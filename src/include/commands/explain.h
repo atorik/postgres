@@ -49,6 +49,7 @@ typedef struct ExplainState
 	bool		analyze;		/* print actual times */
 	bool		costs;			/* print estimated costs */
 	bool		buffers;		/* print buffer usage */
+	bool		pagefaults;		/* print pagefaults */
 	bool		wal;			/* print WAL usage */
 	bool		timing;			/* print detailed node timing */
 	bool		summary;		/* print total planning and execution timing */
@@ -72,6 +73,15 @@ typedef struct ExplainState
 	/* state related to the current plan node */
 	ExplainWorkersState *workers_state; /* needed if parallel plan */
 } ExplainState;
+
+typedef struct PageFaults
+{
+       long            minflt;              /* # of page faults which were serviced
+                                                                * without requiring any I/O */
+       long            majflt;              /* # of page faults which were serviced by
+                                                                * doing I/O */
+} PageFaults;
+
 
 /* Hook for plugins to get control in ExplainOneQuery() */
 typedef void (*ExplainOneQuery_hook_type) (Query *query,
@@ -108,6 +118,7 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 						   ParamListInfo params, QueryEnvironment *queryEnv,
 						   const instr_time *planduration,
 						   const BufferUsage *bufusage,
+						   const PageFaults *planpagefaults,
 						   const MemoryContextCounters *mem_counters);
 
 extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);

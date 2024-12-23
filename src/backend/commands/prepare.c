@@ -579,6 +579,8 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	instr_time	planduration;
 	BufferUsage bufusage_start,
 				bufusage;
+	PageFaults pagefaults_start,
+			    pagefaults;
 	MemoryContextCounters mem_counters;
 	MemoryContext planner_ctx = NULL;
 	MemoryContext saved_ctx = NULL;
@@ -595,6 +597,16 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 
 	if (es->buffers)
 		bufusage_start = pgBufferUsage;
+
+	if (es->pagefaults)
+	{
+		struct rusage rusage;
+
+		getrusage(RUSAGE_SELF, &rusage);
+		pagefaults_start.minflt = rusage.ru_minflt;
+		pagefaults_start.majflt = rusage.ru_majflt;
+	}
+
 	INSTR_TIME_SET_CURRENT(planstart);
 
 	/* Look it up in the hash table */
@@ -646,6 +658,15 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
 	}
 
+	if (es->pagefaults)
+	{
+		struct rusage rusage;
+
+		getrusage(RUSAGE_SELF, &rusage);
+		pagefaults.minflt = rusage.ru_minflt - pagefaults_start.minflt;
+		pagefaults.majflt = rusage.ru_majflt - pagefaults_start.majflt;
+	}
+
 	plan_list = cplan->stmt_list;
 
 	/* Explain each query */
@@ -656,6 +677,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		if (pstmt->commandType != CMD_UTILITY)
 			ExplainOnePlan(pstmt, into, es, query_string, paramLI, pstate->p_queryEnv,
 						   &planduration, (es->buffers ? &bufusage : NULL),
+						   (es->pagefaults ? &pagefaults : NULL),
 						   es->memory ? &mem_counters : NULL);
 		else
 			ExplainOneUtility(pstmt->utilityStmt, into, es, pstate, paramLI);
