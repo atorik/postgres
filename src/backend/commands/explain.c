@@ -481,8 +481,8 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 				planduration;
 	BufferUsage bufusage_start,
 				bufusage;
-	PageFaults	pagefaults_start,
-				pagefaults;
+	PageFaults	pagefaults = {0};
+	PageFaults	pagefaults_start = {0};
 	MemoryContextCounters mem_counters;
 	MemoryContext planner_ctx = NULL;
 	MemoryContext saved_ctx = NULL;
@@ -681,8 +681,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	int			eflags;
 	int			instrument_option = 0;
 	SerializeMetrics serializeMetrics = {0};
-	PageFaults	pagefaults;
-	PageFaults	pagefaults_start;
+	PageFaults	pagefaults = {0};
+	PageFaults	pagefaults_start = {0};
 	struct rusage rusage;
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
