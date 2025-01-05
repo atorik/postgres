@@ -3,7 +3,7 @@
  * pruneheap.c
  *	  heap page pruning and HOT-chain management code
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -2133,7 +2133,7 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
 							sizeof(OffsetNumber) * nfrozen);
 
 	/*
-	 * Prepare the main xl_heap_prune record.  We already set the XLPH_HAS_*
+	 * Prepare the main xl_heap_prune record.  We already set the XLHP_HAS_*
 	 * flag above.
 	 */
 	if (RelationIsAccessibleInLogicalDecoding(relation))

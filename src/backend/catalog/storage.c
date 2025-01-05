@@ -3,7 +3,7 @@
  * storage.c
  *	  code to create and destroy physical storage for relations
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -380,7 +380,7 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	 * replay or visibility invariants downstream.  The critical section also
 	 * suppresses interrupts.
 	 *
-	 * (See also pg_visibilitymap.c if changing this code.)
+	 * (See also visibilitymap.c if changing this code.)
 	 */
 	START_CRIT_SECTION();
 
