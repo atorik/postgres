@@ -13,6 +13,8 @@
  */
 #include "postgres.h"
 
+#include <sys/resource.h>
+
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "commands/createas.h"
@@ -145,6 +147,8 @@ static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static bool peek_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
+static bool peek_storageio(ExplainState *es, const StorageIO *usage);
+static void show_storageio(ExplainState *es, const StorageIO *usage);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void show_memory_counters(ExplainState *es,
 								 const MemoryContextCounters *mem_counters);
@@ -217,6 +221,8 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 			buffers_set = true;
 			es->buffers = defGetBoolean(opt);
 		}
+		else if (strcmp(opt->defname, "storageio") == 0)
+			es->storageio = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "wal") == 0)
 			es->wal = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "settings") == 0)
@@ -475,6 +481,8 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 				planduration;
 	BufferUsage bufusage_start,
 				bufusage;
+	StorageIO	storageio = {0};
+	StorageIO	storageio_start = {0};
 	MemoryContextCounters mem_counters;
 	MemoryContext planner_ctx = NULL;
 	MemoryContext saved_ctx = NULL;
@@ -499,6 +507,15 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 		bufusage_start = pgBufferUsage;
 	INSTR_TIME_SET_CURRENT(planstart);
 
+	if (es->storageio)
+	{
+		struct rusage rusage;
+
+		getrusage(RUSAGE_SELF, &rusage);
+		storageio_start.inblock = rusage.ru_inblock;
+		storageio_start.outblock = rusage.ru_oublock;
+	}
+
 	/* plan the query */
 	plan = pg_plan_query(query, queryString, cursorOptions, params);
 
@@ -518,9 +535,19 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
 	}
 
+	if (es->storageio)
+	{
+		struct rusage rusage;
+
+		getrusage(RUSAGE_SELF, &rusage);
+		storageio.inblock = rusage.ru_inblock - storageio_start.inblock;
+		storageio.outblock = rusage.ru_oublock - storageio_start.outblock;
+	}
+
 	/* run it (if needed) and produce output */
 	ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
 				   &planduration, (es->buffers ? &bufusage : NULL),
+				   (es->storageio ? &storageio : NULL),
 				   es->memory ? &mem_counters : NULL);
 }
 
@@ -644,7 +671,7 @@ void
 ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
-			   const BufferUsage *bufusage,
+			   const BufferUsage *bufusage, const StorageIO *planstorageio,
 			   const MemoryContextCounters *mem_counters)
 {
 	DestReceiver *dest;
@@ -654,6 +681,9 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	int			eflags;
 	int			instrument_option = 0;
 	SerializeMetrics serializeMetrics = {0};
+	StorageIO	storageio = {0};
+	StorageIO	storageio_start = {0};
+	struct rusage rusage;
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
 
@@ -673,6 +703,14 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	 * this if !es->summary, but it's hardly worth the complication.)
 	 */
 	INSTR_TIME_SET_CURRENT(starttime);
+
+	if (es->storageio)
+	{
+		getrusage(RUSAGE_SELF, &rusage);
+
+		storageio_start.inblock = rusage.ru_inblock;
+		storageio_start.outblock = rusage.ru_oublock;
+	}
 
 	/*
 	 * Use a snapshot with an updated command ID to ensure this query sees
@@ -748,7 +786,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	ExplainPrintPlan(es, queryDesc);
 
 	/* Show buffer and/or memory usage in planning */
-	if (peek_buffer_usage(es, bufusage) || mem_counters)
+	if (peek_buffer_usage(es, bufusage) || peek_storageio(es, planstorageio) ||
+		mem_counters)
 	{
 		ExplainOpenGroup("Planning", "Planning", true, es);
 
@@ -758,9 +797,11 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			appendStringInfoString(es->str, "Planning:\n");
 			es->indent++;
 		}
-
 		if (bufusage)
 			show_buffer_usage(es, bufusage);
+
+		if (es->storageio)
+			show_storageio(es, planstorageio);
 
 		if (mem_counters)
 			show_memory_counters(es, mem_counters);
@@ -812,6 +853,26 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		CommandCounterIncrement();
 
 	totaltime += elapsed_time(&starttime);
+
+	if (es->storageio)
+	{
+		getrusage(RUSAGE_SELF, &rusage);
+
+		storageio.inblock = rusage.ru_inblock - storageio_start.inblock;
+		storageio.outblock = rusage.ru_oublock - storageio_start.outblock;
+
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+		{
+			ExplainIndentText(es);
+			appendStringInfoString(es->str, "Execution:\n");
+			es->indent++;
+		}
+		show_storageio(es, &storageio);
+
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+			es->indent--;
+		ExplainCloseGroup("Execution", "Execution", true, es);
+	}
 
 	/*
 	 * We only report execution time if we actually ran the query (that is,
@@ -4229,6 +4290,43 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
 								 INSTR_TIME_GET_MILLISEC(usage->temp_blk_write_time),
 								 3, es);
 		}
+	}
+}
+
+static bool
+peek_storageio(ExplainState *es, const StorageIO * usage)
+{
+	if (usage == NULL)
+		return false;
+
+	if (usage->inblock <= 0 && usage->outblock <= 0)
+		return false;
+
+	else
+		return true;
+}
+
+/*
+ * Show storage I/O.
+ *
+ * Since the unit of inblock/outblock is 512 bytes, change them to KB by dividing by two.
+ */
+static void
+show_storageio(ExplainState *es, const StorageIO * usage)
+{
+	/* Show only positive counter values. */
+	if (usage->inblock <= 0 && usage->outblock <= 0)
+		return;
+
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+
+		ExplainIndentText(es);
+		appendStringInfoString(es->str, "Storage I/O:");
+		appendStringInfo(es->str, " read=%ld KB", (long) usage->inblock / 2);
+		appendStringInfo(es->str, " write=%ld KB", (long) usage->outblock / 2);
+
+		appendStringInfoChar(es->str, '\n');
 	}
 }
 

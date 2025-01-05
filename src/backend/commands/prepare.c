@@ -17,6 +17,7 @@
 #include "postgres.h"
 
 #include <limits.h>
+#include <sys/resource.h>
 
 #include "access/xact.h"
 #include "catalog/pg_type.h"
@@ -579,6 +580,8 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	instr_time	planduration;
 	BufferUsage bufusage_start,
 				bufusage;
+	StorageIO	storageio_start = {0};
+	StorageIO	storageio = {0};
 	MemoryContextCounters mem_counters;
 	MemoryContext planner_ctx = NULL;
 	MemoryContext saved_ctx = NULL;
@@ -595,6 +598,16 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 
 	if (es->buffers)
 		bufusage_start = pgBufferUsage;
+
+	if (es->storageio)
+	{
+		struct rusage rusage;
+
+		getrusage(RUSAGE_SELF, &rusage);
+		storageio_start.inblock = rusage.ru_inblock;
+		storageio_start.outblock = rusage.ru_oublock;
+	}
+
 	INSTR_TIME_SET_CURRENT(planstart);
 
 	/* Look it up in the hash table */
@@ -646,6 +659,15 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
 	}
 
+	if (es->storageio)
+	{
+		struct rusage rusage;
+
+		getrusage(RUSAGE_SELF, &rusage);
+		storageio.inblock = rusage.ru_inblock - storageio_start.inblock;
+		storageio.outblock = rusage.ru_oublock - storageio_start.outblock;
+	}
+
 	plan_list = cplan->stmt_list;
 
 	/* Explain each query */
@@ -656,6 +678,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		if (pstmt->commandType != CMD_UTILITY)
 			ExplainOnePlan(pstmt, into, es, query_string, paramLI, pstate->p_queryEnv,
 						   &planduration, (es->buffers ? &bufusage : NULL),
+						   (es->storageio ? &storageio : NULL),
 						   es->memory ? &mem_counters : NULL);
 		else
 			ExplainOneUtility(pstmt->utilityStmt, into, es, pstate, paramLI);

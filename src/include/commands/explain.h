@@ -49,6 +49,7 @@ typedef struct ExplainState
 	bool		analyze;		/* print actual times */
 	bool		costs;			/* print estimated costs */
 	bool		buffers;		/* print buffer usage */
+	bool		storageio;		/* print storageio */
 	bool		wal;			/* print WAL usage */
 	bool		timing;			/* print detailed node timing */
 	bool		summary;		/* print total planning and execution timing */
@@ -72,6 +73,14 @@ typedef struct ExplainState
 	/* state related to the current plan node */
 	ExplainWorkersState *workers_state; /* needed if parallel plan */
 } ExplainState;
+
+typedef struct StorageIO
+{
+	/* Note that page size here is 512 byte */
+	long		inblock;			/* # of pages that has been read from storage */
+	long		outblock;			/* # of pages that has been written or shall be written to storage */
+}			StorageIO;
+
 
 /* Hook for plugins to get control in ExplainOneQuery() */
 typedef void (*ExplainOneQuery_hook_type) (Query *query,
@@ -108,6 +117,7 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 						   ParamListInfo params, QueryEnvironment *queryEnv,
 						   const instr_time *planduration,
 						   const BufferUsage *bufusage,
+						   const StorageIO * planstorageio,
 						   const MemoryContextCounters *mem_counters);
 
 extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);
