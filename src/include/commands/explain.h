@@ -117,7 +117,7 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 						   ParamListInfo params, QueryEnvironment *queryEnv,
 						   const instr_time *planduration,
 						   const BufferUsage *bufusage,
-						   const StorageIO * planstorageio,
+						   const StorageIO *planstorageio,
 						   const MemoryContextCounters *mem_counters);
 
 extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);

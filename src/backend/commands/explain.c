@@ -797,6 +797,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			appendStringInfoString(es->str, "Planning:\n");
 			es->indent++;
 		}
+
 		if (bufusage)
 			show_buffer_usage(es, bufusage);
 
@@ -4294,7 +4295,7 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
 }
 
 static bool
-peek_storageio(ExplainState *es, const StorageIO * usage)
+peek_storageio(ExplainState *es, const StorageIO *usage)
 {
 	if (usage == NULL)
 		return false;
@@ -4312,7 +4313,7 @@ peek_storageio(ExplainState *es, const StorageIO * usage)
  * Since the unit of inblock/outblock is 512 bytes, change them to KB by dividing by two.
  */
 static void
-show_storageio(ExplainState *es, const StorageIO * usage)
+show_storageio(ExplainState *es, const StorageIO *usage)
 {
 	/* Show only positive counter values. */
 	if (usage->inblock <= 0 && usage->outblock <= 0)
