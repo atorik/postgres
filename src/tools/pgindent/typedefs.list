@@ -47,6 +47,7 @@ AggSplit
 AggState
 AggStatePerAgg
 AggStatePerGroup
+AggStatePerGroupData
 AggStatePerHash
 AggStatePerPhase
 AggStatePerTrans
@@ -2139,7 +2140,7 @@ PgStatShared_Subscription
 PgStatShared_Wal
 PgStat_ArchiverStats
 PgStat_Backend
-PgStat_BackendPendingIO
+PgStat_BackendPending
 PgStat_BackendSubEntry
 PgStat_BgWriterStats
 PgStat_BktypeIO

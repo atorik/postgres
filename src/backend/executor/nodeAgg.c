@@ -1713,7 +1713,7 @@ hash_agg_entry_size(int numTrans, Size tupleWidth, Size transitionSpace)
 		transitionChunkSize = 0;
 
 	return
-		sizeof(TupleHashEntryData) +
+		TupleHashEntrySize() +
 		tupleChunkSize +
 		pergroupChunkSize +
 		transitionChunkSize;
@@ -1954,7 +1954,7 @@ hash_agg_update_metrics(AggState *aggstate, bool from_tape, int npartitions)
 	if (aggstate->hash_ngroups_current > 0)
 	{
 		aggstate->hashentrysize =
-			sizeof(TupleHashEntryData) +
+			TupleHashEntrySize() +
 			(hashkey_mem / (double) aggstate->hash_ngroups_current);
 	}
 }
@@ -2055,11 +2055,7 @@ initialize_hash_entry(AggState *aggstate, TupleHashTable hashtable,
 	if (aggstate->numtrans == 0)
 		return;
 
-	pergroup = (AggStatePerGroup)
-		MemoryContextAlloc(hashtable->tablecxt,
-						   sizeof(AggStatePerGroupData) * aggstate->numtrans);
-
-	entry->additional = pergroup;
+	pergroup = (AggStatePerGroup) TupleHashEntryGetAdditional(entry);
 
 	/*
 	 * Initialize aggregates for new tuple group, lookup_hash_entries()
@@ -2123,7 +2119,7 @@ lookup_hash_entries(AggState *aggstate)
 		{
 			if (isnew)
 				initialize_hash_entry(aggstate, hashtable, entry);
-			pergroup[setno] = entry->additional;
+			pergroup[setno] = TupleHashEntryGetAdditional(entry);
 		}
 		else
 		{
@@ -2681,7 +2677,7 @@ agg_refill_hash_table(AggState *aggstate)
 		{
 			if (isnew)
 				initialize_hash_entry(aggstate, perhash->hashtable, entry);
-			aggstate->hash_pergroup[batch->setno] = entry->additional;
+			aggstate->hash_pergroup[batch->setno] = TupleHashEntryGetAdditional(entry);
 			advance_aggregates(aggstate);
 		}
 		else
@@ -2773,7 +2769,7 @@ agg_retrieve_hash_table_in_memory(AggState *aggstate)
 	ExprContext *econtext;
 	AggStatePerAgg peragg;
 	AggStatePerGroup pergroup;
-	TupleHashEntryData *entry;
+	TupleHashEntry entry;
 	TupleTableSlot *firstSlot;
 	TupleTableSlot *result;
 	AggStatePerHash perhash;
@@ -2845,7 +2841,7 @@ agg_retrieve_hash_table_in_memory(AggState *aggstate)
 		 * Transform representative tuple back into one with the right
 		 * columns.
 		 */
-		ExecStoreMinimalTuple(entry->firstTuple, hashslot, false);
+		ExecStoreMinimalTuple(TupleHashEntryGetTuple(entry), hashslot, false);
 		slot_getallattrs(hashslot);
 
 		ExecClearTuple(firstSlot);
@@ -2861,7 +2857,7 @@ agg_retrieve_hash_table_in_memory(AggState *aggstate)
 		}
 		ExecStoreVirtualTuple(firstSlot);
 
-		pergroup = (AggStatePerGroup) entry->additional;
+		pergroup = (AggStatePerGroup) TupleHashEntryGetAdditional(entry);
 
 		/*
 		 * Use the representative input tuple for any references to
@@ -3379,8 +3375,8 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		max_aggno = Max(max_aggno, aggref->aggno);
 		max_transno = Max(max_transno, aggref->aggtransno);
 	}
-	numaggs = max_aggno + 1;
-	numtrans = max_transno + 1;
+	aggstate->numaggs = numaggs = max_aggno + 1;
+	aggstate->numtrans = numtrans = max_transno + 1;
 
 	/*
 	 * For each phase, prepare grouping set data and fmgr lookup data for
@@ -3942,13 +3938,6 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 			pertrans->aggshared = true;
 		ReleaseSysCache(aggTuple);
 	}
-
-	/*
-	 * Update aggstate->numaggs to be the number of unique aggregates found.
-	 * Also set numstates to the number of unique transition states found.
-	 */
-	aggstate->numaggs = numaggs;
-	aggstate->numtrans = numtrans;
 
 	/*
 	 * Last, check whether any more aggregates got added onto the node while

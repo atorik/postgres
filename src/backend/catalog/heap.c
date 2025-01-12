@@ -102,12 +102,13 @@ static ObjectAddress AddNewRelationType(const char *typeName,
 										Oid new_array_type);
 static void RelationRemoveInheritance(Oid relid);
 static Oid	StoreRelCheck(Relation rel, const char *ccname, Node *expr,
-						  bool is_validated, bool is_local, int16 inhcount,
-						  bool is_no_inherit, bool is_internal);
+						  bool is_enforced, bool is_validated, bool is_local,
+						  int16 inhcount, bool is_no_inherit, bool is_internal);
 static void StoreConstraints(Relation rel, List *cooked_constraints,
 							 bool is_internal);
 static bool MergeWithExistingConstraint(Relation rel, const char *ccname, Node *expr,
 										bool allow_merge, bool is_local,
+										bool is_enforced,
 										bool is_initially_valid,
 										bool is_no_inherit);
 static void SetRelationNumChecks(Relation rel, int numchecks);
@@ -427,7 +428,7 @@ heap_create(const char *relname,
  *		6) AddNewAttributeTuples() is called to register the
  *		   new relation's schema in pg_attribute.
  *
- *		7) StoreConstraints is called ()		- vadim 08/22/97
+ *		7) StoreConstraints() is called			- vadim 08/22/97
  *
  *		8) the relations are closed and the new relation's oid
  *		   is returned.
@@ -1481,7 +1482,7 @@ heap_create_with_catalog(const char *relname,
 	InvokeObjectPostCreateHookArg(RelationRelationId, relid, 0, is_internal);
 
 	/*
-	 * Store any supplied constraints and defaults.
+	 * Store any supplied CHECK constraints and defaults.
 	 *
 	 * NB: this may do a CommandCounterIncrement and rebuild the relcache
 	 * entry, so the relation must be valid and self-consistent at this point.
@@ -2066,8 +2067,8 @@ SetAttrMissing(Oid relid, char *attname, char *value)
  */
 static Oid
 StoreRelCheck(Relation rel, const char *ccname, Node *expr,
-			  bool is_validated, bool is_local, int16 inhcount,
-			  bool is_no_inherit, bool is_internal)
+			  bool is_enforced, bool is_validated, bool is_local,
+			  int16 inhcount, bool is_no_inherit, bool is_internal)
 {
 	char	   *ccbin;
 	List	   *varList;
@@ -2132,6 +2133,7 @@ StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 							  CONSTRAINT_CHECK, /* Constraint Type */
 							  false,	/* Is Deferrable */
 							  false,	/* Is Deferred */
+							  is_enforced,	/* Is Enforced */
 							  is_validated,
 							  InvalidOid,	/* no parent constraint */
 							  RelationGetRelid(rel),	/* relation */
@@ -2185,6 +2187,7 @@ StoreRelNotNull(Relation rel, const char *nnname, AttrNumber attnum,
 							  CONSTRAINT_NOTNULL,
 							  false,
 							  false,
+							  true, /* Is Enforced */
 							  is_validated,
 							  InvalidOid,
 							  RelationGetRelid(rel),
@@ -2216,7 +2219,7 @@ StoreRelNotNull(Relation rel, const char *nnname, AttrNumber attnum,
 }
 
 /*
- * Store defaults and constraints (passed as a list of CookedConstraint).
+ * Store defaults and CHECK constraints (passed as a list of CookedConstraint).
  *
  * Each CookedConstraint struct is modified to store the new catalog tuple OID.
  *
@@ -2254,17 +2257,10 @@ StoreConstraints(Relation rel, List *cooked_constraints, bool is_internal)
 			case CONSTR_CHECK:
 				con->conoid =
 					StoreRelCheck(rel, con->name, con->expr,
-								  !con->skip_validation, con->is_local,
-								  con->inhcount, con->is_no_inherit,
-								  is_internal);
+								  con->is_enforced, !con->skip_validation,
+								  con->is_local, con->inhcount,
+								  con->is_no_inherit, is_internal);
 				numchecks++;
-				break;
-
-			case CONSTR_NOTNULL:
-				con->conoid =
-					StoreRelNotNull(rel, con->name, con->attnum,
-									!con->skip_validation, con->is_local,
-									con->inhcount, con->is_no_inherit);
 				break;
 
 			default:
@@ -2397,6 +2393,7 @@ AddRelationNewConstraints(Relation rel,
 		cooked->name = NULL;
 		cooked->attnum = colDef->attnum;
 		cooked->expr = expr;
+		cooked->is_enforced = true;
 		cooked->skip_validation = false;
 		cooked->is_local = is_local;
 		cooked->inhcount = is_local ? 0 : 1;
@@ -2468,6 +2465,7 @@ AddRelationNewConstraints(Relation rel,
 				 */
 				if (MergeWithExistingConstraint(rel, ccname, expr,
 												allow_merge, is_local,
+												cdef->is_enforced,
 												cdef->initially_valid,
 												cdef->is_no_inherit))
 					continue;
@@ -2516,8 +2514,10 @@ AddRelationNewConstraints(Relation rel,
 			 * OK, store it.
 			 */
 			constrOid =
-				StoreRelCheck(rel, ccname, expr, cdef->initially_valid, is_local,
-							  is_local ? 0 : 1, cdef->is_no_inherit, is_internal);
+				StoreRelCheck(rel, ccname, expr, cdef->is_enforced,
+							  cdef->initially_valid, is_local,
+							  is_local ? 0 : 1, cdef->is_no_inherit,
+							  is_internal);
 
 			numchecks++;
 
@@ -2527,6 +2527,7 @@ AddRelationNewConstraints(Relation rel,
 			cooked->name = ccname;
 			cooked->attnum = 0;
 			cooked->expr = expr;
+			cooked->is_enforced = cdef->is_enforced;
 			cooked->skip_validation = cdef->skip_validation;
 			cooked->is_local = is_local;
 			cooked->inhcount = is_local ? 0 : 1;
@@ -2597,6 +2598,7 @@ AddRelationNewConstraints(Relation rel,
 			nncooked->name = nnname;
 			nncooked->attnum = colnum;
 			nncooked->expr = NULL;
+			nncooked->is_enforced = true;
 			nncooked->skip_validation = cdef->skip_validation;
 			nncooked->is_local = is_local;
 			nncooked->inhcount = inhcount;
@@ -2631,6 +2633,7 @@ AddRelationNewConstraints(Relation rel,
 static bool
 MergeWithExistingConstraint(Relation rel, const char *ccname, Node *expr,
 							bool allow_merge, bool is_local,
+							bool is_enforced,
 							bool is_initially_valid,
 							bool is_no_inherit)
 {
@@ -2721,10 +2724,22 @@ MergeWithExistingConstraint(Relation rel, const char *ccname, Node *expr,
 		 * If the child constraint is "not valid" then cannot merge with a
 		 * valid parent constraint.
 		 */
-		if (is_initially_valid && !con->convalidated)
+		if (is_initially_valid && con->conenforced && !con->convalidated)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 errmsg("constraint \"%s\" conflicts with NOT VALID constraint on relation \"%s\"",
+							ccname, RelationGetRelationName(rel))));
+
+		/*
+		 * A non-enforced child constraint cannot be merged with an enforced
+		 * parent constraint. However, the reverse is allowed, where the child
+		 * constraint is enforced.
+		 */
+		if ((!is_local && is_enforced && !con->conenforced) ||
+			(is_local && !is_enforced && con->conenforced))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					 errmsg("constraint \"%s\" conflicts with NOT ENFORCED constraint on relation \"%s\"",
 							ccname, RelationGetRelationName(rel))));
 
 		/* OK to update the tuple */
@@ -2760,6 +2775,19 @@ MergeWithExistingConstraint(Relation rel, const char *ccname, Node *expr,
 		{
 			Assert(is_local);
 			con->connoinherit = true;
+		}
+
+		/*
+		 * If the child constraint is required to be enforced while the parent
+		 * constraint is not, this should be allowed by marking the child
+		 * constraint as enforced. In the reverse case, an error would have
+		 * already been thrown before reaching this point.
+		 */
+		if (is_enforced && !con->conenforced)
+		{
+			Assert(is_local);
+			con->conenforced = true;
+			con->convalidated = true;
 		}
 
 		CatalogTupleUpdate(conDesc, &tup->t_self, tup);
