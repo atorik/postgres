@@ -207,9 +207,12 @@ InstrStartParallelQuery(StorageIO *storageiousage)
 	save_pgBufferUsage = pgBufferUsage;
 	save_pgWalUsage = pgWalUsage;
 
-	getrusage(RUSAGE_SELF, &rusage);
-	storageiousage->inblock = rusage.ru_inblock;
-	storageiousage->outblock = rusage.ru_oublock;
+	if (storageiousage != NULL)
+	{
+		getrusage(RUSAGE_SELF, &rusage);
+		storageiousage->inblock = rusage.ru_inblock;
+		storageiousage->outblock = rusage.ru_oublock;
+	}
 }
 
 /* report usage after parallel executor shutdown */

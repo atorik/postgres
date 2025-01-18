@@ -49,7 +49,6 @@
 #define PARALLEL_KEY_QUERY_TEXT			UINT64CONST(0xB000000000000003)
 #define PARALLEL_KEY_WAL_USAGE			UINT64CONST(0xB000000000000004)
 #define PARALLEL_KEY_BUFFER_USAGE		UINT64CONST(0xB000000000000005)
-#define PARALLEL_KEY_STORAGEIO_USAGE	UINT64CONST(0xB000000000000006)
 
 /*
  * Status for index builds performed in parallel.  This is allocated in a
@@ -146,7 +145,6 @@ typedef struct BrinLeader
 	Sharedsort *sharedsort;
 	Snapshot	snapshot;
 	WalUsage   *walusage;
-	StorageIO	*storageiousage;
 	BufferUsage *bufferusage;
 } BrinLeader;
 
@@ -2547,11 +2545,11 @@ _brin_end_parallel(BrinLeader *brinleader, BrinBuildState *state)
 	WaitForParallelWorkersToFinish(brinleader->pcxt);
 
 	/*
-	 * Next, accumulate WAL, buffer, and storage I/O usage.
-	 * (This must wait for the workers to finish, or we might get incomplete data.)
+	 * Next, accumulate WAL usage.  (This must wait for the workers to finish,
+	 * or we might get incomplete data.)
 	 */
 	for (i = 0; i < brinleader->pcxt->nworkers_launched; i++)
-		InstrAccumParallelQuery(&brinleader->bufferusage[i], &brinleader->storageiousage[i], &brinleader->walusage[i]);
+		InstrAccumParallelQuery(&brinleader->bufferusage[i], NULL, &brinleader->walusage[i]);
 
 	/* Free last reference to MVCC snapshot, if one was used */
 	if (IsMVCCSnapshot(brinleader->snapshot))
@@ -2866,8 +2864,6 @@ _brin_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	LOCKMODE	indexLockmode;
 	WalUsage   *walusage;
 	BufferUsage *bufferusage;
-	StorageIO	*storageiousage;
-	StorageIO	storageiousage_start = {0};
 	int			sortmem;
 
 	/*
@@ -2914,8 +2910,8 @@ _brin_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	sharedsort = shm_toc_lookup(toc, PARALLEL_KEY_TUPLESORT, false);
 	tuplesort_attach_shared(sharedsort, seg);
 
-	/* Prepare to track WAL, buffer, and storage I/O usage during parallel execution */
-	InstrStartParallelQuery(&storageiousage_start);
+	/* Prepare to track buffer usage during parallel execution */
+	InstrStartParallelQuery(NULL);
 
 	/*
 	 * Might as well use reliable figure when doling out maintenance_work_mem
@@ -2927,14 +2923,11 @@ _brin_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	_brin_parallel_scan_and_build(buildstate, brinshared, sharedsort,
 								  heapRel, indexRel, sortmem, false);
 
-	/* Report WAL, buffer, and storage I/O usage during parallel execution */
+	/* Report WAL/buffer usage during parallel execution */
 	bufferusage = shm_toc_lookup(toc, PARALLEL_KEY_BUFFER_USAGE, false);
-	storageiousage = shm_toc_lookup(toc, PARALLEL_KEY_STORAGEIO_USAGE, false);
 	walusage = shm_toc_lookup(toc, PARALLEL_KEY_WAL_USAGE, false);
-	InstrEndParallelQuery(&bufferusage[ParallelWorkerNumber],
-						  &storageiousage[ParallelWorkerNumber],
-						  &walusage[ParallelWorkerNumber],
-						  &storageiousage_start);
+	InstrEndParallelQuery(&bufferusage[ParallelWorkerNumber], NULL,
+						  &walusage[ParallelWorkerNumber], NULL);
 
 	index_close(indexRel, indexLockmode);
 	table_close(heapRel, heapLockmode);
