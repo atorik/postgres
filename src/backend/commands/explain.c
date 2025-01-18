@@ -681,7 +681,6 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	int			eflags;
 	int			instrument_option = 0;
 	SerializeMetrics serializeMetrics = {0};
-	StorageIO	storageio = {0};
 	StorageIO	storageio_start = {0};
 	struct rusage rusage;
 
@@ -710,6 +709,14 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 		storageio_start.inblock = rusage.ru_inblock;
 		storageio_start.outblock = rusage.ru_oublock;
+
+		/*
+		 * Initialize global variable counters for parallel query workers.
+		 * Even if the query is cancelled on the way, the EXPLAIN execution
+		 * always passes here, so it can be initialized here.
+		 */
+		pgStorageIOParallelUsage.inblock = 0;
+		pgStorageIOParallelUsage.outblock = 0;
 	}
 
 	/*
@@ -857,21 +864,38 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	if (es->storageio)
 	{
+		StorageIO	storageio = {0};
+		StorageIO storageio_end = {0};
+
 		getrusage(RUSAGE_SELF, &rusage);
 
-		storageio.inblock = rusage.ru_inblock - storageio_start.inblock;
-		storageio.outblock = rusage.ru_oublock - storageio_start.outblock;
+		storageio_end.inblock = rusage.ru_inblock;
+		storageio_end.outblock = rusage.ru_oublock;
 
-		if (es->format == EXPLAIN_FORMAT_TEXT)
+		StorageIOUsageAccumDiff(&storageio, &storageio_end, &storageio_start);
+		StorageIOUsageAdd(&storageio, &pgStorageIOParallelUsage);
+
+		if (peek_storageio(es, &storageio))
 		{
-			ExplainIndentText(es);
-			appendStringInfoString(es->str, "Execution:\n");
-			es->indent++;
-		}
-		show_storageio(es, &storageio);
+			if (es->format == EXPLAIN_FORMAT_TEXT)
+			{
+				ExplainIndentText(es);
+				appendStringInfoString(es->str, "Execution:\n");
+				es->indent++;
+			}
+			show_storageio(es, &storageio);
 
-		if (es->format == EXPLAIN_FORMAT_TEXT)
-			es->indent--;
+			// This may be not necessary. Just confusing?
+			if (peek_storageio(es, &pgStorageIOParallelUsage))
+			{
+				appendStringInfoString(es->str, "Execution(parallel workers' portion):\n");
+				show_storageio(es, &pgStorageIOParallelUsage);
+			}
+
+			if (es->format == EXPLAIN_FORMAT_TEXT)
+				es->indent--;
+		}
+
 		ExplainCloseGroup("Execution", "Execution", true, es);
 	}
 

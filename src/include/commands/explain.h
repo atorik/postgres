@@ -74,13 +74,6 @@ typedef struct ExplainState
 	ExplainWorkersState *workers_state; /* needed if parallel plan */
 } ExplainState;
 
-typedef struct StorageIO
-{
-	/* Note that page size here is 512 byte */
-	long		inblock;			/* # of pages that has been read from storage */
-	long		outblock;			/* # of pages that has been written or shall be written to storage */
-}			StorageIO;
-
 
 /* Hook for plugins to get control in ExplainOneQuery() */
 typedef void (*ExplainOneQuery_hook_type) (Query *query,
