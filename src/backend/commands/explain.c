@@ -481,8 +481,10 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 				planduration;
 	BufferUsage bufusage_start,
 				bufusage;
+#ifndef WIN32
 	StorageIO	storageio = {0};
 	StorageIO	storageio_start = {0};
+#endif
 	MemoryContextCounters mem_counters;
 	MemoryContext planner_ctx = NULL;
 	MemoryContext saved_ctx = NULL;
@@ -685,8 +687,10 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	int			eflags;
 	int			instrument_option = 0;
 	SerializeMetrics serializeMetrics = {0};
+#ifndef WIN32
 	StorageIO	storageio_start = {0};
 	struct rusage rusage;
+#endif
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
 

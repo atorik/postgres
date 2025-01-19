@@ -203,7 +203,9 @@ InstrAggNode(Instrumentation *dst, Instrumentation *add)
 void
 InstrStartParallelQuery(StorageIO *storageiousage)
 {
+#ifndef WIN32
 	struct rusage rusage;
+#endif
 	save_pgBufferUsage = pgBufferUsage;
 	save_pgWalUsage = pgWalUsage;
 
@@ -224,6 +226,7 @@ InstrEndParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage
 	memset(bufusage, 0, sizeof(BufferUsage));
 	BufferUsageAccumDiff(bufusage, &pgBufferUsage, &save_pgBufferUsage);
 
+#ifndef WIN32
 	if (storageiousage != NULL && storageiousage_start != NULL)
 	{
 		struct rusage rusage;
@@ -241,6 +244,7 @@ InstrEndParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage
 		//		(errmsg("InstrEndParallelQuery: inblock:%ld outblock:%ld",
 		//				storageiousage->inblock, storageiousage->outblock)));
 	}
+#endif
 	memset(walusage, 0, sizeof(WalUsage));
 	WalUsageAccumDiff(walusage, &pgWalUsage, &save_pgWalUsage);
 }
