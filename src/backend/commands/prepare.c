@@ -580,8 +580,8 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	instr_time	planduration;
 	BufferUsage bufusage_start,
 				bufusage;
-#ifndef WIN32
 	StorageIO	storageio_start = {0};
+#ifndef WIN32
 	StorageIO	storageio = {0};
 #endif
 	MemoryContextCounters mem_counters;
