@@ -120,11 +120,13 @@ extern void InstrAggNode(Instrumentation *dst, Instrumentation *add);
 extern void InstrStartParallelQuery(StorageIO *storageiousage);
 extern void InstrEndParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage *walusage, StorageIO *storageiousage_start);
 extern void InstrAccumParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage *walusage);
+#ifndef WIN32
 extern void BufferUsageAccumDiff(BufferUsage *dst,
 								 const BufferUsage *add, const BufferUsage *sub);
 extern void StorageIOUsageAccumDiff(StorageIO *dst,
 								 const StorageIO *add, const StorageIO *sub);
 extern void StorageIOUsageAdd(StorageIO *dst, const StorageIO *add);
+#endif
 extern void WalUsageAccumDiff(WalUsage *dst, const WalUsage *add,
 							  const WalUsage *sub);
 

@@ -311,6 +311,7 @@ BufferUsageAccumDiff(BufferUsage *dst,
 						  add->temp_blk_write_time, sub->temp_blk_write_time);
 }
 
+#ifndef WIN32
 /* helper functions for StorageIO usage accumulation */
 void
 StorageIOUsageAdd(StorageIO *dst, const StorageIO *add)
@@ -325,6 +326,7 @@ StorageIOUsageAccumDiff(StorageIO *dst, const StorageIO *add, const StorageIO *s
 	dst->inblock += add->inblock - sub->inblock;
 	dst->outblock += add->outblock - sub->outblock;
 }
+#endif
 
 /* helper functions for WAL usage accumulation */
 static void
