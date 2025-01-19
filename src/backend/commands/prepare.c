@@ -661,6 +661,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
 	}
 
+#ifndef WIN32
 	if (es->storageio)
 	{
 		struct rusage rusage;
@@ -669,6 +670,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		storageio.inblock = rusage.ru_inblock - storageio_start.inblock;
 		storageio.outblock = rusage.ru_oublock - storageio_start.outblock;
 	}
+#endif
 
 	plan_list = cplan->stmt_list;
 
