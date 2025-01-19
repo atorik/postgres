@@ -599,6 +599,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	if (es->buffers)
 		bufusage_start = pgBufferUsage;
 
+#ifndef WIN32
 	if (es->storageio)
 	{
 		struct rusage rusage;
@@ -607,6 +608,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		storageio_start.inblock = rusage.ru_inblock;
 		storageio_start.outblock = rusage.ru_oublock;
 	}
+#endif
 
 	INSTR_TIME_SET_CURRENT(planstart);
 

@@ -507,6 +507,7 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 		bufusage_start = pgBufferUsage;
 	INSTR_TIME_SET_CURRENT(planstart);
 
+#ifndef WIN32
 	if (es->storageio)
 	{
 		struct rusage rusage;
@@ -515,6 +516,7 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 		storageio_start.inblock = rusage.ru_inblock;
 		storageio_start.outblock = rusage.ru_oublock;
 	}
+#endif
 
 	/* plan the query */
 	plan = pg_plan_query(query, queryString, cursorOptions, params);
@@ -535,6 +537,7 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
 	}
 
+#ifndef WIN32
 	if (es->storageio)
 	{
 		struct rusage rusage;
@@ -543,6 +546,7 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 		storageio.inblock = rusage.ru_inblock - storageio_start.inblock;
 		storageio.outblock = rusage.ru_oublock - storageio_start.outblock;
 	}
+#endif
 
 	/* run it (if needed) and produce output */
 	ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
@@ -703,6 +707,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	 */
 	INSTR_TIME_SET_CURRENT(starttime);
 
+#ifndef WIN32
 	if (es->storageio)
 	{
 		getrusage(RUSAGE_SELF, &rusage);
@@ -718,6 +723,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		pgStorageIOParallelUsage.inblock = 0;
 		pgStorageIOParallelUsage.outblock = 0;
 	}
+#endif
 
 	/*
 	 * Use a snapshot with an updated command ID to ensure this query sees
@@ -862,6 +868,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	totaltime += elapsed_time(&starttime);
 
+#ifndef WIN32
 	if (es->storageio)
 	{
 		StorageIO	storageio = {0};
@@ -894,6 +901,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			ExplainCloseGroup("Execution", "Execution", true, es);
 		}
 	}
+#endif
 
 	/*
 	 * We only report execution time if we actually ran the query (that is,

@@ -207,12 +207,14 @@ InstrStartParallelQuery(StorageIO *storageiousage)
 	save_pgBufferUsage = pgBufferUsage;
 	save_pgWalUsage = pgWalUsage;
 
+#ifndef WIN32
 	if (storageiousage != NULL)
 	{
 		getrusage(RUSAGE_SELF, &rusage);
 		storageiousage->inblock = rusage.ru_inblock;
 		storageiousage->outblock = rusage.ru_oublock;
 	}
+#endif
 }
 
 /* report usage after parallel executor shutdown */
