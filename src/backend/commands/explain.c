@@ -481,8 +481,8 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 				planduration;
 	BufferUsage bufusage_start,
 				bufusage;
-#ifndef WIN32
 	StorageIO	storageio = {0};
+#ifndef WIN32
 	StorageIO	storageio_start = {0};
 #endif
 	MemoryContextCounters mem_counters;
@@ -818,8 +818,10 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		if (bufusage)
 			show_buffer_usage(es, bufusage);
 
+#ifndef WIN32
 		if (es->storageio)
 			show_storageio(es, planstorageio);
+#endif
 
 		if (mem_counters)
 			show_memory_counters(es, mem_counters);
