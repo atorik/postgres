@@ -792,7 +792,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	/* Create textual dump of plan tree */
 	ExplainPrintPlan(es, queryDesc);
 
-	/* Show buffer and/or memory usage in planning */
+	/* Show buffer, storage I/O, and/or memory usage in planning */
 	if (peek_buffer_usage(es, bufusage) || peek_storageio(es, planstorageio) ||
 		mem_counters)
 	{
@@ -875,8 +875,11 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		StorageIOUsageAccumDiff(&storageio, &storageio_end, &storageio_start);
 		StorageIOUsageAdd(&storageio, &pgStorageIOParallelUsage);
 
+		/* Show storage I/O usage in execution */
 		if (peek_storageio(es, &storageio))
 		{
+			ExplainOpenGroup("Execution", "Execution", true, es);
+
 			if (es->format == EXPLAIN_FORMAT_TEXT)
 			{
 				ExplainIndentText(es);
@@ -885,18 +888,11 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			}
 			show_storageio(es, &storageio);
 
-			// This may be not necessary. Just confusing?
-			if (peek_storageio(es, &pgStorageIOParallelUsage))
-			{
-				appendStringInfoString(es->str, "Execution(parallel workers' portion):\n");
-				show_storageio(es, &pgStorageIOParallelUsage);
-			}
-
 			if (es->format == EXPLAIN_FORMAT_TEXT)
 				es->indent--;
-		}
 
-		ExplainCloseGroup("Execution", "Execution", true, es);
+			ExplainCloseGroup("Execution", "Execution", true, es);
+		}
 	}
 
 	/*
@@ -4318,11 +4314,19 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
 	}
 }
 
+/*
+ * Return whether show_storageio would have anything to print, if given
+ * the same 'usage' data.  Note that when the format is anything other than
+ * text, we print even if the counters are all zeroes.
+ */
 static bool
 peek_storageio(ExplainState *es, const StorageIO *usage)
 {
 	if (usage == NULL)
 		return false;
+
+	if (es->format != EXPLAIN_FORMAT_TEXT)
+		return true;
 
 	if (usage->inblock <= 0 && usage->outblock <= 0)
 		return false;
@@ -4339,12 +4343,11 @@ peek_storageio(ExplainState *es, const StorageIO *usage)
 static void
 show_storageio(ExplainState *es, const StorageIO *usage)
 {
-	/* Show only positive counter values. */
-	if (usage->inblock <= 0 && usage->outblock <= 0)
-		return;
-
 	if (es->format == EXPLAIN_FORMAT_TEXT)
 	{
+		/* Show only positive counter values. */
+		if (usage->inblock <= 0 && usage->outblock <= 0)
+			return;
 
 		ExplainIndentText(es);
 		appendStringInfoString(es->str, "Storage I/O:");
@@ -4352,6 +4355,13 @@ show_storageio(ExplainState *es, const StorageIO *usage)
 		appendStringInfo(es->str, " write=%ld KB", (long) usage->outblock / 2);
 
 		appendStringInfoChar(es->str, '\n');
+	}
+	else
+	{
+		ExplainPropertyInteger("Storage I/O Read", NULL,
+							   usage->inblock / 2, es);
+		ExplainPropertyInteger("Storage I/O Read", NULL,
+							   usage->outblock / 2, es);
 	}
 }
 
