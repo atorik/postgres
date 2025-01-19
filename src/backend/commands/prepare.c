@@ -599,18 +599,16 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	}
 
 	if (es->buffers)
-		bufusage_start = pgBufferUsage;
-
-#ifndef WIN32
-	if (es->storageio)
 	{
+#ifndef WIN32
 		struct rusage rusage;
 
 		getrusage(RUSAGE_SELF, &rusage);
 		storageio_start.inblock = rusage.ru_inblock;
 		storageio_start.outblock = rusage.ru_oublock;
-	}
 #endif
+		bufusage_start = pgBufferUsage;
+	}
 
 	INSTR_TIME_SET_CURRENT(planstart);
 
@@ -659,20 +657,16 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	/* calc differences of buffer counters. */
 	if (es->buffers)
 	{
-		memset(&bufusage, 0, sizeof(BufferUsage));
-		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
-	}
-
 #ifndef WIN32
-	if (es->storageio)
-	{
 		struct rusage rusage;
 
 		getrusage(RUSAGE_SELF, &rusage);
 		storageio.inblock = rusage.ru_inblock - storageio_start.inblock;
 		storageio.outblock = rusage.ru_oublock - storageio_start.outblock;
-	}
 #endif
+		memset(&bufusage, 0, sizeof(BufferUsage));
+		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
+	}
 
 	plan_list = cplan->stmt_list;
 
@@ -684,7 +678,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		if (pstmt->commandType != CMD_UTILITY)
 			ExplainOnePlan(pstmt, into, es, query_string, paramLI, pstate->p_queryEnv,
 						   &planduration, (es->buffers ? &bufusage : NULL),
-						   (es->storageio ? &storageio : NULL),
+						   (es->buffers ? &storageio : NULL),
 						   es->memory ? &mem_counters : NULL);
 		else
 			ExplainOneUtility(pstmt->utilityStmt, into, es, pstate, paramLI);

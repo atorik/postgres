@@ -223,8 +223,6 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 			buffers_set = true;
 			es->buffers = defGetBoolean(opt);
 		}
-		else if (strcmp(opt->defname, "storageio") == 0)
-			es->storageio = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "wal") == 0)
 			es->wal = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "settings") == 0)
@@ -508,19 +506,18 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	}
 
 	if (es->buffers)
-		bufusage_start = pgBufferUsage;
-	INSTR_TIME_SET_CURRENT(planstart);
-
-#ifndef WIN32
-	if (es->storageio)
 	{
+#ifndef WIN32
 		struct rusage rusage;
 
 		getrusage(RUSAGE_SELF, &rusage);
 		storageio_start.inblock = rusage.ru_inblock;
 		storageio_start.outblock = rusage.ru_oublock;
-	}
 #endif
+
+		bufusage_start = pgBufferUsage;
+	}
+	INSTR_TIME_SET_CURRENT(planstart);
 
 	/* plan the query */
 	plan = pg_plan_query(query, queryString, cursorOptions, params);
@@ -542,7 +539,7 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	}
 
 #ifndef WIN32
-	if (es->storageio)
+	if (es->buffers)
 	{
 		struct rusage rusage;
 
@@ -555,7 +552,7 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	/* run it (if needed) and produce output */
 	ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
 				   &planduration, (es->buffers ? &bufusage : NULL),
-				   (es->storageio ? &storageio : NULL),
+				   (es->buffers ? &storageio : NULL),
 				   es->memory ? &mem_counters : NULL);
 }
 
@@ -702,20 +699,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		instrument_option |= INSTRUMENT_ROWS;
 
 	if (es->buffers)
-		instrument_option |= INSTRUMENT_BUFFERS;
-	if (es->wal)
-		instrument_option |= INSTRUMENT_WAL;
-
-	/*
-	 * We always collect timing for the entire statement, even when node-level
-	 * timing is off, so we don't look at es->timing here.  (We could skip
-	 * this if !es->summary, but it's hardly worth the complication.)
-	 */
-	INSTR_TIME_SET_CURRENT(starttime);
-
-#ifndef WIN32
-	if (es->storageio)
 	{
+#ifndef WIN32
 		getrusage(RUSAGE_SELF, &rusage);
 
 		storageio_start.inblock = rusage.ru_inblock;
@@ -728,8 +713,19 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		 */
 		pgStorageIOParallelUsage.inblock = 0;
 		pgStorageIOParallelUsage.outblock = 0;
-	}
 #endif
+
+		instrument_option |= INSTRUMENT_BUFFERS;
+	}
+	if (es->wal)
+		instrument_option |= INSTRUMENT_WAL;
+
+	/*
+	 * We always collect timing for the entire statement, even when node-level
+	 * timing is off, so we don't look at es->timing here.  (We could skip
+	 * this if !es->summary, but it's hardly worth the complication.)
+	 */
+	INSTR_TIME_SET_CURRENT(starttime);
 
 	/*
 	 * Use a snapshot with an updated command ID to ensure this query sees
@@ -818,13 +814,12 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		}
 
 		if (bufusage)
+		{
 			show_buffer_usage(es, bufusage);
-
 #ifndef WIN32
-		if (es->storageio)
 			show_storageio(es, planstorageio);
 #endif
-
+		}
 		if (mem_counters)
 			show_memory_counters(es, mem_counters);
 
@@ -877,7 +872,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	totaltime += elapsed_time(&starttime);
 
 #ifndef WIN32
-	if (es->storageio)
+	if (es->buffers)
 	{
 		StorageIO	storageio = {0};
 		StorageIO storageio_end = {0};
