@@ -147,8 +147,10 @@ static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static bool peek_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
+#ifndef WIN32
 static bool peek_storageio(ExplainState *es, const StorageIO *usage);
 static void show_storageio(ExplainState *es, const StorageIO *usage);
+#endif
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void show_memory_counters(ExplainState *es,
 								 const MemoryContextCounters *mem_counters);
@@ -4328,6 +4330,7 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
 	}
 }
 
+#ifndef WIN32
 /*
  * Return whether show_storageio would have anything to print, if given
  * the same 'usage' data.  Note that when the format is anything other than
@@ -4348,7 +4351,6 @@ peek_storageio(ExplainState *es, const StorageIO *usage)
 	else
 		return true;
 }
-
 /*
  * Show storage I/O.
  *
@@ -4378,6 +4380,7 @@ show_storageio(ExplainState *es, const StorageIO *usage)
 							   usage->outblock / 2, es);
 	}
 }
+#endif
 
 /*
  * Show WAL usage details.

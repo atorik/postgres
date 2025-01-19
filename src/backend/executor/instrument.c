@@ -254,9 +254,11 @@ void
 InstrAccumParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage *walusage)
 {
 	BufferUsageAdd(&pgBufferUsage, bufusage);
+#ifndef WIN32
 	if (storageiousage != NULL)
 		StorageIOUsageAdd(&pgStorageIOParallelUsage, storageiousage);
 	WalUsageAdd(&pgWalUsage, walusage);
+#endif
 }
 
 /* dst += add */
