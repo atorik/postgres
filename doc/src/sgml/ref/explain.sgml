@@ -200,8 +200,13 @@ ROLLBACK;
       previously-dirtied blocks evicted from cache by this backend during
       query processing.
       The number of blocks shown for an
-      upper-level node includes those used by all its child nodes.  In text
-      format, only non-zero values are printed.  Buffers information is
+      upper-level node includes those used by all its child nodes.
+      This option also displays the number of read and write operations performed
+      on storage during the planning and execution phases, shown at the end of the plan.
+      Note that this information is not available on Windows. The unit of measurement
+      for read and write operations may vary depending on the platform; on Linux,
+      it is 512 KB.
+      In text format, only non-zero values are printed.  Buffers information is
       included by default when <literal>ANALYZE</literal> is used but
       otherwise is not included by default, but can be enabled using this
       option.
