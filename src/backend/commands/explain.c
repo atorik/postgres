@@ -4331,9 +4331,7 @@ peek_storageio(ExplainState *es, const StorageIO *usage)
 }
 
 /*
- * Show storage I/O.
- *
- * Since the unit of inblock/outblock is 512 bytes, change them to KB by dividing by two.
+ * Show storage I/O usage.
  */
 static void
 show_storageio(ExplainState *es, const StorageIO *usage)
@@ -4346,17 +4344,17 @@ show_storageio(ExplainState *es, const StorageIO *usage)
 
 		ExplainIndentText(es);
 		appendStringInfoString(es->str, "Storage I/O:");
-		appendStringInfo(es->str, " read=%ld KB", (long) usage->inblock / 2);
-		appendStringInfo(es->str, " write=%ld KB", (long) usage->outblock / 2);
+		appendStringInfo(es->str, " read=%ld times", (long) usage->inblock);
+		appendStringInfo(es->str, " write=%ld times", (long) usage->outblock);
 
 		appendStringInfoChar(es->str, '\n');
 	}
 	else
 	{
 		ExplainPropertyInteger("Storage I/O Read", NULL,
-							   usage->inblock / 2, es);
+							   usage->inblock, es);
 		ExplainPropertyInteger("Storage I/O Read", NULL,
-							   usage->outblock / 2, es);
+							   usage->outblock, es);
 	}
 }
 
