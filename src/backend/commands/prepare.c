@@ -580,9 +580,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	instr_time	planduration;
 	BufferUsage bufusage_start,
 				bufusage;
-#ifndef WIN32
 	StorageIO	storageio_start = {0};
-#endif
 	StorageIO	storageio = {0};
 	MemoryContextCounters mem_counters;
 	MemoryContext planner_ctx = NULL;
@@ -600,13 +598,12 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 
 	if (es->buffers)
 	{
-#ifndef WIN32
 		struct rusage rusage;
 
 		getrusage(RUSAGE_SELF, &rusage);
 		storageio_start.inblock = rusage.ru_inblock;
 		storageio_start.outblock = rusage.ru_oublock;
-#endif
+
 		bufusage_start = pgBufferUsage;
 	}
 
@@ -657,13 +654,12 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	/* calc differences of buffer counters. */
 	if (es->buffers)
 	{
-#ifndef WIN32
 		struct rusage rusage;
 
 		getrusage(RUSAGE_SELF, &rusage);
 		storageio.inblock = rusage.ru_inblock - storageio_start.inblock;
 		storageio.outblock = rusage.ru_oublock - storageio_start.outblock;
-#endif
+
 		memset(&bufusage, 0, sizeof(BufferUsage));
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
 	}

@@ -203,20 +203,16 @@ InstrAggNode(Instrumentation *dst, Instrumentation *add)
 void
 InstrStartParallelQuery(StorageIO *storageiousage)
 {
-#ifndef WIN32
 	struct rusage rusage;
-#endif
 	save_pgBufferUsage = pgBufferUsage;
 	save_pgWalUsage = pgWalUsage;
 
-#ifndef WIN32
 	if (storageiousage != NULL)
 	{
 		getrusage(RUSAGE_SELF, &rusage);
 		storageiousage->inblock = rusage.ru_inblock;
 		storageiousage->outblock = rusage.ru_oublock;
 	}
-#endif
 }
 
 /* report usage after parallel executor shutdown */
@@ -226,7 +222,6 @@ InstrEndParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage
 	memset(bufusage, 0, sizeof(BufferUsage));
 	BufferUsageAccumDiff(bufusage, &pgBufferUsage, &save_pgBufferUsage);
 
-#ifndef WIN32
 	if (storageiousage != NULL && storageiousage_start != NULL)
 	{
 		struct rusage rusage;
@@ -244,7 +239,6 @@ InstrEndParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage
 		//		(errmsg("InstrEndParallelQuery: inblock:%ld outblock:%ld",
 		//				storageiousage->inblock, storageiousage->outblock)));
 	}
-#endif
 	memset(walusage, 0, sizeof(WalUsage));
 	WalUsageAccumDiff(walusage, &pgWalUsage, &save_pgWalUsage);
 }
@@ -254,11 +248,9 @@ void
 InstrAccumParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage *walusage)
 {
 	BufferUsageAdd(&pgBufferUsage, bufusage);
-#ifndef WIN32
 	if (storageiousage != NULL)
 		StorageIOUsageAdd(&pgStorageIOParallelUsage, storageiousage);
 	WalUsageAdd(&pgWalUsage, walusage);
-#endif
 }
 
 /* dst += add */
@@ -313,7 +305,6 @@ BufferUsageAccumDiff(BufferUsage *dst,
 						  add->temp_blk_write_time, sub->temp_blk_write_time);
 }
 
-#ifndef WIN32
 /* helper functions for StorageIO usage accumulation */
 void
 StorageIOUsageAdd(StorageIO *dst, const StorageIO *add)
@@ -328,7 +319,6 @@ StorageIOUsageAccumDiff(StorageIO *dst, const StorageIO *add, const StorageIO *s
 	dst->inblock += add->inblock - sub->inblock;
 	dst->outblock += add->outblock - sub->outblock;
 }
-#endif
 
 /* helper functions for WAL usage accumulation */
 static void

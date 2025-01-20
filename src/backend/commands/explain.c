@@ -148,9 +148,7 @@ static const char *explain_get_index_name(Oid indexId);
 static bool peek_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static bool peek_storageio(ExplainState *es, const StorageIO *usage);
-#ifndef WIN32
 static void show_storageio(ExplainState *es, const StorageIO *usage);
-#endif
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void show_memory_counters(ExplainState *es,
 								 const MemoryContextCounters *mem_counters);
@@ -482,9 +480,7 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	BufferUsage bufusage_start,
 				bufusage;
 	StorageIO	storageio = {0};
-#ifndef WIN32
 	StorageIO	storageio_start = {0};
-#endif
 	MemoryContextCounters mem_counters;
 	MemoryContext planner_ctx = NULL;
 	MemoryContext saved_ctx = NULL;
@@ -507,13 +503,11 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 
 	if (es->buffers)
 	{
-#ifndef WIN32
 		struct rusage rusage;
 
 		getrusage(RUSAGE_SELF, &rusage);
 		storageio_start.inblock = rusage.ru_inblock;
 		storageio_start.outblock = rusage.ru_oublock;
-#endif
 
 		bufusage_start = pgBufferUsage;
 	}
@@ -538,7 +532,6 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
 	}
 
-#ifndef WIN32
 	if (es->buffers)
 	{
 		struct rusage rusage;
@@ -547,7 +540,6 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 		storageio.inblock = rusage.ru_inblock - storageio_start.inblock;
 		storageio.outblock = rusage.ru_oublock - storageio_start.outblock;
 	}
-#endif
 
 	/* run it (if needed) and produce output */
 	ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
@@ -686,10 +678,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	int			eflags;
 	int			instrument_option = 0;
 	SerializeMetrics serializeMetrics = {0};
-#ifndef WIN32
 	StorageIO	storageio_start = {0};
 	struct rusage rusage;
-#endif
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
 
@@ -700,7 +690,6 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	if (es->buffers)
 	{
-#ifndef WIN32
 		getrusage(RUSAGE_SELF, &rusage);
 
 		storageio_start.inblock = rusage.ru_inblock;
@@ -713,7 +702,6 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		 */
 		pgStorageIOParallelUsage.inblock = 0;
 		pgStorageIOParallelUsage.outblock = 0;
-#endif
 
 		instrument_option |= INSTRUMENT_BUFFERS;
 	}
@@ -816,9 +804,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		if (bufusage)
 		{
 			show_buffer_usage(es, bufusage);
-#ifndef WIN32
 			show_storageio(es, planstorageio);
-#endif
 		}
 		if (mem_counters)
 			show_memory_counters(es, mem_counters);
@@ -871,7 +857,6 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	totaltime += elapsed_time(&starttime);
 
-#ifndef WIN32
 	if (es->buffers)
 	{
 		StorageIO	storageio = {0};
@@ -904,7 +889,6 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			ExplainCloseGroup("Execution", "Execution", true, es);
 		}
 	}
-#endif
 
 	/*
 	 * We only report execution time if we actually ran the query (that is,
@@ -4346,7 +4330,6 @@ peek_storageio(ExplainState *es, const StorageIO *usage)
 		return true;
 }
 
-#ifndef WIN32
 /*
  * Show storage I/O.
  *
@@ -4376,7 +4359,6 @@ show_storageio(ExplainState *es, const StorageIO *usage)
 							   usage->outblock / 2, es);
 	}
 }
-#endif
 
 /*
  * Show WAL usage details.

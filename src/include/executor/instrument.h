@@ -122,11 +122,9 @@ extern void InstrEndParallelQuery(BufferUsage *bufusage, StorageIO *storageiousa
 extern void InstrAccumParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage *walusage);
 extern void BufferUsageAccumDiff(BufferUsage *dst,
 								 const BufferUsage *add, const BufferUsage *sub);
-#ifndef WIN32
 extern void StorageIOUsageAccumDiff(StorageIO *dst,
 								 const StorageIO *add, const StorageIO *sub);
 extern void StorageIOUsageAdd(StorageIO *dst, const StorageIO *add);
-#endif
 extern void WalUsageAccumDiff(WalUsage *dst, const WalUsage *add,
 							  const WalUsage *sub);
 
