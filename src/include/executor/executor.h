@@ -148,12 +148,9 @@ extern TupleHashEntry LookupTupleHashEntry(TupleHashTable hashtable,
 										   bool *isnew, uint32 *hash);
 extern uint32 TupleHashTableHash(TupleHashTable hashtable,
 								 TupleTableSlot *slot);
-extern size_t TupleHashEntrySize(void);
 extern TupleHashEntry LookupTupleHashEntryHash(TupleHashTable hashtable,
 											   TupleTableSlot *slot,
 											   bool *isnew, uint32 hash);
-extern MinimalTuple TupleHashEntryGetTuple(TupleHashEntry entry);
-extern void *TupleHashEntryGetAdditional(TupleHashEntry entry);
 extern TupleHashEntry FindTupleHashEntry(TupleHashTable hashtable,
 										 TupleTableSlot *slot,
 										 ExprState *eqcomp,
@@ -632,6 +629,7 @@ extern int	ExecCleanTargetListLength(List *targetlist);
 extern TupleTableSlot *ExecGetTriggerOldSlot(EState *estate, ResultRelInfo *relInfo);
 extern TupleTableSlot *ExecGetTriggerNewSlot(EState *estate, ResultRelInfo *relInfo);
 extern TupleTableSlot *ExecGetReturningSlot(EState *estate, ResultRelInfo *relInfo);
+extern TupleTableSlot *ExecGetAllNullSlot(EState *estate, ResultRelInfo *relInfo);
 extern TupleConversionMap *ExecGetChildToRootMap(ResultRelInfo *resultRelInfo);
 extern TupleConversionMap *ExecGetRootToChildMap(ResultRelInfo *resultRelInfo, EState *estate);
 
