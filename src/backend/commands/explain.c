@@ -505,9 +505,16 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	{
 		struct rusage rusage;
 
-		getrusage(RUSAGE_SELF, &rusage);
-		storageio_start.inblock = rusage.ru_inblock;
-		storageio_start.outblock = rusage.ru_oublock;
+		if (getrusage(RUSAGE_SELF, &rusage))
+		{
+			storageio_start.inblock = rusage.ru_inblock;
+			storageio_start.outblock = rusage.ru_oublock;
+		}
+		else
+		{
+			storageio_start.inblock = LONG_MAX;
+			storageio_start.outblock = LONG_MAX;
+		}
 
 		bufusage_start = pgBufferUsage;
 	}
@@ -536,9 +543,17 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	{
 		struct rusage rusage;
 
-		getrusage(RUSAGE_SELF, &rusage);
-		storageio.inblock = rusage.ru_inblock - storageio_start.inblock;
-		storageio.outblock = rusage.ru_oublock - storageio_start.outblock;
+		if (getrusage(RUSAGE_SELF, &rusage))
+		{
+			getrusage(RUSAGE_SELF, &rusage);
+			storageio.inblock = rusage.ru_inblock - storageio_start.inblock;
+			storageio.outblock = rusage.ru_oublock - storageio_start.outblock;
+		}
+		else
+		{
+			storageio_start.inblock = LONG_MIN;
+			storageio_start.outblock = LONG_MIN;
+		}
 	}
 
 	/* run it (if needed) and produce output */
