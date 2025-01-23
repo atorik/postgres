@@ -147,8 +147,8 @@ static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static bool peek_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
-static bool peek_storageio(ExplainState *es, const StorageIO *usage);
-static void show_storageio(ExplainState *es, const StorageIO *usage);
+static bool peek_storageio(ExplainState *es, const StorageIO * usage);
+static void show_storageio(ExplainState *es, const StorageIO * usage);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void show_memory_counters(ExplainState *es,
 								 const MemoryContextCounters *mem_counters);
@@ -668,7 +668,7 @@ void
 ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
-			   const BufferUsage *bufusage, const StorageIO *planstorageio,
+			   const BufferUsage *bufusage, const StorageIO * planstorageio,
 			   const MemoryContextCounters *mem_counters)
 {
 	DestReceiver *dest;
@@ -860,7 +860,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	if (es->buffers)
 	{
 		StorageIO	storageio = {0};
-		StorageIO storageio_end = {0};
+		StorageIO	storageio_end = {0};
 
 		getrusage(RUSAGE_SELF, &rusage);
 
@@ -4315,7 +4315,7 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
  * text, we print even if the counters are all zeroes.
  */
 static bool
-peek_storageio(ExplainState *es, const StorageIO *usage)
+peek_storageio(ExplainState *es, const StorageIO * usage)
 {
 	if (usage == NULL)
 		return false;
@@ -4334,7 +4334,7 @@ peek_storageio(ExplainState *es, const StorageIO *usage)
  * Show storage I/O usage.
  */
 static void
-show_storageio(ExplainState *es, const StorageIO *usage)
+show_storageio(ExplainState *es, const StorageIO * usage)
 {
 	if (es->format == EXPLAIN_FORMAT_TEXT)
 	{

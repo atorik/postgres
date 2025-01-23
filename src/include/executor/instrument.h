@@ -44,8 +44,9 @@ typedef struct BufferUsage
 typedef struct StorageIO
 {
 	/* Note that page size here is 512 byte */
-	long		inblock;			/* # of pages that has been read from storage */
-	long		outblock;			/* # of pages that has been written or shall be written to storage */
+	long		inblock;		/* # of pages that has been read from storage */
+	long		outblock;		/* # of pages that has been written or shall
+								 * be written to storage */
 }			StorageIO;
 
 /*
@@ -117,14 +118,14 @@ extern void InstrStopNode(Instrumentation *instr, double nTuples);
 extern void InstrUpdateTupleCount(Instrumentation *instr, double nTuples);
 extern void InstrEndLoop(Instrumentation *instr);
 extern void InstrAggNode(Instrumentation *dst, Instrumentation *add);
-extern void InstrStartParallelQuery(StorageIO *storageiousage);
-extern void InstrEndParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage *walusage, StorageIO *storageiousage_start);
-extern void InstrAccumParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage *walusage);
+extern void InstrStartParallelQuery(StorageIO * storageiousage);
+extern void InstrEndParallelQuery(BufferUsage *bufusage, StorageIO * storageiousage, WalUsage *walusage, StorageIO * storageiousage_start);
+extern void InstrAccumParallelQuery(BufferUsage *bufusage, StorageIO * storageiousage, WalUsage *walusage);
 extern void BufferUsageAccumDiff(BufferUsage *dst,
 								 const BufferUsage *add, const BufferUsage *sub);
-extern void StorageIOUsageAccumDiff(StorageIO *dst,
-								 const StorageIO *add, const StorageIO *sub);
-extern void StorageIOUsageAdd(StorageIO *dst, const StorageIO *add);
+extern void StorageIOUsageAccumDiff(StorageIO * dst,
+									const StorageIO * add, const StorageIO * sub);
+extern void StorageIOUsageAdd(StorageIO * dst, const StorageIO * add);
 extern void WalUsageAccumDiff(WalUsage *dst, const WalUsage *add,
 							  const WalUsage *sub);
 

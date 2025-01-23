@@ -598,7 +598,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	char	   *pstmt_space;
 	char	   *paramlistinfo_space;
 	BufferUsage *bufusage_space;
-	StorageIO	*storageiousage_space;
+	StorageIO  *storageiousage_space;
 	WalUsage   *walusage_space;
 	SharedExecutorInstrumentation *instrumentation = NULL;
 	SharedJitInstrumentation *jit_instrumentation = NULL;
@@ -784,7 +784,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 
 	/* Same for StorageIO. */
 	storageiousage_space = shm_toc_allocate(pcxt->toc,
-									  mul_size(sizeof(StorageIO), pcxt->nworkers));
+											mul_size(sizeof(StorageIO), pcxt->nworkers));
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_STORAGEIO_USAGE, storageiousage_space);
 	pei->storageio_usage = storageiousage_space;
 
@@ -1183,8 +1183,8 @@ ExecParallelFinish(ParallelExecutorInfo *pei)
 	WaitForParallelWorkersToFinish(pei->pcxt);
 
 	/*
-	 * Next, accumulate buffer, WAL, and Storage I/O usage.
-	 * (This must wait for the workers to finish, or we might get incomplete data.)
+	 * Next, accumulate buffer, WAL, and Storage I/O usage. (This must wait
+	 * for the workers to finish, or we might get incomplete data.)
 	 */
 	for (i = 0; i < nworkers; i++)
 		InstrAccumParallelQuery(&pei->buffer_usage[i], &pei->storageio_usage[i], &pei->wal_usage[i]);
@@ -1419,8 +1419,8 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 {
 	FixedParallelExecutorState *fpes;
 	BufferUsage *buffer_usage;
-	StorageIO	*storageio_usage;
-	StorageIO storageio_usage_start = {0};
+	StorageIO  *storageio_usage;
+	StorageIO	storageio_usage_start = {0};
 	WalUsage   *wal_usage;
 	DestReceiver *receiver;
 	QueryDesc  *queryDesc;
@@ -1474,7 +1474,8 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	ExecSetTupleBound(fpes->tuples_needed, queryDesc->planstate);
 
 	/*
-	 * Prepare to track buffer, WAL, and StorageI/O usage during query execution.
+	 * Prepare to track buffer, WAL, and StorageI/O usage during query
+	 * execution.
 	 *
 	 * We do this after starting up the executor to match what happens in the
 	 * leader, which also doesn't count buffer accesses and WAL activity that

@@ -20,13 +20,14 @@
 
 BufferUsage pgBufferUsage;
 static BufferUsage save_pgBufferUsage;
+
 /* Only count parallel workers' usage */
-StorageIO pgStorageIOParallelUsage;
+StorageIO	pgStorageIOParallelUsage;
 WalUsage	pgWalUsage;
 static WalUsage save_pgWalUsage;
 
 static void BufferUsageAdd(BufferUsage *dst, const BufferUsage *add);
-void StorageIOUsageAdd(StorageIO *dst, const StorageIO *add);
+void		StorageIOUsageAdd(StorageIO * dst, const StorageIO * add);
 static void WalUsageAdd(WalUsage *dst, WalUsage *add);
 
 
@@ -201,9 +202,10 @@ InstrAggNode(Instrumentation *dst, Instrumentation *add)
 
 /* note current values during parallel executor startup */
 void
-InstrStartParallelQuery(StorageIO *storageiousage)
+InstrStartParallelQuery(StorageIO * storageiousage)
 {
 	struct rusage rusage;
+
 	save_pgBufferUsage = pgBufferUsage;
 	save_pgWalUsage = pgWalUsage;
 
@@ -217,7 +219,7 @@ InstrStartParallelQuery(StorageIO *storageiousage)
 
 /* report usage after parallel executor shutdown */
 void
-InstrEndParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage *walusage, StorageIO *storageiousage_start)
+InstrEndParallelQuery(BufferUsage *bufusage, StorageIO * storageiousage, WalUsage *walusage, StorageIO * storageiousage_start)
 {
 	memset(bufusage, 0, sizeof(BufferUsage));
 	BufferUsageAccumDiff(bufusage, &pgBufferUsage, &save_pgBufferUsage);
@@ -234,10 +236,10 @@ InstrEndParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage
 		memset(storageiousage, 0, sizeof(StorageIO));
 		StorageIOUsageAccumDiff(storageiousage, &storageiousage_end, storageiousage_start);
 
-		// for debugging
-		//ereport(INFO,
-		//		(errmsg("InstrEndParallelQuery: inblock:%ld outblock:%ld",
-		//				storageiousage->inblock, storageiousage->outblock)));
+		/* for debugging */
+		/* ereport(INFO, */
+		/* (errmsg("InstrEndParallelQuery: inblock:%ld outblock:%ld", */
+		/* storageiousage->inblock, storageiousage->outblock))); */
 	}
 	memset(walusage, 0, sizeof(WalUsage));
 	WalUsageAccumDiff(walusage, &pgWalUsage, &save_pgWalUsage);
@@ -245,7 +247,7 @@ InstrEndParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage
 
 /* accumulate work done by workers in leader's stats */
 void
-InstrAccumParallelQuery(BufferUsage *bufusage, StorageIO *storageiousage, WalUsage *walusage)
+InstrAccumParallelQuery(BufferUsage *bufusage, StorageIO * storageiousage, WalUsage *walusage)
 {
 	BufferUsageAdd(&pgBufferUsage, bufusage);
 	if (storageiousage != NULL)
@@ -307,14 +309,14 @@ BufferUsageAccumDiff(BufferUsage *dst,
 
 /* helper functions for StorageIO usage accumulation */
 void
-StorageIOUsageAdd(StorageIO *dst, const StorageIO *add)
+StorageIOUsageAdd(StorageIO * dst, const StorageIO * add)
 {
 	dst->inblock += add->inblock;
 	dst->outblock += add->outblock;
 }
 
 void
-StorageIOUsageAccumDiff(StorageIO *dst, const StorageIO *add, const StorageIO *sub)
+StorageIOUsageAccumDiff(StorageIO * dst, const StorageIO * add, const StorageIO * sub)
 {
 	dst->inblock += add->inblock - sub->inblock;
 	dst->outblock += add->outblock - sub->outblock;
