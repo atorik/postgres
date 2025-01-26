@@ -26,7 +26,7 @@ typedef struct ParallelExecutorInfo
 	PlanState  *planstate;		/* plan subtree we're running in parallel */
 	ParallelContext *pcxt;		/* parallel context we're using */
 	BufferUsage *buffer_usage;	/* points to bufusage area in DSM */
-	StorageIO  *storageio_usage;	/* points to storageio area in DSM */
+	StorageIOUsage *storageio_usage;	/* points to storageio usage area in DSM */
 	WalUsage   *wal_usage;		/* walusage area in DSM */
 	SharedExecutorInstrumentation *instrumentation; /* optional */
 	struct SharedJitInstrumentation *jit_instrumentation;	/* optional */

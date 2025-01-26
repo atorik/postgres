@@ -598,7 +598,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	char	   *pstmt_space;
 	char	   *paramlistinfo_space;
 	BufferUsage *bufusage_space;
-	StorageIO  *storageiousage_space;
+	StorageIOUsage *storageiousage_space;
 	WalUsage   *walusage_space;
 	SharedExecutorInstrumentation *instrumentation = NULL;
 	SharedJitInstrumentation *jit_instrumentation = NULL;
@@ -681,10 +681,10 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
 	/*
-	 * Same thing for StorageIO.
+	 * Same thing for StorageIOUsage.
 	 */
 	shm_toc_estimate_chunk(&pcxt->estimator,
-						   mul_size(sizeof(StorageIO), pcxt->nworkers));
+						   mul_size(sizeof(StorageIOUsage), pcxt->nworkers));
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
 	/* Estimate space for tuple queues. */
@@ -782,9 +782,9 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_WAL_USAGE, walusage_space);
 	pei->wal_usage = walusage_space;
 
-	/* Same for StorageIO. */
+	/* Same for StorageIOUsage. */
 	storageiousage_space = shm_toc_allocate(pcxt->toc,
-											mul_size(sizeof(StorageIO), pcxt->nworkers));
+											mul_size(sizeof(StorageIOUsage), pcxt->nworkers));
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_STORAGEIO_USAGE, storageiousage_space);
 	pei->storageio_usage = storageiousage_space;
 
@@ -1419,8 +1419,8 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 {
 	FixedParallelExecutorState *fpes;
 	BufferUsage *buffer_usage;
-	StorageIO  *storageio_usage;
-	StorageIO	storageio_usage_start = {0};
+	StorageIOUsage *storageio_usage;
+	StorageIOUsage storageio_usage_start = {0};
 	WalUsage   *wal_usage;
 	DestReceiver *receiver;
 	QueryDesc  *queryDesc;

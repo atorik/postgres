@@ -580,8 +580,8 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	instr_time	planduration;
 	BufferUsage bufusage_start,
 				bufusage;
-	StorageIO	storageio_start = {0};
-	StorageIO	storageio = {0};
+	StorageIOUsage storageio_start = {0};
+	StorageIOUsage storageio = {0};
 	MemoryContextCounters mem_counters;
 	MemoryContext planner_ctx = NULL;
 	MemoryContext saved_ctx = NULL;

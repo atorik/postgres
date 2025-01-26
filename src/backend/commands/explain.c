@@ -147,8 +147,8 @@ static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static bool peek_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
-static bool peek_storageio(ExplainState *es, const StorageIO * usage);
-static void show_storageio(ExplainState *es, const StorageIO * usage);
+static bool peek_storageio_usage(ExplainState *es, const StorageIOUsage *usage);
+static void show_storageio_usage(ExplainState *es, const StorageIOUsage *usage);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void show_memory_counters(ExplainState *es,
 								 const MemoryContextCounters *mem_counters);
@@ -479,8 +479,8 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 				planduration;
 	BufferUsage bufusage_start,
 				bufusage;
-	StorageIO	storageio = {0};
-	StorageIO	storageio_start = {0};
+	StorageIOUsage storageio = {0};
+	StorageIOUsage storageio_start = {0};
 	MemoryContextCounters mem_counters;
 	MemoryContext planner_ctx = NULL;
 	MemoryContext saved_ctx = NULL;
@@ -683,7 +683,7 @@ void
 ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
-			   const BufferUsage *bufusage, const StorageIO * planstorageio,
+			   const BufferUsage *bufusage, const StorageIOUsage *planstorageio,
 			   const MemoryContextCounters *mem_counters)
 {
 	DestReceiver *dest;
@@ -693,7 +693,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	int			eflags;
 	int			instrument_option = 0;
 	SerializeMetrics serializeMetrics = {0};
-	StorageIO	storageio_start = {0};
+	StorageIOUsage storageio_start = {0};
 	struct rusage rusage;
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
@@ -715,8 +715,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		 * Even if the query is cancelled on the way, the EXPLAIN execution
 		 * always passes here, so it can be initialized here.
 		 */
-		pgStorageIOParallelUsage.inblock = 0;
-		pgStorageIOParallelUsage.outblock = 0;
+		pgStorageIOUsageParallel.inblock = 0;
+		pgStorageIOUsageParallel.outblock = 0;
 
 		instrument_option |= INSTRUMENT_BUFFERS;
 	}
@@ -804,7 +804,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	ExplainPrintPlan(es, queryDesc);
 
 	/* Show buffer, storage I/O, and/or memory usage in planning */
-	if (peek_buffer_usage(es, bufusage) || peek_storageio(es, planstorageio) ||
+	if (peek_buffer_usage(es, bufusage) || peek_storageio_usage(es, planstorageio) ||
 		mem_counters)
 	{
 		ExplainOpenGroup("Planning", "Planning", true, es);
@@ -819,7 +819,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		if (bufusage)
 		{
 			show_buffer_usage(es, bufusage);
-			show_storageio(es, planstorageio);
+			show_storageio_usage(es, planstorageio);
 		}
 		if (mem_counters)
 			show_memory_counters(es, mem_counters);
@@ -874,8 +874,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	if (es->buffers)
 	{
-		StorageIO	storageio = {0};
-		StorageIO	storageio_end = {0};
+		StorageIOUsage storageio = {0};
+		StorageIOUsage storageio_end = {0};
 
 		getrusage(RUSAGE_SELF, &rusage);
 
@@ -883,10 +883,10 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		storageio_end.outblock = rusage.ru_oublock;
 
 		StorageIOUsageAccumDiff(&storageio, &storageio_end, &storageio_start);
-		StorageIOUsageAdd(&storageio, &pgStorageIOParallelUsage);
+		StorageIOUsageAdd(&storageio, &pgStorageIOUsageParallel);
 
 		/* Show storage I/O usage in execution */
-		if (peek_storageio(es, &storageio))
+		if (peek_storageio_usage(es, &storageio))
 		{
 			ExplainOpenGroup("Execution", "Execution", true, es);
 
@@ -896,7 +896,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 				appendStringInfoString(es->str, "Execution:\n");
 				es->indent++;
 			}
-			show_storageio(es, &storageio);
+			show_storageio_usage(es, &storageio);
 
 			if (es->format == EXPLAIN_FORMAT_TEXT)
 				es->indent--;
@@ -4325,12 +4325,12 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
 }
 
 /*
- * Return whether show_storageio would have anything to print, if given
+ * Return whether show_storageio_usage would have anything to print, if given
  * the same 'usage' data.  Note that when the format is anything other than
  * text, we print even if the counters are all zeroes.
  */
 static bool
-peek_storageio(ExplainState *es, const StorageIO * usage)
+peek_storageio_usage(ExplainState *es, const StorageIOUsage *usage)
 {
 	if (usage == NULL)
 		return false;
@@ -4349,7 +4349,7 @@ peek_storageio(ExplainState *es, const StorageIO * usage)
  * Show storage I/O usage.
  */
 static void
-show_storageio(ExplainState *es, const StorageIO * usage)
+show_storageio_usage(ExplainState *es, const StorageIOUsage *usage)
 {
 	if (es->format == EXPLAIN_FORMAT_TEXT)
 	{
