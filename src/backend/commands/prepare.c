@@ -598,13 +598,8 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 
 	if (es->buffers)
 	{
-		struct rusage rusage;
-
-		getrusage(RUSAGE_SELF, &rusage);
-		storageio_start.inblock = rusage.ru_inblock;
-		storageio_start.outblock = rusage.ru_oublock;
-
 		bufusage_start = pgBufferUsage;
+		GetStorageIOUsage(&storageio_start, true);
 	}
 
 	INSTR_TIME_SET_CURRENT(planstart);
@@ -654,14 +649,9 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	/* calc differences of buffer counters. */
 	if (es->buffers)
 	{
-		struct rusage rusage;
-
-		getrusage(RUSAGE_SELF, &rusage);
-		storageio.inblock = rusage.ru_inblock - storageio_start.inblock;
-		storageio.outblock = rusage.ru_oublock - storageio_start.outblock;
-
 		memset(&bufusage, 0, sizeof(BufferUsage));
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
+		GetStorageIOUsage(&storageio, false);
 	}
 
 	plan_list = cplan->stmt_list;

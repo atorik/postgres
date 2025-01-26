@@ -13,8 +13,6 @@
  */
 #include "postgres.h"
 
-#include <sys/resource.h>
-
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "commands/createas.h"
@@ -479,8 +477,7 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 				planduration;
 	BufferUsage bufusage_start,
 				bufusage;
-	StorageIOUsage storageio = {0};
-	StorageIOUsage storageio_start = {0};
+	StorageIOUsage storageio, storageio_start;
 	MemoryContextCounters mem_counters;
 	MemoryContext planner_ctx = NULL;
 	MemoryContext saved_ctx = NULL;
@@ -503,20 +500,8 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 
 	if (es->buffers)
 	{
-		struct rusage rusage;
-
-		if (getrusage(RUSAGE_SELF, &rusage))
-		{
-			storageio_start.inblock = rusage.ru_inblock;
-			storageio_start.outblock = rusage.ru_oublock;
-		}
-		else
-		{
-			storageio_start.inblock = LONG_MAX;
-			storageio_start.outblock = LONG_MAX;
-		}
-
 		bufusage_start = pgBufferUsage;
+		GetStorageIOUsage(&storageio_start, true);
 	}
 	INSTR_TIME_SET_CURRENT(planstart);
 
@@ -541,19 +526,9 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 
 	if (es->buffers)
 	{
-		struct rusage rusage;
-
-		if (getrusage(RUSAGE_SELF, &rusage))
-		{
-			getrusage(RUSAGE_SELF, &rusage);
-			storageio.inblock = rusage.ru_inblock - storageio_start.inblock;
-			storageio.outblock = rusage.ru_oublock - storageio_start.outblock;
-		}
-		else
-		{
-			storageio_start.inblock = LONG_MIN;
-			storageio_start.outblock = LONG_MIN;
-		}
+		GetStorageIOUsage(&storageio, false);
+		storageio.inblock -= storageio_start.inblock;
+		storageio.outblock -= storageio_start.outblock;
 	}
 
 	/* run it (if needed) and produce output */
@@ -693,8 +668,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	int			eflags;
 	int			instrument_option = 0;
 	SerializeMetrics serializeMetrics = {0};
-	StorageIOUsage storageio_start = {0};
-	struct rusage rusage;
+	StorageIOUsage storageio_start;
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
 
@@ -705,10 +679,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	if (es->buffers)
 	{
-		getrusage(RUSAGE_SELF, &rusage);
-
-		storageio_start.inblock = rusage.ru_inblock;
-		storageio_start.outblock = rusage.ru_oublock;
+		GetStorageIOUsage(&storageio_start, true);
 
 		/*
 		 * Initialize global variable counters for parallel query workers.
@@ -875,12 +846,9 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	if (es->buffers)
 	{
 		StorageIOUsage storageio = {0};
-		StorageIOUsage storageio_end = {0};
+		StorageIOUsage storageio_end;
 
-		getrusage(RUSAGE_SELF, &rusage);
-
-		storageio_end.inblock = rusage.ru_inblock;
-		storageio_end.outblock = rusage.ru_oublock;
+		GetStorageIOUsage(&storageio_end, false);
 
 		StorageIOUsageAccumDiff(&storageio, &storageio_end, &storageio_start);
 		StorageIOUsageAdd(&storageio, &pgStorageIOUsageParallel);

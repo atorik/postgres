@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include <limits.h>
 #include <sys/resource.h>
 #include <unistd.h>
 
@@ -204,17 +205,11 @@ InstrAggNode(Instrumentation *dst, Instrumentation *add)
 void
 InstrStartParallelQuery(StorageIOUsage *storageiousage)
 {
-	struct rusage rusage;
-
 	save_pgBufferUsage = pgBufferUsage;
 	save_pgWalUsage = pgWalUsage;
 
 	if (storageiousage != NULL)
-	{
-		getrusage(RUSAGE_SELF, &rusage);
-		storageiousage->inblock = rusage.ru_inblock;
-		storageiousage->outblock = rusage.ru_oublock;
-	}
+		GetStorageIOUsage(storageiousage, true);
 }
 
 /* report usage after parallel executor shutdown */
@@ -226,12 +221,9 @@ InstrEndParallelQuery(BufferUsage *bufusage, StorageIOUsage *storageiousage, Wal
 
 	if (storageiousage != NULL && storageiousage_start != NULL)
 	{
-		struct rusage rusage;
 		struct StorageIOUsage storageiousage_end;
 
-		getrusage(RUSAGE_SELF, &rusage);
-		storageiousage_end.inblock = rusage.ru_inblock;
-		storageiousage_end.outblock = rusage.ru_oublock;
+		GetStorageIOUsage(&storageiousage_end, false);
 
 		memset(storageiousage, 0, sizeof(StorageIOUsage));
 		StorageIOUsageAccumDiff(storageiousage, &storageiousage_end, storageiousage_start);
@@ -320,6 +312,38 @@ StorageIOUsageAccumDiff(StorageIOUsage *dst, const StorageIOUsage *add, const St
 {
 	dst->inblock += add->inblock - sub->inblock;
 	dst->outblock += add->outblock - sub->outblock;
+}
+
+/* Captures the current storage I/O usage statistics */
+void
+GetStorageIOUsage(StorageIOUsage *usage, bool start)
+{
+	struct rusage rusage;
+
+	if (!getrusage(RUSAGE_SELF, &rusage))
+	{
+		usage->inblock = rusage.ru_inblock;
+		usage->outblock = rusage.ru_oublock;
+	}
+
+	/*
+	 * getrusage() failed, but it'd better not to error out since
+	 * StorageIOUsage is auxiliary information. Instead, since the difference
+	 * between the start and end values is used to measure its usage and when
+	 * it is less than 0 no output is shown(see show_storageio_usage()), we
+	 * set the biggest value at the start time and set minimum value to
+	 * handle the failure gracefully.
+	 */
+	else if (start)
+	{
+		usage->inblock = LONG_MAX;
+		usage->outblock = LONG_MAX;
+	}
+	else
+	{
+		usage->inblock = LONG_MIN;
+		usage->outblock = LONG_MIN;
+	}
 }
 
 /* helper functions for WAL usage accumulation */
