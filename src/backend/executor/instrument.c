@@ -320,30 +320,14 @@ GetStorageIOUsage(StorageIOUsage *usage, bool start)
 {
 	struct rusage rusage;
 
-	if (!getrusage(RUSAGE_SELF, &rusage))
+	if (getrusage(RUSAGE_SELF, &rusage))
 	{
-		usage->inblock = rusage.ru_inblock;
-		usage->outblock = rusage.ru_oublock;
+		ereport(ERROR,
+				(errcode(ERRCODE_SYSTEM_ERROR),
+				 errmsg("getrusage() failed: %m")));
 	}
-
-	/*
-	 * getrusage() failed, but it'd better not to error out since
-	 * StorageIOUsage is auxiliary information. Instead, since the difference
-	 * between the start and end values is used to measure its usage and when
-	 * it is less than 0 no output is shown(see show_storageio_usage()), we
-	 * set the biggest value at the start time and set minimum value to handle
-	 * the failure gracefully.
-	 */
-	else if (start)
-	{
-		usage->inblock = LONG_MAX;
-		usage->outblock = LONG_MAX;
-	}
-	else
-	{
-		usage->inblock = LONG_MIN;
-		usage->outblock = LONG_MIN;
-	}
+	usage->inblock = rusage.ru_inblock;
+	usage->outblock = rusage.ru_oublock;
 }
 
 /* helper functions for WAL usage accumulation */
