@@ -331,8 +331,8 @@ GetStorageIOUsage(StorageIOUsage *usage, bool start)
 	 * StorageIOUsage is auxiliary information. Instead, since the difference
 	 * between the start and end values is used to measure its usage and when
 	 * it is less than 0 no output is shown(see show_storageio_usage()), we
-	 * set the biggest value at the start time and set minimum value to
-	 * handle the failure gracefully.
+	 * set the biggest value at the start time and set minimum value to handle
+	 * the failure gracefully.
 	 */
 	else if (start)
 	{
