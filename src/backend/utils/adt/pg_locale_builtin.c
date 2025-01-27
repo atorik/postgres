@@ -31,6 +31,8 @@ extern size_t strtitle_builtin(char *dst, size_t dstsize, const char *src,
 							   ssize_t srclen, pg_locale_t locale);
 extern size_t strupper_builtin(char *dst, size_t dstsize, const char *src,
 							   ssize_t srclen, pg_locale_t locale);
+extern size_t strfold_builtin(char *dst, size_t dstsize, const char *src,
+							  ssize_t srclen, pg_locale_t locale);
 
 
 struct WordBoundaryState
@@ -78,7 +80,8 @@ size_t
 strlower_builtin(char *dest, size_t destsize, const char *src, ssize_t srclen,
 				 pg_locale_t locale)
 {
-	return unicode_strlower(dest, destsize, src, srclen);
+	return unicode_strlower(dest, destsize, src, srclen,
+							locale->info.builtin.casemap_full);
 }
 
 size_t
@@ -94,6 +97,7 @@ strtitle_builtin(char *dest, size_t destsize, const char *src, ssize_t srclen,
 	};
 
 	return unicode_strtitle(dest, destsize, src, srclen,
+							locale->info.builtin.casemap_full,
 							initcap_wbnext, &wbstate);
 }
 
@@ -101,7 +105,16 @@ size_t
 strupper_builtin(char *dest, size_t destsize, const char *src, ssize_t srclen,
 				 pg_locale_t locale)
 {
-	return unicode_strupper(dest, destsize, src, srclen);
+	return unicode_strupper(dest, destsize, src, srclen,
+							locale->info.builtin.casemap_full);
+}
+
+size_t
+strfold_builtin(char *dest, size_t destsize, const char *src, ssize_t srclen,
+				pg_locale_t locale)
+{
+	return unicode_strfold(dest, destsize, src, srclen,
+						   locale->info.builtin.casemap_full);
 }
 
 pg_locale_t
@@ -142,6 +155,7 @@ create_pg_locale_builtin(Oid collid, MemoryContext context)
 	result = MemoryContextAllocZero(context, sizeof(struct pg_locale_struct));
 
 	result->info.builtin.locale = MemoryContextStrdup(context, locstr);
+	result->info.builtin.casemap_full = (strcmp(locstr, "PG_UNICODE_FAST") == 0);
 	result->provider = COLLPROVIDER_BUILTIN;
 	result->deterministic = true;
 	result->collate_is_c = true;
@@ -163,6 +177,8 @@ get_collation_actual_version_builtin(const char *collcollate)
 	if (strcmp(collcollate, "C") == 0)
 		return "1";
 	else if (strcmp(collcollate, "C.UTF-8") == 0)
+		return "1";
+	else if (strcmp(collcollate, "PG_UNICODE_FAST") == 0)
 		return "1";
 	else
 		ereport(ERROR,

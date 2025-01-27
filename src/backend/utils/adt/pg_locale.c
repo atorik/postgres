@@ -106,6 +106,8 @@ extern size_t strtitle_builtin(char *dst, size_t dstsize, const char *src,
 							   ssize_t srclen, pg_locale_t locale);
 extern size_t strupper_builtin(char *dst, size_t dstsize, const char *src,
 							   ssize_t srclen, pg_locale_t locale);
+extern size_t strfold_builtin(char *dst, size_t dstsize, const char *src,
+							  ssize_t srclen, pg_locale_t locale);
 
 extern size_t strlower_icu(char *dst, size_t dstsize, const char *src,
 						   ssize_t srclen, pg_locale_t locale);
@@ -113,6 +115,8 @@ extern size_t strtitle_icu(char *dst, size_t dstsize, const char *src,
 						   ssize_t srclen, pg_locale_t locale);
 extern size_t strupper_icu(char *dst, size_t dstsize, const char *src,
 						   ssize_t srclen, pg_locale_t locale);
+extern size_t strfold_icu(char *dst, size_t dstsize, const char *src,
+						  ssize_t srclen, pg_locale_t locale);
 
 extern size_t strlower_libc(char *dst, size_t dstsize, const char *src,
 							ssize_t srclen, pg_locale_t locale);
@@ -1447,6 +1451,26 @@ pg_strupper(char *dst, size_t dstsize, const char *src, ssize_t srclen,
 	return 0;					/* keep compiler quiet */
 }
 
+size_t
+pg_strfold(char *dst, size_t dstsize, const char *src, ssize_t srclen,
+		   pg_locale_t locale)
+{
+	if (locale->provider == COLLPROVIDER_BUILTIN)
+		return strfold_builtin(dst, dstsize, src, srclen, locale);
+#ifdef USE_ICU
+	else if (locale->provider == COLLPROVIDER_ICU)
+		return strfold_icu(dst, dstsize, src, srclen, locale);
+#endif
+	/* for libc, just use strlower */
+	else if (locale->provider == COLLPROVIDER_LIBC)
+		return strlower_libc(dst, dstsize, src, srclen, locale);
+	else
+		/* shouldn't happen */
+		PGLOCALE_SUPPORT_ERROR(locale->provider);
+
+	return 0;					/* keep compiler quiet */
+}
+
 /*
  * pg_strcoll
  *
@@ -1590,8 +1614,11 @@ builtin_locale_encoding(const char *locale)
 {
 	if (strcmp(locale, "C") == 0)
 		return -1;
-	if (strcmp(locale, "C.UTF-8") == 0)
+	else if (strcmp(locale, "C.UTF-8") == 0)
 		return PG_UTF8;
+	else if (strcmp(locale, "PG_UNICODE_FAST") == 0)
+		return PG_UTF8;
+
 
 	ereport(ERROR,
 			(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -1616,6 +1643,8 @@ builtin_validate_locale(int encoding, const char *locale)
 		canonical_name = "C";
 	else if (strcmp(locale, "C.UTF-8") == 0 || strcmp(locale, "C.UTF8") == 0)
 		canonical_name = "C.UTF-8";
+	else if (strcmp(locale, "PG_UNICODE_FAST") == 0)
+		canonical_name = "PG_UNICODE_FAST";
 
 	if (!canonical_name)
 		ereport(ERROR,
