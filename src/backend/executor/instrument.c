@@ -229,9 +229,9 @@ InstrEndParallelQuery(BufferUsage *bufusage, StorageIOUsage *storageiousage, Wal
 		StorageIOUsageAccumDiff(storageiousage, &storageiousage_end, storageiousage_start);
 
 		/* for debugging */
-		/* ereport(INFO, */
-		/* (errmsg("InstrEndParallelQuery: inblock:%ld outblock:%ld", */
-		/* storageiousage->inblock, storageiousage->outblock))); */
+		ereport(DEBUG1,
+				(errmsg("Parallel worker's storage I/O times: inblock:%ld outblock:%ld",
+						storageiousage->inblock, storageiousage->outblock)));
 	}
 	memset(walusage, 0, sizeof(WalUsage));
 	WalUsageAccumDiff(walusage, &pgWalUsage, &save_pgWalUsage);

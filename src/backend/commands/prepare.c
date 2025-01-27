@@ -17,7 +17,6 @@
 #include "postgres.h"
 
 #include <limits.h>
-#include <sys/resource.h>
 
 #include "access/xact.h"
 #include "catalog/pg_type.h"
@@ -580,8 +579,8 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	instr_time	planduration;
 	BufferUsage bufusage_start,
 				bufusage;
-	StorageIOUsage storageio_start = {0};
-	StorageIOUsage storageio = {0};
+	StorageIOUsage storageio,
+				storageio_start;
 	MemoryContextCounters mem_counters;
 	MemoryContext planner_ctx = NULL;
 	MemoryContext saved_ctx = NULL;

@@ -844,17 +844,16 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	totaltime += elapsed_time(&starttime);
 
+	/* Show storage I/O usage in execution */
 	if (es->buffers)
 	{
 		StorageIOUsage storageio = {0};
 		StorageIOUsage storageio_end;
 
 		GetStorageIOUsage(&storageio_end, false);
-
 		StorageIOUsageAccumDiff(&storageio, &storageio_end, &storageio_start);
 		StorageIOUsageAdd(&storageio, &pgStorageIOUsageParallel);
 
-		/* Show storage I/O usage in execution */
 		if (peek_storageio_usage(es, &storageio))
 		{
 			ExplainOpenGroup("Execution", "Execution", true, es);
