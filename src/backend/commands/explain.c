@@ -502,7 +502,7 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	if (es->buffers)
 	{
 		bufusage_start = pgBufferUsage;
-		GetStorageIOUsage(&storageio_start, true);
+		GetStorageIOUsage(&storageio_start);
 	}
 	INSTR_TIME_SET_CURRENT(planstart);
 
@@ -527,7 +527,7 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 
 	if (es->buffers)
 	{
-		GetStorageIOUsage(&storageio, false);
+		GetStorageIOUsage(&storageio);
 		storageio.inblock -= storageio_start.inblock;
 		storageio.outblock -= storageio_start.outblock;
 	}
@@ -680,7 +680,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	if (es->buffers)
 	{
-		GetStorageIOUsage(&storageio_start, true);
+		GetStorageIOUsage(&storageio_start);
 
 		/*
 		 * Initialize global variable counters for parallel query workers.
@@ -850,7 +850,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		StorageIOUsage storageio = {0};
 		StorageIOUsage storageio_end;
 
-		GetStorageIOUsage(&storageio_end, false);
+		GetStorageIOUsage(&storageio_end);
 		StorageIOUsageAccumDiff(&storageio, &storageio_end, &storageio_start);
 		StorageIOUsageAdd(&storageio, &pgStorageIOUsageParallel);
 

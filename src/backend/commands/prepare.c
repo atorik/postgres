@@ -598,7 +598,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	if (es->buffers)
 	{
 		bufusage_start = pgBufferUsage;
-		GetStorageIOUsage(&storageio_start, true);
+		GetStorageIOUsage(&storageio_start);
 	}
 
 	INSTR_TIME_SET_CURRENT(planstart);
@@ -650,7 +650,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	{
 		memset(&bufusage, 0, sizeof(BufferUsage));
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
-		GetStorageIOUsage(&storageio, false);
+		GetStorageIOUsage(&storageio);
 	}
 
 	plan_list = cplan->stmt_list;

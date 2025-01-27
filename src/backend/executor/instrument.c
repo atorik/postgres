@@ -13,7 +13,6 @@
  */
 #include "postgres.h"
 
-#include <limits.h>
 #include <sys/resource.h>
 #include <unistd.h>
 
@@ -209,7 +208,7 @@ InstrStartParallelQuery(StorageIOUsage *storageiousage)
 	save_pgWalUsage = pgWalUsage;
 
 	if (storageiousage != NULL)
-		GetStorageIOUsage(storageiousage, true);
+		GetStorageIOUsage(storageiousage);
 }
 
 /* report usage after parallel executor shutdown */
@@ -223,12 +222,11 @@ InstrEndParallelQuery(BufferUsage *bufusage, StorageIOUsage *storageiousage, Wal
 	{
 		struct StorageIOUsage storageiousage_end;
 
-		GetStorageIOUsage(&storageiousage_end, false);
+		GetStorageIOUsage(&storageiousage_end);
 
 		memset(storageiousage, 0, sizeof(StorageIOUsage));
 		StorageIOUsageAccumDiff(storageiousage, &storageiousage_end, storageiousage_start);
 
-		/* for debugging */
 		ereport(DEBUG1,
 				(errmsg("Parallel worker's storage I/O times: inblock:%ld outblock:%ld",
 						storageiousage->inblock, storageiousage->outblock)));
@@ -316,7 +314,7 @@ StorageIOUsageAccumDiff(StorageIOUsage *dst, const StorageIOUsage *add, const St
 
 /* Captures the current storage I/O usage statistics */
 void
-GetStorageIOUsage(StorageIOUsage *usage, bool start)
+GetStorageIOUsage(StorageIOUsage *usage)
 {
 	struct rusage rusage;
 
