@@ -6,7 +6,7 @@
  * Code supporting the direct import of relation attribute statistics, similar
  * to what is done by the ANALYZE command.
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -155,12 +155,25 @@ attribute_statistics_update(FunctionCallInfo fcinfo, int elevel)
 	stats_check_required_arg(fcinfo, attarginfo, ATTRELATION_ARG);
 	reloid = PG_GETARG_OID(ATTRELATION_ARG);
 
+	if (RecoveryInProgress())
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("recovery is in progress"),
+				 errhint("Statistics cannot be modified during recovery.")));
+
 	/* lock before looking up attribute */
 	stats_lock_check_privileges(reloid);
 
 	stats_check_required_arg(fcinfo, attarginfo, ATTNAME_ARG);
 	attname = PG_GETARG_NAME(ATTNAME_ARG);
 	attnum = get_attnum(reloid, NameStr(*attname));
+
+	if (attnum < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot modify statistics on system column \"%s\"",
+						NameStr(*attname))));
+
 	if (attnum == InvalidAttrNumber)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_COLUMN),
@@ -525,7 +538,7 @@ get_attr_stat_type(Oid reloid, AttrNumber attnum, int elevel,
 	 * When analyzing an expression index, believe the expression tree's type
 	 * not the column datatype --- the latter might be the opckeytype storage
 	 * type of the opclass, which is not interesting for our purposes. This
-	 * mimics the behvior of examine_attribute().
+	 * mimics the behavior of examine_attribute().
 	 */
 	if (expr == NULL)
 	{
@@ -752,6 +765,8 @@ upsert_pg_statistic(Relation starel, HeapTuple oldtup,
 	}
 
 	heap_freetuple(newtup);
+
+	CommandCounterIncrement();
 }
 
 /*
@@ -762,6 +777,7 @@ delete_pg_statistic(Oid reloid, AttrNumber attnum, bool stainherit)
 {
 	Relation	sd = table_open(StatisticRelationId, RowExclusiveLock);
 	HeapTuple	oldtup;
+	bool		result = false;
 
 	/* Is there already a pg_statistic tuple for this attribute? */
 	oldtup = SearchSysCache3(STATRELATTINH,
@@ -773,12 +789,14 @@ delete_pg_statistic(Oid reloid, AttrNumber attnum, bool stainherit)
 	{
 		CatalogTupleDelete(sd, &oldtup->t_self);
 		ReleaseSysCache(oldtup);
-		table_close(sd, RowExclusiveLock);
-		return true;
+		result = true;
 	}
 
 	table_close(sd, RowExclusiveLock);
-	return false;
+
+	CommandCounterIncrement();
+
+	return result;
 }
 
 /*
@@ -860,11 +878,24 @@ pg_clear_attribute_stats(PG_FUNCTION_ARGS)
 	stats_check_required_arg(fcinfo, attarginfo, ATTRELATION_ARG);
 	reloid = PG_GETARG_OID(ATTRELATION_ARG);
 
+	if (RecoveryInProgress())
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("recovery is in progress"),
+				 errhint("Statistics cannot be modified during recovery.")));
+
 	stats_lock_check_privileges(reloid);
 
 	stats_check_required_arg(fcinfo, attarginfo, ATTNAME_ARG);
 	attname = PG_GETARG_NAME(ATTNAME_ARG);
 	attnum = get_attnum(reloid, NameStr(*attname));
+
+	if (attnum < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot clear statistics on system column \"%s\"",
+						NameStr(*attname))));
+
 	if (attnum == InvalidAttrNumber)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_COLUMN),

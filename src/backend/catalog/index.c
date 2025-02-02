@@ -3,7 +3,7 @@
  * index.c
  *	  code to create and destroy POSTGRES index relations
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -320,7 +320,6 @@ ConstructTupleDescriptor(Relation heapRelation,
 
 		MemSet(to, 0, ATTRIBUTE_FIXED_PART_SIZE);
 		to->attnum = i + 1;
-		to->attcacheoff = -1;
 		to->attislocal = true;
 		to->attcollation = (i < numkeyatts) ? collationIds[i] : InvalidOid;
 
@@ -477,6 +476,8 @@ ConstructTupleDescriptor(Relation heapRelation,
 
 			ReleaseSysCache(tuple);
 		}
+
+		populate_compact_attribute(indexTupDesc, i);
 	}
 
 	pfree(amroutine);
@@ -1957,6 +1958,7 @@ index_constraint_create(Relation heapRelation,
 								   constraintType,
 								   deferrable,
 								   initdeferred,
+								   true,	/* Is Enforced */
 								   true,
 								   parentConstraintId,
 								   RelationGetRelid(heapRelation),
@@ -2336,13 +2338,9 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 
 	/*
 	 * Updating pg_index might involve TOAST table access, so ensure we have a
-	 * valid snapshot.  We only expect to get here without a snapshot in the
-	 * concurrent path.
+	 * valid snapshot.
 	 */
-	if (concurrent)
-		PushActiveSnapshot(GetTransactionSnapshot());
-	else
-		Assert(HaveRegisteredOrActiveSnapshot());
+	PushActiveSnapshot(GetTransactionSnapshot());
 
 	/*
 	 * fix INDEX relation, and check for expressional index
@@ -2361,8 +2359,7 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	ReleaseSysCache(tuple);
 	table_close(indexRelation, RowExclusiveLock);
 
-	if (concurrent)
-		PopActiveSnapshot();
+	PopActiveSnapshot();
 
 	/*
 	 * if it has any expression columns, we might have stored statistics about
@@ -2811,6 +2808,9 @@ index_update_stats(Relation rel,
 				   bool hasindex,
 				   double reltuples)
 {
+	bool		update_stats;
+	BlockNumber relpages = 0;	/* keep compiler quiet */
+	BlockNumber relallvisible = 0;
 	Oid			relid = RelationGetRelid(rel);
 	Relation	pg_class;
 	ScanKeyData key[1];
@@ -2818,6 +2818,40 @@ index_update_stats(Relation rel,
 	void	   *state;
 	Form_pg_class rd_rel;
 	bool		dirty;
+
+	/*
+	 * As a special hack, if we are dealing with an empty table and the
+	 * existing reltuples is -1, we leave that alone.  This ensures that
+	 * creating an index as part of CREATE TABLE doesn't cause the table to
+	 * prematurely look like it's been vacuumed.  The rd_rel we modify may
+	 * differ from rel->rd_rel due to e.g. commit of concurrent GRANT, but the
+	 * commands that change reltuples take locks conflicting with ours.  (Even
+	 * if a command changed reltuples under a weaker lock, this affects only
+	 * statistics for an empty table.)
+	 */
+	if (reltuples == 0 && rel->rd_rel->reltuples < 0)
+		reltuples = -1;
+
+	/*
+	 * Don't update statistics during binary upgrade, because the indexes are
+	 * created before the data is moved into place.
+	 */
+	update_stats = reltuples >= 0 && !IsBinaryUpgrade;
+
+	/*
+	 * Finish I/O and visibility map buffer locks before
+	 * systable_inplace_update_begin() locks the pg_class buffer.  The rd_rel
+	 * we modify may differ from rel->rd_rel due to e.g. commit of concurrent
+	 * GRANT, but no command changes a relkind from non-index to index.  (Even
+	 * if one did, relallvisible doesn't break functionality.)
+	 */
+	if (update_stats)
+	{
+		relpages = RelationGetNumberOfBlocks(rel);
+
+		if (rel->rd_rel->relkind != RELKIND_INDEX)
+			visibilitymap_count(rel, &relallvisible, NULL);
+	}
 
 	/*
 	 * We always update the pg_class row using a non-transactional,
@@ -2863,15 +2897,6 @@ index_update_stats(Relation rel,
 	/* Should this be a more comprehensive test? */
 	Assert(rd_rel->relkind != RELKIND_PARTITIONED_INDEX);
 
-	/*
-	 * As a special hack, if we are dealing with an empty table and the
-	 * existing reltuples is -1, we leave that alone.  This ensures that
-	 * creating an index as part of CREATE TABLE doesn't cause the table to
-	 * prematurely look like it's been vacuumed.
-	 */
-	if (reltuples == 0 && rd_rel->reltuples < 0)
-		reltuples = -1;
-
 	/* Apply required updates, if any, to copied tuple */
 
 	dirty = false;
@@ -2881,20 +2906,8 @@ index_update_stats(Relation rel,
 		dirty = true;
 	}
 
-	/*
-	 * Avoid updating statistics during binary upgrade, because the indexes
-	 * are created before the data is moved into place.
-	 */
-	if (reltuples >= 0 && !IsBinaryUpgrade)
+	if (update_stats)
 	{
-		BlockNumber relpages = RelationGetNumberOfBlocks(rel);
-		BlockNumber relallvisible;
-
-		if (rd_rel->relkind != RELKIND_INDEX)
-			visibilitymap_count(rel, &relallvisible, NULL);
-		else					/* don't bother for indexes */
-			relallvisible = 0;
-
 		if (rd_rel->relpages != (int32) relpages)
 		{
 			rd_rel->relpages = (int32) relpages;
@@ -2978,7 +2991,7 @@ index_build(Relation heapRelation,
 
 	/*
 	 * Determine worker process details for parallel CREATE INDEX.  Currently,
-	 * only btree has support for parallel builds.
+	 * only btree and BRIN have support for parallel builds.
 	 *
 	 * Note that planner considers parallel safety for us.
 	 */
@@ -3384,7 +3397,7 @@ validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
 
 	/* ambulkdelete updates progress metrics */
 	(void) index_bulk_delete(&ivinfo, NULL,
-							 validate_index_callback, (void *) &state);
+							 validate_index_callback, &state);
 
 	/* Execute the sort */
 	{

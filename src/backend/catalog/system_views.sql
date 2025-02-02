@@ -1,7 +1,7 @@
 /*
  * PostgreSQL System Views
  *
- * Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Copyright (c) 1996-2025, PostgreSQL Global Development Group
  *
  * src/backend/catalog/system_views.sql
  *
@@ -634,7 +634,12 @@ REVOKE ALL ON pg_ident_file_mappings FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION pg_ident_file_mappings() FROM PUBLIC;
 
 CREATE VIEW pg_timezone_abbrevs AS
-    SELECT * FROM pg_timezone_abbrevs();
+    SELECT * FROM pg_timezone_abbrevs_zone() z
+    UNION ALL
+    (SELECT * FROM pg_timezone_abbrevs_abbrevs() a
+     WHERE NOT EXISTS (SELECT 1 FROM pg_timezone_abbrevs_zone() z2
+                       WHERE z2.abbrev = a.abbrev))
+    ORDER BY abbrev;
 
 CREATE VIEW pg_timezone_names AS
     SELECT * FROM pg_timezone_names();
@@ -691,7 +696,11 @@ CREATE VIEW pg_stat_all_tables AS
             pg_stat_get_vacuum_count(C.oid) AS vacuum_count,
             pg_stat_get_autovacuum_count(C.oid) AS autovacuum_count,
             pg_stat_get_analyze_count(C.oid) AS analyze_count,
-            pg_stat_get_autoanalyze_count(C.oid) AS autoanalyze_count
+            pg_stat_get_autoanalyze_count(C.oid) AS autoanalyze_count,
+            pg_stat_get_total_vacuum_time(C.oid) AS total_vacuum_time,
+            pg_stat_get_total_autovacuum_time(C.oid) AS total_autovacuum_time,
+            pg_stat_get_total_analyze_time(C.oid) AS total_analyze_time,
+            pg_stat_get_total_autoanalyze_time(C.oid) AS total_autoanalyze_time
     FROM pg_class C LEFT JOIN
          pg_index I ON C.oid = I.indrelid
          LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
@@ -1073,6 +1082,8 @@ CREATE VIEW pg_stat_database AS
             pg_stat_get_db_sessions_abandoned(D.oid) AS sessions_abandoned,
             pg_stat_get_db_sessions_fatal(D.oid) AS sessions_fatal,
             pg_stat_get_db_sessions_killed(D.oid) AS sessions_killed,
+            pg_stat_get_db_parallel_workers_to_launch(D.oid) as parallel_workers_to_launch,
+            pg_stat_get_db_parallel_workers_launched(D.oid) as parallel_workers_launched,
             pg_stat_get_db_stat_reset_time(D.oid) AS stats_reset
     FROM (
         SELECT 0 AS oid, NULL::name AS datname
@@ -1154,14 +1165,16 @@ SELECT
        b.object,
        b.context,
        b.reads,
+       b.read_bytes,
        b.read_time,
        b.writes,
+       b.write_bytes,
        b.write_time,
        b.writebacks,
        b.writeback_time,
        b.extends,
+       b.extend_bytes,
        b.extend_time,
-       b.op_bytes,
        b.hits,
        b.evictions,
        b.reuses,

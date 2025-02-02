@@ -3,7 +3,7 @@
  * fe-connect.c
  *	  functions related to setting up a connection to the backend
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -22,6 +22,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "common/base64.h"
 #include "common/ip.h"
 #include "common/link-canary.h"
 #include "common/scram-common.h"
@@ -190,7 +191,8 @@ typedef struct _internalPQconninfoOption
 
 static const internalPQconninfoOption PQconninfoOptions[] = {
 	{"service", "PGSERVICE", NULL, NULL,
-	"Database-Service", "", 20, -1},
+		"Database-Service", "", 20,
+	offsetof(struct pg_conn, pgservice)},
 
 	{"user", "PGUSER", NULL, NULL,
 		"Database-User", "", 20,
@@ -365,6 +367,12 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Load-Balance-Hosts", "", 8,	/* sizeof("disable") = 8 */
 	offsetof(struct pg_conn, load_balance_hosts)},
 
+	{"scram_client_key", NULL, NULL, NULL, "SCRAM-Client-Key", "D", SCRAM_MAX_KEY_LEN * 2,
+	offsetof(struct pg_conn, scram_client_key)},
+
+	{"scram_server_key", NULL, NULL, NULL, "SCRAM-Server-Key", "D", SCRAM_MAX_KEY_LEN * 2,
+	offsetof(struct pg_conn, scram_server_key)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}
@@ -387,6 +395,12 @@ static const PQEnvironmentOption EnvironmentOptions[] =
 		NULL, NULL
 	}
 };
+
+static const pg_fe_sasl_mech *supported_sasl_mechs[] =
+{
+	&pg_scram_mech,
+};
+#define SASL_MECHANISM_COUNT lengthof(supported_sasl_mechs)
 
 /* The connection URI must start with either of the following designators: */
 static const char uri_designator[] = "postgresql://";
@@ -1110,6 +1124,57 @@ libpq_prng_init(PGconn *conn)
 }
 
 /*
+ * Fills the connection's allowed_sasl_mechs list with all supported SASL
+ * mechanisms.
+ */
+static inline void
+fill_allowed_sasl_mechs(PGconn *conn)
+{
+	/*---
+	 * We only support one mechanism at the moment, so rather than deal with a
+	 * linked list, conn->allowed_sasl_mechs is an array of static length. We
+	 * rely on the compile-time assertion here to keep us honest.
+	 *
+	 * To add a new mechanism to require_auth,
+	 * - add it to supported_sasl_mechs,
+	 * - update the length of conn->allowed_sasl_mechs,
+	 * - handle the new mechanism name in the require_auth portion of
+	 *   pqConnectOptions2(), below.
+	 */
+	StaticAssertDecl(lengthof(conn->allowed_sasl_mechs) == SASL_MECHANISM_COUNT,
+					 "conn->allowed_sasl_mechs[] is not sufficiently large for holding all supported SASL mechanisms");
+
+	for (int i = 0; i < SASL_MECHANISM_COUNT; i++)
+		conn->allowed_sasl_mechs[i] = supported_sasl_mechs[i];
+}
+
+/*
+ * Clears the connection's allowed_sasl_mechs list.
+ */
+static inline void
+clear_allowed_sasl_mechs(PGconn *conn)
+{
+	for (int i = 0; i < lengthof(conn->allowed_sasl_mechs); i++)
+		conn->allowed_sasl_mechs[i] = NULL;
+}
+
+/*
+ * Helper routine that searches the static allowed_sasl_mechs list for a
+ * specific mechanism.
+ */
+static inline int
+index_of_allowed_sasl_mech(PGconn *conn, const pg_fe_sasl_mech *mech)
+{
+	for (int i = 0; i < lengthof(conn->allowed_sasl_mechs); i++)
+	{
+		if (conn->allowed_sasl_mechs[i] == mech)
+			return i;
+	}
+
+	return -1;
+}
+
+/*
  *		pqConnectOptions2
  *
  * Compute derived connection options after absorbing all user-supplied info.
@@ -1350,17 +1415,19 @@ pqConnectOptions2(PGconn *conn)
 		bool		negated = false;
 
 		/*
-		 * By default, start from an empty set of allowed options and add to
-		 * it.
+		 * By default, start from an empty set of allowed methods and
+		 * mechanisms, and add to it.
 		 */
 		conn->auth_required = true;
 		conn->allowed_auth_methods = 0;
+		clear_allowed_sasl_mechs(conn);
 
 		for (first = true, more = true; more; first = false)
 		{
 			char	   *method,
 					   *part;
-			uint32		bits;
+			uint32		bits = 0;
+			const pg_fe_sasl_mech *mech = NULL;
 
 			part = parse_comma_separated_list(&s, &more);
 			if (part == NULL)
@@ -1376,11 +1443,12 @@ pqConnectOptions2(PGconn *conn)
 				if (first)
 				{
 					/*
-					 * Switch to a permissive set of allowed options, and
-					 * subtract from it.
+					 * Switch to a permissive set of allowed methods and
+					 * mechanisms, and subtract from it.
 					 */
 					conn->auth_required = false;
 					conn->allowed_auth_methods = -1;
+					fill_allowed_sasl_mechs(conn);
 				}
 				else if (!negated)
 				{
@@ -1405,6 +1473,10 @@ pqConnectOptions2(PGconn *conn)
 				return false;
 			}
 
+			/*
+			 * First group: methods that can be handled solely with the
+			 * authentication request codes.
+			 */
 			if (strcmp(method, "password") == 0)
 			{
 				bits = (1 << AUTH_REQ_PASSWORD);
@@ -1423,13 +1495,21 @@ pqConnectOptions2(PGconn *conn)
 				bits = (1 << AUTH_REQ_SSPI);
 				bits |= (1 << AUTH_REQ_GSS_CONT);
 			}
+
+			/*
+			 * Next group: SASL mechanisms. All of these use the same request
+			 * codes, so the list of allowed mechanisms is tracked separately.
+			 *
+			 * supported_sasl_mechs must contain all mechanisms handled here.
+			 */
 			else if (strcmp(method, "scram-sha-256") == 0)
 			{
-				/* This currently assumes that SCRAM is the only SASL method. */
-				bits = (1 << AUTH_REQ_SASL);
-				bits |= (1 << AUTH_REQ_SASL_CONT);
-				bits |= (1 << AUTH_REQ_SASL_FIN);
+				mech = &pg_scram_mech;
 			}
+
+			/*
+			 * Final group: meta-options.
+			 */
 			else if (strcmp(method, "none") == 0)
 			{
 				/*
@@ -1465,20 +1545,68 @@ pqConnectOptions2(PGconn *conn)
 				return false;
 			}
 
-			/* Update the bitmask. */
-			if (negated)
+			if (mech)
 			{
-				if ((conn->allowed_auth_methods & bits) == 0)
-					goto duplicate;
+				/*
+				 * Update the mechanism set only. The method bitmask will be
+				 * updated for SASL further down.
+				 */
+				Assert(!bits);
 
-				conn->allowed_auth_methods &= ~bits;
+				if (negated)
+				{
+					/* Remove the existing mechanism from the list. */
+					i = index_of_allowed_sasl_mech(conn, mech);
+					if (i < 0)
+						goto duplicate;
+
+					conn->allowed_sasl_mechs[i] = NULL;
+				}
+				else
+				{
+					/*
+					 * Find a space to put the new mechanism (after making
+					 * sure it's not already there).
+					 */
+					i = index_of_allowed_sasl_mech(conn, mech);
+					if (i >= 0)
+						goto duplicate;
+
+					i = index_of_allowed_sasl_mech(conn, NULL);
+					if (i < 0)
+					{
+						/* Should not happen; the pointer list is corrupted. */
+						Assert(false);
+
+						conn->status = CONNECTION_BAD;
+						libpq_append_conn_error(conn,
+												"internal error: no space in allowed_sasl_mechs");
+						free(part);
+						return false;
+					}
+
+					conn->allowed_sasl_mechs[i] = mech;
+				}
 			}
 			else
 			{
-				if ((conn->allowed_auth_methods & bits) == bits)
-					goto duplicate;
+				/* Update the method bitmask. */
+				Assert(bits);
 
-				conn->allowed_auth_methods |= bits;
+				if (negated)
+				{
+					if ((conn->allowed_auth_methods & bits) == 0)
+						goto duplicate;
+
+					conn->allowed_auth_methods &= ~bits;
+				}
+				else
+				{
+					if ((conn->allowed_auth_methods & bits) == bits)
+						goto duplicate;
+
+					conn->allowed_auth_methods |= bits;
+				}
 			}
 
 			free(part);
@@ -1496,6 +1624,36 @@ pqConnectOptions2(PGconn *conn)
 
 			free(part);
 			return false;
+		}
+
+		/*
+		 * Finally, allow SASL authentication requests if (and only if) we've
+		 * allowed any mechanisms.
+		 */
+		{
+			bool		allowed = false;
+			const uint32 sasl_bits =
+				(1 << AUTH_REQ_SASL)
+				| (1 << AUTH_REQ_SASL_CONT)
+				| (1 << AUTH_REQ_SASL_FIN);
+
+			for (i = 0; i < lengthof(conn->allowed_sasl_mechs); i++)
+			{
+				if (conn->allowed_sasl_mechs[i])
+				{
+					allowed = true;
+					break;
+				}
+			}
+
+			/*
+			 * For the standard case, add the SASL bits to the (default-empty)
+			 * set if needed. For the negated case, remove them.
+			 */
+			if (!negated && allowed)
+				conn->allowed_auth_methods |= sasl_bits;
+			else if (negated && !allowed)
+				conn->allowed_auth_methods &= ~sasl_bits;
 		}
 	}
 
@@ -1791,6 +1949,56 @@ pqConnectOptions2(PGconn *conn)
 	}
 	else
 		conn->target_server_type = SERVER_TYPE_ANY;
+
+	if (conn->scram_client_key)
+	{
+		int			len;
+
+		len = pg_b64_dec_len(strlen(conn->scram_client_key));
+		conn->scram_client_key_binary = malloc(len);
+		if (!conn->scram_client_key_binary)
+			goto oom_error;
+		len = pg_b64_decode(conn->scram_client_key, strlen(conn->scram_client_key),
+							conn->scram_client_key_binary, len);
+		if (len < 0)
+		{
+			libpq_append_conn_error(conn, "invalid SCRAM client key");
+			free(conn->scram_client_key_binary);
+			return false;
+		}
+		if (len != SCRAM_MAX_KEY_LEN)
+		{
+			libpq_append_conn_error(conn, "invalid SCRAM client key length: %d", len);
+			free(conn->scram_client_key_binary);
+			return false;
+		}
+		conn->scram_client_key_len = len;
+	}
+
+	if (conn->scram_server_key)
+	{
+		int			len;
+
+		len = pg_b64_dec_len(strlen(conn->scram_server_key));
+		conn->scram_server_key_binary = malloc(len);
+		if (!conn->scram_server_key_binary)
+			goto oom_error;
+		len = pg_b64_decode(conn->scram_server_key, strlen(conn->scram_server_key),
+							conn->scram_server_key_binary, len);
+		if (len < 0)
+		{
+			libpq_append_conn_error(conn, "invalid SCRAM server key");
+			free(conn->scram_server_key_binary);
+			return false;
+		}
+		if (len != SCRAM_MAX_KEY_LEN)
+		{
+			libpq_append_conn_error(conn, "invalid SCRAM server key length: %d", len);
+			free(conn->scram_server_key_binary);
+			return false;
+		}
+		conn->scram_server_key_len = len;
+	}
 
 	/*
 	 * validate load_balance_hosts option, and set load_balance_type
@@ -3509,22 +3717,12 @@ keep_going:						/* We will come back to here until there is
 					{
 						/*
 						 * Server failure of some sort, such as failure to
-						 * fork a backend process.  We need to process and
-						 * report the error message, which might be formatted
-						 * according to either protocol 2 or protocol 3.
-						 * Rather than duplicate the code for that, we flip
-						 * into AWAITING_RESPONSE state and let the code there
-						 * deal with it.  Note we have *not* consumed the "E"
-						 * byte here.
+						 * fork a backend process.  Don't bother retrieving
+						 * the error message; we should not trust it as the
+						 * server has not been authenticated yet.
 						 */
-						conn->status = CONNECTION_AWAITING_RESPONSE;
-
-						/*
-						 * Don't fall back to a plaintext connection after
-						 * reading the error.
-						 */
-						conn->failed_enc_methods |= conn->allowed_enc_methods & (~conn->current_enc_method);
-						goto keep_going;
+						libpq_append_conn_error(conn, "server sent an error response during SSL exchange");
+						goto error_return;
 					}
 					else
 					{
@@ -3600,13 +3798,9 @@ keep_going:						/* We will come back to here until there is
 					{
 						/*
 						 * Server failure of some sort, possibly protocol
-						 * version support failure.  We need to process and
-						 * report the error message, which might be formatted
-						 * according to either protocol 2 or protocol 3.
-						 * Rather than duplicate the code for that, we flip
-						 * into AWAITING_RESPONSE state and let the code there
-						 * deal with it.  Note we have *not* consumed the "E"
-						 * byte here.
+						 * version support failure.  Don't bother retrieving
+						 * the error message; we should not trust it anyway as
+						 * the server has not authenticated yet.
 						 *
 						 * Note that unlike on an error response to
 						 * SSLRequest, we allow falling back to SSL or
@@ -3615,8 +3809,8 @@ keep_going:						/* We will come back to here until there is
 						 * response might mean that we are connecting to a
 						 * pre-v12 server.
 						 */
-						conn->status = CONNECTION_AWAITING_RESPONSE;
-						goto keep_going;
+						libpq_append_conn_error(conn, "server sent an error response during GSS encryption exchange");
+						CONNECTION_FAILED();
 					}
 
 					/* mark byte consumed */
@@ -4717,6 +4911,8 @@ freePGconn(PGconn *conn)
 	free(conn->rowBuf);
 	free(conn->target_session_attrs);
 	free(conn->load_balance_hosts);
+	free(conn->scram_client_key);
+	free(conn->scram_server_key);
 	termPQExpBuffer(&conn->errorMessage);
 	termPQExpBuffer(&conn->workBuffer);
 
@@ -6839,7 +7035,9 @@ end:
 	/* Not at the end of the string yet?  Fail. */
 	if (*q != '\0')
 	{
-		libpq_append_error(errorMessage, "trailing data found: \"%s\"", str);
+		libpq_append_error(errorMessage,
+						   "unexpected spaces found in \"%s\", use percent-encoded spaces (%%20) instead",
+						   str);
 		free(buf);
 		return NULL;
 	}
@@ -7050,6 +7248,14 @@ PQdb(const PGconn *conn)
 	if (!conn)
 		return NULL;
 	return conn->dbName;
+}
+
+char *
+PQservice(const PGconn *conn)
+{
+	if (!conn)
+		return NULL;
+	return conn->pgservice;
 }
 
 char *

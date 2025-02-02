@@ -4,7 +4,7 @@
  *	   Replication slot management.
  *
  *
- * Copyright (c) 2012-2024, PostgreSQL Global Development Group
+ * Copyright (c) 2012-2025, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -535,9 +535,13 @@ ReplicationSlotName(int index, Name name)
  *
  * An error is raised if nowait is true and the slot is currently in use. If
  * nowait is false, we sleep until the slot is released by the owning process.
+ *
+ * An error is raised if error_if_invalid is true and the slot is found to
+ * be invalid. It should always be set to true, except when we are temporarily
+ * acquiring the slot and don't intend to change it.
  */
 void
-ReplicationSlotAcquire(const char *name, bool nowait)
+ReplicationSlotAcquire(const char *name, bool nowait, bool error_if_invalid)
 {
 	ReplicationSlot *s;
 	int			active_pid;
@@ -559,6 +563,19 @@ retry:
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
 				 errmsg("replication slot \"%s\" does not exist",
 						name)));
+	}
+
+	/* Invalid slots can't be modified or used before accessing the WAL. */
+	if (error_if_invalid && s->data.invalidated != RS_INVAL_NONE)
+	{
+		LWLockRelease(ReplicationSlotControlLock);
+
+		ereport(ERROR,
+				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				errmsg("can no longer access replication slot \"%s\"",
+					   NameStr(s->data.name)),
+				errdetail("This replication slot has been invalidated due to \"%s\".",
+						  SlotInvalidationCauses[s->data.invalidated]));
 	}
 
 	/*
@@ -785,7 +802,7 @@ ReplicationSlotDrop(const char *name, bool nowait)
 {
 	Assert(MyReplicationSlot == NULL);
 
-	ReplicationSlotAcquire(name, nowait);
+	ReplicationSlotAcquire(name, nowait, false);
 
 	/*
 	 * Do not allow users to drop the slots which are currently being synced
@@ -812,20 +829,13 @@ ReplicationSlotAlter(const char *name, const bool *failover,
 	Assert(MyReplicationSlot == NULL);
 	Assert(failover || two_phase);
 
-	ReplicationSlotAcquire(name, false);
+	ReplicationSlotAcquire(name, false, true);
 
 	if (SlotIsPhysical(MyReplicationSlot))
 		ereport(ERROR,
 				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				errmsg("cannot use %s with a physical replication slot",
 					   "ALTER_REPLICATION_SLOT"));
-
-	if (MyReplicationSlot->data.invalidated != RS_INVAL_NONE)
-		ereport(ERROR,
-				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				errmsg("cannot alter invalid replication slot \"%s\"", name),
-				errdetail("This replication slot has been invalidated due to \"%s\".",
-						  SlotInvalidationCauses[MyReplicationSlot->data.invalidated]));
 
 	if (RecoveryInProgress())
 	{
@@ -2456,18 +2466,15 @@ validate_sync_standby_slots(char *rawname, List **elemlist)
 	{
 		GUC_check_errdetail("List syntax is invalid.");
 	}
-	else if (!ReplicationSlotCtl)
+	else if (MyProc)
 	{
 		/*
-		 * We cannot validate the replication slot if the replication slots'
-		 * data has not been initialized. This is ok as we will anyway
-		 * validate the specified slot when waiting for them to catch up. See
-		 * StandbySlotsHaveCaughtup() for details.
+		 * Check that each specified slot exist and is physical.
+		 *
+		 * Because we need an LWLock, we cannot do this on processes without a
+		 * PGPROC, so we skip it there; but see comments in
+		 * StandbySlotsHaveCaughtup() as to why that's not a problem.
 		 */
-	}
-	else
-	{
-		/* Check that the specified slots exist and are logical slots */
 		LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
 
 		foreach_ptr(char, name, *elemlist)
@@ -2478,7 +2485,7 @@ validate_sync_standby_slots(char *rawname, List **elemlist)
 
 			if (!slot)
 			{
-				GUC_check_errdetail("replication slot \"%s\" does not exist",
+				GUC_check_errdetail("Replication slot \"%s\" does not exist.",
 									name);
 				ok = false;
 				break;
@@ -2486,7 +2493,7 @@ validate_sync_standby_slots(char *rawname, List **elemlist)
 
 			if (!SlotIsPhysical(slot))
 			{
-				GUC_check_errdetail("\"%s\" is not a physical replication slot",
+				GUC_check_errdetail("\"%s\" is not a physical replication slot.",
 									name);
 				ok = false;
 				break;
@@ -2546,7 +2553,7 @@ check_synchronized_standby_slots(char **newval, void **extra, GucSource source)
 		ptr += strlen(slot_name) + 1;
 	}
 
-	*extra = (void *) config;
+	*extra = config;
 
 	pfree(rawname);
 	list_free(elemlist);
@@ -2649,18 +2656,18 @@ StandbySlotsHaveCaughtup(XLogRecPtr wait_for_lsn, int elevel)
 
 		slot = SearchNamedReplicationSlot(name, false);
 
+		/*
+		 * If a slot name provided in synchronized_standby_slots does not
+		 * exist, report a message and exit the loop.
+		 *
+		 * Though validate_sync_standby_slots (the GUC check_hook) tries to
+		 * avoid this, it can nonetheless happen because the user can specify
+		 * a nonexistent slot name before server startup. That function cannot
+		 * validate such a slot during startup, as ReplicationSlotCtl is not
+		 * initialized by then.  Also, the user might have dropped one slot.
+		 */
 		if (!slot)
 		{
-			/*
-			 * If a slot name provided in synchronized_standby_slots does not
-			 * exist, report a message and exit the loop. A user can specify a
-			 * slot name that does not exist just before the server startup.
-			 * The GUC check_hook(validate_sync_standby_slots) cannot validate
-			 * such a slot during startup as the ReplicationSlotCtl shared
-			 * memory is not initialized at that time. It is also possible for
-			 * a user to drop the slot in synchronized_standby_slots
-			 * afterwards.
-			 */
 			ereport(elevel,
 					errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					errmsg("replication slot \"%s\" specified in parameter \"%s\" does not exist",
@@ -2672,16 +2679,9 @@ StandbySlotsHaveCaughtup(XLogRecPtr wait_for_lsn, int elevel)
 			break;
 		}
 
+		/* Same as above: if a slot is not physical, exit the loop. */
 		if (SlotIsLogical(slot))
 		{
-			/*
-			 * If a logical slot name is provided in
-			 * synchronized_standby_slots, report a message and exit the loop.
-			 * Similar to the non-existent case, a user can specify a logical
-			 * slot name in synchronized_standby_slots before the server
-			 * startup, or drop an existing physical slot and recreate a
-			 * logical slot with the same name.
-			 */
 			ereport(elevel,
 					errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					errmsg("cannot specify logical replication slot \"%s\" in parameter \"%s\"",

@@ -1,7 +1,7 @@
 /*
  * psql - the PostgreSQL interactive terminal
  *
- * Copyright (c) 2000-2024, PostgreSQL Global Development Group
+ * Copyright (c) 2000-2025, PostgreSQL Global Development Group
  *
  * src/bin/psql/command.c
  */
@@ -30,7 +30,6 @@
 #include "common/logging.h"
 #include "common/string.h"
 #include "copy.h"
-#include "crosstabview.h"
 #include "describe.h"
 #include "fe_utils/cancel.h"
 #include "fe_utils/print.h"
@@ -38,10 +37,8 @@
 #include "help.h"
 #include "input.h"
 #include "large_obj.h"
-#include "libpq-fe.h"
 #include "libpq/pqcomm.h"
 #include "mainloop.h"
-#include "portability/instr_time.h"
 #include "pqexpbuffer.h"
 #include "psqlscanslash.h"
 #include "settings.h"
@@ -380,7 +377,10 @@ exec_command(const char *cmd,
 	else if (strcmp(cmd, "if") == 0)
 		status = exec_command_if(scan_state, cstack, query_buf);
 	else if (strcmp(cmd, "l") == 0 || strcmp(cmd, "list") == 0 ||
-			 strcmp(cmd, "l+") == 0 || strcmp(cmd, "list+") == 0)
+			 strcmp(cmd, "lx") == 0 || strcmp(cmd, "listx") == 0 ||
+			 strcmp(cmd, "l+") == 0 || strcmp(cmd, "list+") == 0 ||
+			 strcmp(cmd, "lx+") == 0 || strcmp(cmd, "listx+") == 0 ||
+			 strcmp(cmd, "l+x") == 0 || strcmp(cmd, "list+x") == 0)
 		status = exec_command_list(scan_state, active_branch, cmd);
 	else if (strncmp(cmd, "lo_", 3) == 0)
 		status = exec_command_lo(scan_state, active_branch, cmd);
@@ -427,7 +427,9 @@ exec_command(const char *cmd,
 									query_buf, previous_buf);
 	else if (strcmp(cmd, "x") == 0)
 		status = exec_command_x(scan_state, active_branch);
-	else if (strcmp(cmd, "z") == 0 || strcmp(cmd, "zS") == 0)
+	else if (strcmp(cmd, "z") == 0 ||
+			 strcmp(cmd, "zS") == 0 || strcmp(cmd, "zx") == 0 ||
+			 strcmp(cmd, "zSx") == 0 || strcmp(cmd, "zxS") == 0)
 		status = exec_command_z(scan_state, active_branch, cmd);
 	else if (strcmp(cmd, "!") == 0)
 		status = exec_command_shell_escape(scan_state, active_branch);
@@ -853,6 +855,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 		char	   *pattern;
 		bool		show_verbose,
 					show_system;
+		unsigned short int save_expanded;
 
 		/* We don't do SQLID reduction on the pattern yet */
 		pattern = psql_scan_slash_option(scan_state,
@@ -860,6 +863,16 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 
 		show_verbose = strchr(cmd, '+') ? true : false;
 		show_system = strchr(cmd, 'S') ? true : false;
+
+		/*
+		 * The 'x' option turns expanded mode on for this command only. This
+		 * is allowed in all \d* commands, except \d by itself, since \dx is a
+		 * separate command. So the 'x' option cannot appear immediately after
+		 * \d, but it can appear after \d followed by other options.
+		 */
+		save_expanded = pset.popt.topt.expanded;
+		if (cmd[1] != '\0' && strchr(&cmd[2], 'x'))
+			pset.popt.topt.expanded = 1;
 
 		switch (cmd[1])
 		{
@@ -876,13 +889,14 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				{
 					char	   *pattern2 = NULL;
 
-					if (pattern && cmd[2] != '\0' && cmd[2] != '+')
+					if (pattern && cmd[2] != '\0' && cmd[2] != '+' && cmd[2] != 'x')
 						pattern2 = psql_scan_slash_option(scan_state, OT_NORMAL, NULL, true);
 
 					switch (cmd[2])
 					{
 						case '\0':
 						case '+':
+						case 'x':
 							success = describeAccessMethods(pattern, show_verbose);
 							break;
 						case 'c':
@@ -944,6 +958,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 					case 'p':
 					case 't':
 					case 'w':
+					case 'x':
 						success = exec_command_dfo(scan_state, cmd, pattern,
 												   show_verbose, show_system);
 						break;
@@ -984,6 +999,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 						case 't':
 						case 'i':
 						case 'n':
+						case 'x':
 							success = listPartitionedTables(&cmd[2], pattern, show_verbose);
 							break;
 						default:
@@ -1044,6 +1060,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				{
 					case '\0':
 					case '+':
+					case 'x':
 						success = listTSConfigs(pattern, show_verbose);
 						break;
 					case 'p':
@@ -1095,6 +1112,9 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 			default:
 				status = PSQL_CMD_UNKNOWN;
 		}
+
+		/* Restore original expanded mode */
+		pset.popt.topt.expanded = save_expanded;
 
 		free(pattern);
 	}
@@ -1204,7 +1224,7 @@ exec_command_edit(PsqlScanState scan_state, bool active_branch,
 				expand_tilde(&fname);
 				if (fname)
 				{
-					canonicalize_path(fname);
+					canonicalize_path_enc(fname, pset.encoding);
 					/* Always clear buffer if the file isn't modified */
 					discard_on_quit = true;
 				}
@@ -2047,13 +2067,22 @@ exec_command_list(PsqlScanState scan_state, bool active_branch, const char *cmd)
 	{
 		char	   *pattern;
 		bool		show_verbose;
+		unsigned short int save_expanded;
 
 		pattern = psql_scan_slash_option(scan_state,
 										 OT_NORMAL, NULL, true);
 
 		show_verbose = strchr(cmd, '+') ? true : false;
 
+		/* if 'x' option specified, force expanded mode */
+		save_expanded = pset.popt.topt.expanded;
+		if (strchr(cmd, 'x'))
+			pset.popt.topt.expanded = 1;
+
 		success = listAllDbs(pattern, show_verbose);
+
+		/* restore original expanded mode */
+		pset.popt.topt.expanded = save_expanded;
 
 		free(pattern);
 	}
@@ -2110,10 +2139,23 @@ exec_command_lo(PsqlScanState scan_state, bool active_branch, const char *cmd)
 			}
 		}
 
-		else if (strcmp(cmd + 3, "list") == 0)
-			success = listLargeObjects(false);
-		else if (strcmp(cmd + 3, "list+") == 0)
-			success = listLargeObjects(true);
+		else if (strncmp(cmd + 3, "list", 4) == 0)
+		{
+			bool		show_verbose;
+			unsigned short int save_expanded;
+
+			show_verbose = strchr(cmd, '+') ? true : false;
+
+			/* if 'x' option specified, force expanded mode */
+			save_expanded = pset.popt.topt.expanded;
+			if (strchr(cmd, 'x'))
+				pset.popt.topt.expanded = 1;
+
+			success = listLargeObjects(show_verbose);
+
+			/* restore original expanded mode */
+			pset.popt.topt.expanded = save_expanded;
+		}
 
 		else if (strcmp(cmd + 3, "unlink") == 0)
 		{
@@ -2822,7 +2864,7 @@ exec_command_write(PsqlScanState scan_state, bool active_branch,
 				}
 				else
 				{
-					canonicalize_path(fname);
+					canonicalize_path_enc(fname, pset.encoding);
 					fd = fopen(fname, "w");
 				}
 				if (!fd)
@@ -3064,13 +3106,22 @@ exec_command_z(PsqlScanState scan_state, bool active_branch, const char *cmd)
 	{
 		char	   *pattern;
 		bool		show_system;
+		unsigned short int save_expanded;
 
 		pattern = psql_scan_slash_option(scan_state,
 										 OT_NORMAL, NULL, true);
 
 		show_system = strchr(cmd, 'S') ? true : false;
 
+		/* if 'x' option specified, force expanded mode */
+		save_expanded = pset.popt.topt.expanded;
+		if (strchr(cmd, 'x'))
+			pset.popt.topt.expanded = 1;
+
 		success = permissionsList(pattern, show_system);
+
+		/* restore original expanded mode */
+		pset.popt.topt.expanded = save_expanded;
 
 		free(pattern);
 	}
@@ -4085,6 +4136,7 @@ SyncVariables(void)
 	pset.sversion = PQserverVersion(pset.db);
 
 	SetVariable(pset.vars, "DBNAME", PQdb(pset.db));
+	SetVariable(pset.vars, "SERVICE", PQservice(pset.db));
 	SetVariable(pset.vars, "USER", PQuser(pset.db));
 	SetVariable(pset.vars, "HOST", PQhost(pset.db));
 	SetVariable(pset.vars, "PORT", PQport(pset.db));
@@ -4118,6 +4170,7 @@ void
 UnsyncVariables(void)
 {
 	SetVariable(pset.vars, "DBNAME", NULL);
+	SetVariable(pset.vars, "SERVICE", NULL);
 	SetVariable(pset.vars, "USER", NULL);
 	SetVariable(pset.vars, "HOST", NULL);
 	SetVariable(pset.vars, "PORT", NULL);
@@ -4426,7 +4479,7 @@ process_file(char *filename, bool use_relative_path)
 	}
 	else if (strcmp(filename, "-") != 0)
 	{
-		canonicalize_path(filename);
+		canonicalize_path_enc(filename, pset.encoding);
 
 		/*
 		 * If we were asked to resolve the pathname relative to the location
@@ -4440,7 +4493,7 @@ process_file(char *filename, bool use_relative_path)
 			strlcpy(relpath, pset.inputfile, sizeof(relpath));
 			get_parent_directory(relpath);
 			join_path_components(relpath, relpath, filename);
-			canonicalize_path(relpath);
+			canonicalize_path_enc(relpath, pset.encoding);
 
 			filename = relpath;
 		}

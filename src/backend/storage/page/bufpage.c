@@ -3,7 +3,7 @@
  * bufpage.c
  *	  POSTGRES standard buffer page code.
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -85,14 +85,12 @@ PageInit(Page page, Size pageSize, Size specialSize)
  * to pgstat.
  */
 bool
-PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags)
+PageIsVerifiedExtended(const PageData *page, BlockNumber blkno, int flags)
 {
-	PageHeader	p = (PageHeader) page;
+	const PageHeaderData *p = (const PageHeaderData *) page;
 	size_t	   *pagebytes;
-	int			i;
 	bool		checksum_failure = false;
 	bool		header_sane = false;
-	bool		all_zeroes = false;
 	uint16		checksum = 0;
 
 	/*
@@ -126,18 +124,9 @@ PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags)
 	}
 
 	/* Check all-zeroes case */
-	all_zeroes = true;
 	pagebytes = (size_t *) page;
-	for (i = 0; i < (BLCKSZ / sizeof(size_t)); i++)
-	{
-		if (pagebytes[i] != 0)
-		{
-			all_zeroes = false;
-			break;
-		}
-	}
 
-	if (all_zeroes)
+	if (pg_memory_is_all_zeros(pagebytes, BLCKSZ))
 		return true;
 
 	/*
@@ -362,7 +351,7 @@ PageAddItemExtended(Page page,
  *		The returned page is not initialized at all; caller must do that.
  */
 Page
-PageGetTempPage(Page page)
+PageGetTempPage(const PageData *page)
 {
 	Size		pageSize;
 	Page		temp;
@@ -379,7 +368,7 @@ PageGetTempPage(Page page)
  *		The page is initialized by copying the contents of the given page.
  */
 Page
-PageGetTempPageCopy(Page page)
+PageGetTempPageCopy(const PageData *page)
 {
 	Size		pageSize;
 	Page		temp;
@@ -399,7 +388,7 @@ PageGetTempPageCopy(Page page)
  *		given page, and the special space is copied from the given page.
  */
 Page
-PageGetTempPageCopySpecial(Page page)
+PageGetTempPageCopySpecial(const PageData *page)
 {
 	Size		pageSize;
 	Page		temp;
@@ -904,16 +893,16 @@ PageTruncateLinePointerArray(Page page)
  * PageGetHeapFreeSpace on heap pages.
  */
 Size
-PageGetFreeSpace(Page page)
+PageGetFreeSpace(const PageData *page)
 {
+	const PageHeaderData *phdr = (const PageHeaderData *) page;
 	int			space;
 
 	/*
 	 * Use signed arithmetic here so that we behave sensibly if pd_lower >
 	 * pd_upper.
 	 */
-	space = (int) ((PageHeader) page)->pd_upper -
-		(int) ((PageHeader) page)->pd_lower;
+	space = (int) phdr->pd_upper - (int) phdr->pd_lower;
 
 	if (space < (int) sizeof(ItemIdData))
 		return 0;
@@ -931,16 +920,16 @@ PageGetFreeSpace(Page page)
  * PageGetHeapFreeSpace on heap pages.
  */
 Size
-PageGetFreeSpaceForMultipleTuples(Page page, int ntups)
+PageGetFreeSpaceForMultipleTuples(const PageData *page, int ntups)
 {
+	const PageHeaderData *phdr = (const PageHeaderData *) page;
 	int			space;
 
 	/*
 	 * Use signed arithmetic here so that we behave sensibly if pd_lower >
 	 * pd_upper.
 	 */
-	space = (int) ((PageHeader) page)->pd_upper -
-		(int) ((PageHeader) page)->pd_lower;
+	space = (int) phdr->pd_upper - (int) phdr->pd_lower;
 
 	if (space < (int) (ntups * sizeof(ItemIdData)))
 		return 0;
@@ -955,16 +944,16 @@ PageGetFreeSpaceForMultipleTuples(Page page, int ntups)
  *		without any consideration for adding/removing line pointers.
  */
 Size
-PageGetExactFreeSpace(Page page)
+PageGetExactFreeSpace(const PageData *page)
 {
+	const PageHeaderData *phdr = (const PageHeaderData *) page;
 	int			space;
 
 	/*
 	 * Use signed arithmetic here so that we behave sensibly if pd_lower >
 	 * pd_upper.
 	 */
-	space = (int) ((PageHeader) page)->pd_upper -
-		(int) ((PageHeader) page)->pd_lower;
+	space = (int) phdr->pd_upper - (int) phdr->pd_lower;
 
 	if (space < 0)
 		return 0;
@@ -988,7 +977,7 @@ PageGetExactFreeSpace(Page page)
  * on the number of line pointers, we make this extra check.)
  */
 Size
-PageGetHeapFreeSpace(Page page)
+PageGetHeapFreeSpace(const PageData *page)
 {
 	Size		space;
 
@@ -1012,7 +1001,7 @@ PageGetHeapFreeSpace(Page page)
 				 */
 				for (offnum = FirstOffsetNumber; offnum <= nline; offnum = OffsetNumberNext(offnum))
 				{
-					ItemId		lp = PageGetItemId(page, offnum);
+					ItemId		lp = PageGetItemId(unconstify(PageData *, page), offnum);
 
 					if (!ItemIdIsUsed(lp))
 						break;

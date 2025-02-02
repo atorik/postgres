@@ -3,7 +3,7 @@
  * execUtils.c
  *	  miscellaneous executor utility routines
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -118,6 +118,7 @@ CreateExecutorState(void)
 	estate->es_rowmarks = NULL;
 	estate->es_rteperminfos = NIL;
 	estate->es_plannedstmt = NULL;
+	estate->es_part_prune_infos = NIL;
 
 	estate->es_junkFilter = NULL;
 
@@ -325,7 +326,7 @@ CreateWorkExprContext(EState *estate)
 	Size		maxBlockSize = ALLOCSET_DEFAULT_MAXSIZE;
 
 	/* choose the maxBlockSize to be no larger than 1/16 of work_mem */
-	while (16 * maxBlockSize > work_mem * 1024L)
+	while (maxBlockSize > work_mem * (Size) 1024 / 16)
 		maxBlockSize >>= 1;
 
 	if (maxBlockSize < ALLOCSET_DEFAULT_INITSIZE)
@@ -524,6 +525,49 @@ ExecGetResultSlotOps(PlanState *planstate, bool *isfixed)
 		return &TTSOpsVirtual;
 
 	return planstate->ps_ResultTupleSlot->tts_ops;
+}
+
+/*
+ * ExecGetCommonSlotOps - identify common result slot type, if any
+ *
+ * If all the given PlanState nodes return the same fixed tuple slot type,
+ * return the slot ops struct for that slot type.  Else, return NULL.
+ */
+const TupleTableSlotOps *
+ExecGetCommonSlotOps(PlanState **planstates, int nplans)
+{
+	const TupleTableSlotOps *result;
+	bool		isfixed;
+
+	if (nplans <= 0)
+		return NULL;
+	result = ExecGetResultSlotOps(planstates[0], &isfixed);
+	if (!isfixed)
+		return NULL;
+	for (int i = 1; i < nplans; i++)
+	{
+		const TupleTableSlotOps *thisops;
+
+		thisops = ExecGetResultSlotOps(planstates[i], &isfixed);
+		if (!isfixed)
+			return NULL;
+		if (result != thisops)
+			return NULL;
+	}
+	return result;
+}
+
+/*
+ * ExecGetCommonChildSlotOps - as above, for the PlanState's standard children
+ */
+const TupleTableSlotOps *
+ExecGetCommonChildSlotOps(PlanState *ps)
+{
+	PlanState  *planstates[2];
+
+	planstates[0] = outerPlanState(ps);
+	planstates[1] = innerPlanState(ps);
+	return ExecGetCommonSlotOps(planstates, 2);
 }
 
 
@@ -1197,6 +1241,34 @@ ExecGetReturningSlot(EState *estate, ResultRelInfo *relInfo)
 	}
 
 	return relInfo->ri_ReturningSlot;
+}
+
+/*
+ * Return a relInfo's all-NULL tuple slot for processing returning tuples.
+ *
+ * Note: this slot is intentionally filled with NULLs in every column, and
+ * should be considered read-only --- the caller must not update it.
+ */
+TupleTableSlot *
+ExecGetAllNullSlot(EState *estate, ResultRelInfo *relInfo)
+{
+	if (relInfo->ri_AllNullSlot == NULL)
+	{
+		Relation	rel = relInfo->ri_RelationDesc;
+		MemoryContext oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
+		TupleTableSlot *slot;
+
+		slot = ExecInitExtraTupleSlot(estate,
+									  RelationGetDescr(rel),
+									  table_slot_callbacks(rel));
+		ExecStoreAllNullTuple(slot);
+
+		relInfo->ri_AllNullSlot = slot;
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+
+	return relInfo->ri_AllNullSlot;
 }
 
 /*

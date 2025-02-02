@@ -4,7 +4,7 @@
  *	  definitions for query plan nodes
  *
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/nodes/plannodes.h
@@ -68,6 +68,9 @@ typedef struct PlannedStmt
 	int			jitFlags;		/* which forms of JIT should be performed */
 
 	struct Plan *planTree;		/* tree of Plan nodes */
+
+	List	   *partPruneInfos; /* List of PartitionPruneInfo contained in the
+								 * plan */
 
 	List	   *rtable;			/* list of RangeTblEntry nodes */
 
@@ -238,6 +241,8 @@ typedef struct ModifyTable
 	List	   *resultRelations;	/* integer list of RT indexes */
 	List	   *updateColnosLists;	/* per-target-table update_colnos lists */
 	List	   *withCheckOptionLists;	/* per-target-table WCO lists */
+	char	   *returningOldAlias;	/* alias for OLD in RETURNING lists */
+	char	   *returningNewAlias;	/* alias for NEW in RETURNING lists */
 	List	   *returningLists; /* per-target-table RETURNING tlists */
 	List	   *fdwPrivLists;	/* per-target-table FDW private data lists */
 	Bitmapset  *fdwDirectModifyPlans;	/* indices of FDW DM plans */
@@ -276,8 +281,12 @@ typedef struct Append
 	 */
 	int			first_partial_plan;
 
-	/* Info for run-time subplan pruning; NULL if we're not doing that */
-	struct PartitionPruneInfo *part_prune_info;
+	/*
+	 * Index into PlannedStmt.partPruneInfos and parallel lists in EState:
+	 * es_part_prune_states and es_part_prune_results. Set to -1 if no
+	 * run-time pruning is used.
+	 */
+	int			part_prune_index;
 } Append;
 
 /* ----------------
@@ -311,8 +320,12 @@ typedef struct MergeAppend
 	/* NULLS FIRST/LAST directions */
 	bool	   *nullsFirst pg_node_attr(array_size(numCols));
 
-	/* Info for run-time subplan pruning; NULL if we're not doing that */
-	struct PartitionPruneInfo *part_prune_info;
+	/*
+	 * Index into PlannedStmt.partPruneInfos and parallel lists in EState:
+	 * es_part_prune_states and es_part_prune_results. Set to -1 if no
+	 * run-time pruning is used.
+	 */
+	int			part_prune_index;
 } MergeAppend;
 
 /* ----------------
@@ -1146,7 +1159,7 @@ typedef struct Gather
 	bool		single_copy;	/* don't execute plan more than once */
 	bool		invisible;		/* suppress EXPLAIN display (for testing)? */
 	Bitmapset  *initParam;		/* param id's of initplans which are referred
-								 * at gather or one of it's child node */
+								 * at gather or one of its child nodes */
 } Gather;
 
 /* ------------
@@ -1182,7 +1195,7 @@ typedef struct GatherMerge
 
 	/*
 	 * param id's of initplans which are referred at gather merge or one of
-	 * it's child node
+	 * its child nodes
 	 */
 	Bitmapset  *initParam;
 } GatherMerge;
@@ -1225,23 +1238,20 @@ typedef struct SetOp
 	/* how to do it, see nodes.h */
 	SetOpStrategy strategy;
 
-	/* number of columns to check for duplicate-ness */
+	/* number of columns to compare */
 	int			numCols;
 
 	/* their indexes in the target list */
-	AttrNumber *dupColIdx pg_node_attr(array_size(numCols));
+	AttrNumber *cmpColIdx pg_node_attr(array_size(numCols));
 
-	/* equality operators to compare with */
-	Oid		   *dupOperators pg_node_attr(array_size(numCols));
-	Oid		   *dupCollations pg_node_attr(array_size(numCols));
+	/* comparison operators (either equality operators or sort operators) */
+	Oid		   *cmpOperators pg_node_attr(array_size(numCols));
+	Oid		   *cmpCollations pg_node_attr(array_size(numCols));
 
-	/* where is the flag column, if any */
-	AttrNumber	flagColIdx;
+	/* nulls-first flags if sorting, otherwise not interesting */
+	bool	   *cmpNullsFirst pg_node_attr(array_size(numCols));
 
-	/* flag value for first input relation */
-	int			firstFlag;
-
-	/* estimated number of groups in input */
+	/* estimated number of groups in left input */
 	long		numGroups;
 } SetOp;
 
@@ -1414,6 +1424,10 @@ typedef struct PlanRowMark
  * Then, since an Append-type node could have multiple partitioning
  * hierarchies among its children, we have an unordered List of those Lists.
  *
+ * relids				RelOptInfo.relids of the parent plan node (e.g. Append
+ *						or MergeAppend) to which this PartitionPruneInfo node
+ *						belongs.  The pruning logic ensures that this matches
+ *						the parent plan node's apprelids.
  * prune_infos			List of Lists containing PartitionedRelPruneInfo nodes,
  *						one sublist per run-time-prunable partition hierarchy
  *						appearing in the parent plan node's subplans.
@@ -1426,6 +1440,7 @@ typedef struct PartitionPruneInfo
 	pg_node_attr(no_equal, no_query_jumble)
 
 	NodeTag		type;
+	Bitmapset  *relids;
 	List	   *prune_infos;
 	Bitmapset  *other_subplans;
 } PartitionPruneInfo;

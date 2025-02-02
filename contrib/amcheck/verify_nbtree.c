@@ -14,7 +14,7 @@
  * that every visible heap tuple has a matching index tuple.
  *
  *
- * Copyright (c) 2017-2024, PostgreSQL Global Development Group
+ * Copyright (c) 2017-2025, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  contrib/amcheck/verify_nbtree.c
@@ -719,7 +719,7 @@ bt_check_every_level(Relation rel, Relation heaprel, bool heapkeyspace,
 			 RelationGetRelationName(state->heaprel));
 
 		table_index_build_scan(state->heaprel, state->rel, indexinfo, true, false,
-							   bt_tuple_present_callback, (void *) state, scan);
+							   bt_tuple_present_callback, state, scan);
 
 		ereport(DEBUG1,
 				(errmsg_internal("finished verifying presence of " INT64_FORMAT " tuples from table \"%s\" with bitset %.2f%% set",
@@ -2469,7 +2469,7 @@ bt_child_highkey_check(BtreeCheckState *state,
 				 * So, now we traverse to the right of that cousin page and
 				 * current child level page under consideration still belongs
 				 * to the subtree of target's left sibling.  Thus, we need to
-				 * match child's high key to it's left uncle page high key.
+				 * match child's high key to its left uncle page high key.
 				 * Thankfully we saved it, it's called a "low key" of target
 				 * page.
 				 */

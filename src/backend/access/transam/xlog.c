@@ -28,7 +28,7 @@
  * the current system state, and for starting/stopping backups.
  *
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/backend/access/transam/xlog.c
@@ -62,7 +62,6 @@
 #include "access/xlogreader.h"
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
-#include "access/xlogwait.h"
 #include "backup/basebackup.h"
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
@@ -103,6 +102,10 @@
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 #include "utils/varlena.h"
+
+#ifdef WAL_DEBUG
+#include "utils/memutils.h"
+#endif
 
 /* timeline ID to be used when bootstrapping */
 #define BootstrapTimeLineID		1
@@ -551,7 +554,7 @@ typedef struct XLogCtlData
 } XLogCtlData;
 
 /*
- * Classification of XLogRecordInsert operations.
+ * Classification of XLogInsertRecord operations.
  */
 typedef enum
 {
@@ -2667,8 +2670,14 @@ XLogSetAsyncXactLSN(XLogRecPtr asyncXactLSN)
 			wakeup = true;
 	}
 
-	if (wakeup && ProcGlobal->walwriterLatch)
-		SetLatch(ProcGlobal->walwriterLatch);
+	if (wakeup)
+	{
+		volatile PROC_HDR *procglobal = ProcGlobal;
+		ProcNumber	walwriterProc = procglobal->walwriterProc;
+
+		if (walwriterProc != INVALID_PROC_NUMBER)
+			SetLatch(&GetPGProcByNumber(walwriterProc)->procLatch);
+	}
 }
 
 /*
@@ -5394,7 +5403,7 @@ CheckRequiredParameterValues(void)
 	 */
 	if (ArchiveRecoveryRequested && EnableHotStandby)
 	{
-		/* We ignore autovacuum_max_workers when we make this test. */
+		/* We ignore autovacuum_worker_slots when we make this test. */
 		RecoveryRequiresIntParameter("max_connections",
 									 MaxConnections,
 									 ControlFile->MaxConnections);
@@ -6163,12 +6172,6 @@ StartupXLOG(void)
 
 	UpdateControlFile();
 	LWLockRelease(ControlFileLock);
-
-	/*
-	 * Wake up all waiters for replay LSN.  They need to report an error that
-	 * recovery was ended before reaching the target LSN.
-	 */
-	WaitLSNSetLatches(InvalidXLogRecPtr);
 
 	/*
 	 * Shutdown the recovery environment.  This must occur after
@@ -7293,7 +7296,7 @@ CreateCheckPoint(int flags)
 	 * until after the above call that flushes the XLOG_CHECKPOINT_ONLINE
 	 * record.
 	 */
-	SetWalSummarizerLatch();
+	WakeupWalSummarizer();
 
 	/*
 	 * Let smgr do post-checkpoint cleanup (eg, deleting old files).

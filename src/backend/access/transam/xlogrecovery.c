@@ -14,7 +14,7 @@
  * for interrogating recovery state and controlling the recovery process.
  *
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/backend/access/transam/xlogrecovery.c
@@ -40,7 +40,6 @@
 #include "access/xlogreader.h"
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
-#include "access/xlogwait.h"
 #include "backup/basebackup.h"
 #include "catalog/pg_control.h"
 #include "commands/tablespace.h"
@@ -1829,16 +1828,6 @@ PerformWalRecovery(void)
 				break;
 			}
 
-			/*
-			 * If we replayed an LSN that someone was waiting for then walk
-			 * over the shared memory array and set latches to notify the
-			 * waiters.
-			 */
-			if (waitLSNState &&
-				(XLogRecoveryCtl->lastReplayedEndRecPtr >=
-				 pg_atomic_read_u64(&waitLSNState->minWaitedLSN)))
-				WaitLSNSetLatches(XLogRecoveryCtl->lastReplayedEndRecPtr);
-
 			/* Else, try to fetch the next WAL record */
 			record = ReadRecord(xlogprefetcher, LOG, false, replayTLI);
 		} while (record != NULL);
@@ -1924,7 +1913,7 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record, TimeLineID *repl
 
 	/* Setup error traceback support for ereport() */
 	errcallback.callback = rm_redo_error_callback;
-	errcallback.arg = (void *) xlogreader;
+	errcallback.arg = xlogreader;
 	errcallback.previous = error_context_stack;
 	error_context_stack = &errcallback;
 
@@ -3449,12 +3438,12 @@ retry:
 	 * validates the page header anyway, and would propagate the failure up to
 	 * ReadRecord(), which would retry. However, there's a corner case with
 	 * continuation records, if a record is split across two pages such that
-	 * we would need to read the two pages from different sources. For
-	 * example, imagine a scenario where a streaming replica is started up,
-	 * and replay reaches a record that's split across two WAL segments. The
-	 * first page is only available locally, in pg_wal, because it's already
-	 * been recycled on the primary. The second page, however, is not present
-	 * in pg_wal, and we should stream it from the primary. There is a
+	 * we would need to read the two pages from different sources across two
+	 * WAL segments.
+	 *
+	 * The first page is only available locally, in pg_wal, because it's
+	 * already been recycled on the primary. The second page, however, is not
+	 * present in pg_wal, and we should stream it from the primary. There is a
 	 * recycled WAL segment present in pg_wal, with garbage contents, however.
 	 * We would read the first page from the local WAL segment, but when
 	 * reading the second page, we would read the bogus, recycled, WAL
@@ -3476,6 +3465,7 @@ retry:
 	 * responsible for the validation.
 	 */
 	if (StandbyMode &&
+		(targetPagePtr % wal_segment_size) == 0 &&
 		!XLogReaderValidatePageHeader(xlogreader, targetPagePtr, readBuf))
 	{
 		/*
@@ -4832,7 +4822,7 @@ check_recovery_target_lsn(char **newval, void **extra, GucSource source)
 
 		myextra = (XLogRecPtr *) guc_malloc(ERROR, sizeof(XLogRecPtr));
 		*myextra = lsn;
-		*extra = (void *) myextra;
+		*extra = myextra;
 	}
 	return true;
 }
@@ -4944,7 +4934,7 @@ check_recovery_target_time(char **newval, void **extra, GucSource source)
 
 			if (tm2timestamp(tm, fsec, &tz, &timestamp) != 0)
 			{
-				GUC_check_errdetail("timestamp out of range: \"%s\"", str);
+				GUC_check_errdetail("Timestamp out of range: \"%s\".", str);
 				return false;
 			}
 		}
@@ -4996,7 +4986,7 @@ check_recovery_target_timeline(char **newval, void **extra, GucSource source)
 
 	myextra = (RecoveryTargetTimeLineGoal *) guc_malloc(ERROR, sizeof(RecoveryTargetTimeLineGoal));
 	*myextra = rttg;
-	*extra = (void *) myextra;
+	*extra = myextra;
 
 	return true;
 }
@@ -5032,7 +5022,7 @@ check_recovery_target_xid(char **newval, void **extra, GucSource source)
 
 		myextra = (TransactionId *) guc_malloc(ERROR, sizeof(TransactionId));
 		*myextra = xid;
-		*extra = (void *) myextra;
+		*extra = myextra;
 	}
 	return true;
 }

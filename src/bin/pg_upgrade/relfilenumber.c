@@ -3,7 +3,7 @@
  *
  *	relfilenumber functions
  *
- *	Copyright (c) 2010-2024, PostgreSQL Global Development Group
+ *	Copyright (c) 2010-2025, PostgreSQL Global Development Group
  *	src/bin/pg_upgrade/relfilenumber.c
  */
 
@@ -11,8 +11,6 @@
 
 #include <sys/stat.h>
 
-#include "access/transam.h"
-#include "catalog/pg_class_d.h"
 #include "pg_upgrade.h"
 
 static void transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace);

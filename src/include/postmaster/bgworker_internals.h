@@ -2,7 +2,7 @@
  * bgworker_internals.h
  *		POSTGRES pluggable background workers internals
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -27,7 +27,7 @@
  * List of background workers, private to postmaster.
  *
  * All workers that are currently running will also have an entry in
- * BackendList.
+ * ActiveChildList.
  */
 typedef struct RegisteredBgWorker
 {

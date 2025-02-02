@@ -3,7 +3,7 @@
  * lsyscache.c
  *	  Convenience routines for common queries in the system catalog cache.
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -30,6 +30,7 @@
 #include "catalog/pg_language.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
+#include "catalog/pg_opfamily.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_publication.h"
@@ -595,7 +596,7 @@ get_op_hash_functions(Oid opno,
  *
  * In addition to the normal btree operators, we consider a <> operator to be
  * a "member" of an opfamily if its negator is an equality operator of the
- * opfamily.  ROWCOMPARE_NE is returned as the strategy number for this case.
+ * opfamily.  COMPARE_NE is returned as the strategy number for this case.
  */
 List *
 get_op_btree_interpretation(Oid opno)
@@ -666,11 +667,11 @@ get_op_btree_interpretation(Oid opno)
 				if (op_strategy != BTEqualStrategyNumber)
 					continue;
 
-				/* OK, report it with "strategy" ROWCOMPARE_NE */
+				/* OK, report it with "strategy" COMPARE_NE */
 				thisresult = (OpBtreeInterpretation *)
 					palloc(sizeof(OpBtreeInterpretation));
 				thisresult->opfamily_id = op_form->amopfamily;
-				thisresult->strategy = ROWCOMPARE_NE;
+				thisresult->strategy = COMPARE_NE;
 				thisresult->oplefttype = op_form->amoplefttype;
 				thisresult->oprighttype = op_form->amoprighttype;
 				result = lappend(result, thisresult);
@@ -1271,6 +1272,32 @@ get_opclass_method(Oid opclass)
 	result = cla_tup->opcmethod;
 	ReleaseSysCache(tp);
 	return result;
+}
+
+/*				---------- OPFAMILY CACHE ----------					 */
+
+char *
+get_opfamily_name(Oid opfid, bool missing_ok)
+{
+	HeapTuple	tup;
+	char	   *opfname;
+	Form_pg_opfamily opfform;
+
+	tup = SearchSysCache1(OPFAMILYOID, ObjectIdGetDatum(opfid));
+
+	if (!HeapTupleIsValid(tup))
+	{
+		if (!missing_ok)
+			elog(ERROR, "cache lookup failed for operator family %u", opfid);
+		return NULL;
+	}
+
+	opfform = (Form_pg_opfamily) GETSTRUCT(tup);
+	opfname = pstrdup(NameStr(opfform->opfname));
+
+	ReleaseSysCache(tup);
+
+	return opfname;
 }
 
 /*				---------- OPERATOR CACHE ----------					 */

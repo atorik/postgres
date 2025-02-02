@@ -19,7 +19,7 @@
  * not provided.
  *
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/nodes/execnodes.h
@@ -74,11 +74,20 @@ typedef Datum (*ExprStateEvalFunc) (struct ExprState *expression,
 /* Bits in ExprState->flags (see also execExpr.h for private flag bits): */
 /* expression is for use with ExecQual() */
 #define EEO_FLAG_IS_QUAL					(1 << 0)
+/* expression refers to OLD table columns */
+#define EEO_FLAG_HAS_OLD					(1 << 1)
+/* expression refers to NEW table columns */
+#define EEO_FLAG_HAS_NEW					(1 << 2)
+/* OLD table row is NULL in RETURNING list */
+#define EEO_FLAG_OLD_IS_NULL				(1 << 3)
+/* NEW table row is NULL in RETURNING list */
+#define EEO_FLAG_NEW_IS_NULL				(1 << 4)
 
 typedef struct ExprState
 {
 	NodeTag		type;
 
+#define FIELDNO_EXPRSTATE_FLAGS 1
 	uint8		flags;			/* bitmask of EEO_FLAG_* bits, see above */
 
 	/*
@@ -289,6 +298,12 @@ typedef struct ExprContext
 	Datum		domainValue_datum;
 #define FIELDNO_EXPRCONTEXT_DOMAINNULL 13
 	bool		domainValue_isNull;
+
+	/* Tuples that OLD/NEW Var nodes in RETURNING may refer to */
+#define FIELDNO_EXPRCONTEXT_OLDTUPLE 14
+	TupleTableSlot *ecxt_oldtuple;
+#define FIELDNO_EXPRCONTEXT_NEWTUPLE 15
+	TupleTableSlot *ecxt_newtuple;
 
 	/* Link to containing EState (NULL if a standalone ExprContext) */
 	struct EState *ecxt_estate;
@@ -504,6 +519,7 @@ typedef struct ResultRelInfo
 	TupleTableSlot *ri_ReturningSlot;	/* for trigger output tuples */
 	TupleTableSlot *ri_TrigOldSlot; /* for a trigger's old tuple */
 	TupleTableSlot *ri_TrigNewSlot; /* for a trigger's new tuple */
+	TupleTableSlot *ri_AllNullSlot; /* for RETURNING OLD/NEW */
 
 	/* FDW callback functions, if foreign table */
 	struct FdwRoutine *ri_FdwRoutine;
@@ -639,6 +655,9 @@ typedef struct EState
 										 * ExecRowMarks, or NULL if none */
 	List	   *es_rteperminfos;	/* List of RTEPermissionInfo */
 	PlannedStmt *es_plannedstmt;	/* link to top of plan tree */
+	List	   *es_part_prune_infos;	/* List of PartitionPruneInfo */
+	List	   *es_part_prune_states;	/* List of PartitionPruneState */
+	List	   *es_part_prune_results;	/* List of Bitmapset */
 	const char *es_sourceText;	/* Source text from QueryDesc */
 
 	JunkFilter *es_junkFilter;	/* top-level junk filter, if any */
@@ -795,15 +814,15 @@ typedef struct ExecAuxRowMark
  *
  * All-in-memory tuple hash tables are used for a number of purposes.
  *
- * Note: tab_hash_funcs are for the key datatype(s) stored in the table,
- * and tab_eq_funcs are non-cross-type equality operators for those types.
- * Normally these are the only functions used, but FindTupleHashEntry()
- * supports searching a hashtable using cross-data-type hashing.  For that,
- * the caller must supply hash functions for the LHS datatype as well as
- * the cross-type equality operators to use.  in_hash_funcs and cur_eq_func
- * are set to point to the caller's function arrays while doing such a search.
- * During LookupTupleHashEntry(), they point to tab_hash_funcs and
- * tab_eq_func respectively.
+ * Note: tab_hash_expr is for hashing the key datatype(s) stored in the table,
+ * and tab_eq_func is a non-cross-type ExprState for equality checks on those
+ * types.  Normally these are the only ExprStates used, but
+ * FindTupleHashEntry() supports searching a hashtable using cross-data-type
+ * hashing.  For that, the caller must supply an ExprState to hash the LHS
+ * datatype as well as the cross-type equality ExprState to use.  in_hash_expr
+ * and cur_eq_func are set to point to the caller's hash and equality
+ * ExprStates while doing such a search.  During LookupTupleHashEntry(), they
+ * point to tab_hash_expr and tab_eq_func respectively.
  * ----------------------------------------------------------------
  */
 typedef struct TupleHashEntryData *TupleHashEntry;
@@ -830,18 +849,16 @@ typedef struct TupleHashTableData
 	tuplehash_hash *hashtab;	/* underlying hash table */
 	int			numCols;		/* number of columns in lookup key */
 	AttrNumber *keyColIdx;		/* attr numbers of key columns */
-	FmgrInfo   *tab_hash_funcs; /* hash functions for table datatype(s) */
+	ExprState  *tab_hash_expr;	/* ExprState for hashing table datatype(s) */
 	ExprState  *tab_eq_func;	/* comparator for table datatype(s) */
 	Oid		   *tab_collations; /* collations for hash and comparison */
 	MemoryContext tablecxt;		/* memory context containing table */
 	MemoryContext tempcxt;		/* context for function evaluations */
-	Size		entrysize;		/* actual size to make each hash entry */
 	TupleTableSlot *tableslot;	/* slot for referencing table entries */
 	/* The following fields are set transiently for each table search: */
 	TupleTableSlot *inputslot;	/* current input tuple's slot */
-	FmgrInfo   *in_hash_funcs;	/* hash functions for input datatype(s) */
+	ExprState  *in_hash_expr;	/* ExprState for hashing input datatype(s) */
 	ExprState  *cur_eq_func;	/* comparator for input vs. table */
-	uint32		hash_iv;		/* hash-function IV */
 	ExprContext *exprcontext;	/* expression context */
 }			TupleHashTableData;
 
@@ -994,8 +1011,7 @@ typedef struct SubPlanState
 									 * datatype(s) */
 	Oid		   *tab_collations; /* collations for hash and comparison */
 	FmgrInfo   *tab_hash_funcs; /* hash functions for table datatype(s) */
-	FmgrInfo   *tab_eq_funcs;	/* equality functions for table datatype(s) */
-	FmgrInfo   *lhs_hash_funcs; /* hash functions for lefthand datatype(s) */
+	ExprState  *lhs_hash_expr;	/* hash expr for lefthand datatype(s) */
 	FmgrInfo   *cur_eq_funcs;	/* equality functions for LHS vs. table */
 	ExprState  *cur_eq_comp;	/* equality comparator for LHS vs. table */
 } SubPlanState;
@@ -1843,7 +1859,6 @@ typedef struct SharedBitmapHeapInstrumentation
  *		prefetch_target    current target prefetch distance
  *		prefetch_maximum   maximum value for prefetch_target
  *		initialized		   is node is ready to iterate
- *		shared_prefetch_iterator shared iterator for prefetching
  *		pstate			   shared state for parallel bitmap scan
  *		sinstrument		   statistics for parallel workers
  *		recheck			   do current page's tuples need recheck
@@ -1858,12 +1873,11 @@ typedef struct BitmapHeapScanState
 	TIDBitmap  *tbm;
 	Buffer		pvmbuffer;
 	BitmapHeapScanInstrumentation stats;
-	TBMIterator *prefetch_iterator;
+	TBMIterator prefetch_iterator;
 	int			prefetch_pages;
 	int			prefetch_target;
 	int			prefetch_maximum;
 	bool		initialized;
-	TBMSharedIterator *shared_prefetch_iterator;
 	ParallelBitmapHeapState *pstate;
 	SharedBitmapHeapInstrumentation *sinstrument;
 	bool		recheck;
@@ -2810,27 +2824,34 @@ typedef struct HashState
 /* ----------------
  *	 SetOpState information
  *
- *		Even in "sorted" mode, SetOp nodes are more complex than a simple
- *		Unique, since we have to count how many duplicates to return.  But
- *		we also support hashing, so this is really more like a cut-down
- *		form of Agg.
+ *		SetOp nodes support either sorted or hashed de-duplication.
+ *		The sorted mode is a bit like MergeJoin, the hashed mode like Agg.
  * ----------------
  */
-/* this struct is private in nodeSetOp.c: */
-typedef struct SetOpStatePerGroupData *SetOpStatePerGroup;
+typedef struct SetOpStatePerInput
+{
+	TupleTableSlot *firstTupleSlot; /* first tuple of current group */
+	int64		numTuples;		/* number of tuples in current group */
+	TupleTableSlot *nextTupleSlot;	/* next input tuple, if already read */
+	bool		needGroup;		/* do we need to load a new group? */
+} SetOpStatePerInput;
 
 typedef struct SetOpState
 {
 	PlanState	ps;				/* its first field is NodeTag */
-	ExprState  *eqfunction;		/* equality comparator */
+	bool		setop_done;		/* indicates completion of output scan */
+	int64		numOutput;		/* number of dups left to output */
+	int			numCols;		/* number of grouping columns */
+
+	/* these fields are used in SETOP_SORTED mode: */
+	SortSupport sortKeys;		/* per-grouping-field sort data */
+	SetOpStatePerInput leftInput;	/* current outer-relation input state */
+	SetOpStatePerInput rightInput;	/* current inner-relation input state */
+	bool		need_init;		/* have we read the first tuples yet? */
+
+	/* these fields are used in SETOP_HASHED mode: */
 	Oid		   *eqfuncoids;		/* per-grouping-field equality fns */
 	FmgrInfo   *hashfunctions;	/* per-grouping-field hash fns */
-	bool		setop_done;		/* indicates completion of output scan */
-	long		numOutput;		/* number of dups left to output */
-	/* these fields are used in SETOP_SORTED mode: */
-	SetOpStatePerGroup pergroup;	/* per-group working state */
-	HeapTuple	grp_firstTuple; /* copy of first tuple of current group */
-	/* these fields are used in SETOP_HASHED mode: */
 	TupleHashTable hashtable;	/* hash table with one entry per group */
 	MemoryContext tableContext; /* memory context containing hash table */
 	bool		table_filled;	/* hash table filled yet? */

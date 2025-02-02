@@ -3,7 +3,7 @@
  * pg_rewind.c
  *	  Synchronizes a PostgreSQL data directory to a new timeline
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  *
  *-------------------------------------------------------------------------
  */
@@ -454,6 +454,9 @@ main(int argc, char **argv)
 								GenerateRecoveryConfig(conn, NULL, NULL));
 		exit(0);
 	}
+
+	/* Initialize hashtable that tracks WAL files protected from removal */
+	keepwal_init();
 
 	findLastCheckpoint(datadir_target, divergerec, lastcommontliIndex,
 					   &chkptrec, &chkpttli, &chkptredo, restore_command);

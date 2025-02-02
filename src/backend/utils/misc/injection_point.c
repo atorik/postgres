@@ -6,7 +6,7 @@
  * Injection points can be used to run arbitrary code by attaching callbacks
  * that would be executed in place of the named injection point.
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -60,7 +60,7 @@ typedef struct InjectionPointEntry
 	 */
 	pg_atomic_uint64 generation;
 
-	char		name[INJ_NAME_MAXLEN];	/* hash key */
+	char		name[INJ_NAME_MAXLEN];	/* point name */
 	char		library[INJ_LIB_MAXLEN];	/* library */
 	char		function[INJ_FUNC_MAXLEN];	/* function */
 

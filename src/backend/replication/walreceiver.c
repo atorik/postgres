@@ -39,7 +39,7 @@
  * specific parts are in the libpqwalreceiver module. It's loaded
  * dynamically to avoid linking the server with libpq.
  *
- * Portions Copyright (c) 2010-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2010-2025, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -266,8 +266,8 @@ WalReceiverMain(char *startup_data, size_t startup_data_len)
 	walrcv->lastMsgSendTime =
 		walrcv->lastMsgReceiptTime = walrcv->latestWalEndTime = now;
 
-	/* Report the latch to use to awaken this process */
-	walrcv->latch = &MyProc->procLatch;
+	/* Report our proc number so that others can wake us up */
+	walrcv->procno = MyProcNumber;
 
 	SpinLockRelease(&walrcv->mutex);
 
@@ -819,8 +819,8 @@ WalRcvDie(int code, Datum arg)
 	Assert(walrcv->pid == MyProcPid);
 	walrcv->walRcvState = WALRCV_STOPPED;
 	walrcv->pid = 0;
+	walrcv->procno = INVALID_PROC_NUMBER;
 	walrcv->ready_to_display = false;
-	walrcv->latch = NULL;
 	SpinLockRelease(&walrcv->mutex);
 
 	ConditionVariableBroadcast(&walrcv->walRcvStoppedCV);
@@ -1358,15 +1358,15 @@ WalRcvComputeNextWakeup(WalRcvWakeupReason reason, TimestampTz now)
 void
 WalRcvForceReply(void)
 {
-	Latch	   *latch;
+	ProcNumber	procno;
 
 	WalRcv->force_reply = true;
-	/* fetching the latch pointer might not be atomic, so use spinlock */
+	/* fetching the proc number is probably atomic, but don't rely on it */
 	SpinLockAcquire(&WalRcv->mutex);
-	latch = WalRcv->latch;
+	procno = WalRcv->procno;
 	SpinLockRelease(&WalRcv->mutex);
-	if (latch)
-		SetLatch(latch);
+	if (procno != INVALID_PROC_NUMBER)
+		SetLatch(&GetPGProcByNumber(procno)->procLatch);
 }
 
 /*

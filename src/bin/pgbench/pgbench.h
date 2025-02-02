@@ -2,7 +2,7 @@
  *
  * pgbench.h
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *-------------------------------------------------------------------------
@@ -138,11 +138,9 @@ struct PgBenchExprList
 	PgBenchExprLink *tail;
 };
 
-extern PgBenchExpr *expr_parse_result;
-
-extern int	expr_yyparse(yyscan_t yyscanner);
+extern int	expr_yyparse(PgBenchExpr **expr_parse_result_p, yyscan_t yyscanner);
 extern int	expr_yylex(union YYSTYPE *yylval_param, yyscan_t yyscanner);
-extern void expr_yyerror(yyscan_t yyscanner, const char *message) pg_attribute_noreturn();
+extern void expr_yyerror(PgBenchExpr **expr_parse_result_p, yyscan_t yyscanner, const char *message) pg_attribute_noreturn();
 extern void expr_yyerror_more(yyscan_t yyscanner, const char *message,
 							  const char *more) pg_attribute_noreturn();
 extern bool expr_lex_one_word(PsqlScanState state, PQExpBuffer word_buf,

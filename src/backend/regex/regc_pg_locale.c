@@ -6,7 +6,7 @@
  *
  * This file is #included by regcomp.c; it's not meant to compile standalone.
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -74,7 +74,6 @@ typedef enum
 
 static PG_Locale_Strategy pg_regex_strategy;
 static pg_locale_t pg_regex_locale;
-static Oid	pg_regex_collation;
 
 /*
  * Hard-wired character properties for C locale
@@ -254,7 +253,7 @@ pg_set_regex_collation(Oid collation)
 		 * pg_newlocale_from_collation().
 		 */
 		strategy = PG_REGEX_STRATEGY_C;
-		collation = C_COLLATION_OID;
+		locale = 0;
 	}
 	else
 	{
@@ -273,7 +272,6 @@ pg_set_regex_collation(Oid collation)
 			 */
 			strategy = PG_REGEX_STRATEGY_C;
 			locale = 0;
-			collation = C_COLLATION_OID;
 		}
 		else if (locale->provider == COLLPROVIDER_BUILTIN)
 		{
@@ -298,7 +296,6 @@ pg_set_regex_collation(Oid collation)
 
 	pg_regex_strategy = strategy;
 	pg_regex_locale = locale;
-	pg_regex_collation = collation;
 }
 
 static int
@@ -310,7 +307,7 @@ pg_wc_isdigit(pg_wchar c)
 			return (c <= (pg_wchar) 127 &&
 					(pg_char_properties[c] & PG_ISDIGIT));
 		case PG_REGEX_STRATEGY_BUILTIN:
-			return pg_u_isdigit(c, true);
+			return pg_u_isdigit(c, !pg_regex_locale->info.builtin.casemap_full);
 		case PG_REGEX_STRATEGY_LIBC_WIDE:
 			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
 				return iswdigit_l((wint_t) c, pg_regex_locale->info.lt);
@@ -364,7 +361,7 @@ pg_wc_isalnum(pg_wchar c)
 			return (c <= (pg_wchar) 127 &&
 					(pg_char_properties[c] & PG_ISALNUM));
 		case PG_REGEX_STRATEGY_BUILTIN:
-			return pg_u_isalnum(c, true);
+			return pg_u_isalnum(c, !pg_regex_locale->info.builtin.casemap_full);
 		case PG_REGEX_STRATEGY_LIBC_WIDE:
 			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
 				return iswalnum_l((wint_t) c, pg_regex_locale->info.lt);
@@ -508,7 +505,7 @@ pg_wc_ispunct(pg_wchar c)
 			return (c <= (pg_wchar) 127 &&
 					(pg_char_properties[c] & PG_ISPUNCT));
 		case PG_REGEX_STRATEGY_BUILTIN:
-			return pg_u_ispunct(c, true);
+			return pg_u_ispunct(c, !pg_regex_locale->info.builtin.casemap_full);
 		case PG_REGEX_STRATEGY_LIBC_WIDE:
 			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
 				return iswpunct_l((wint_t) c, pg_regex_locale->info.lt);
@@ -628,7 +625,7 @@ typedef int (*pg_wc_probefunc) (pg_wchar c);
 typedef struct pg_ctype_cache
 {
 	pg_wc_probefunc probefunc;	/* pg_wc_isalpha or a sibling */
-	Oid			collation;		/* collation this entry is for */
+	pg_locale_t locale;			/* locale this entry is for */
 	struct cvec cv;				/* cache entry contents */
 	struct pg_ctype_cache *next;	/* chain link */
 } pg_ctype_cache;
@@ -697,7 +694,7 @@ pg_ctype_get_cache(pg_wc_probefunc probefunc, int cclasscode)
 	for (pcc = pg_ctype_cache_list; pcc != NULL; pcc = pcc->next)
 	{
 		if (pcc->probefunc == probefunc &&
-			pcc->collation == pg_regex_collation)
+			pcc->locale == pg_regex_locale)
 			return &pcc->cv;
 	}
 
@@ -708,7 +705,7 @@ pg_ctype_get_cache(pg_wc_probefunc probefunc, int cclasscode)
 	if (pcc == NULL)
 		return NULL;
 	pcc->probefunc = probefunc;
-	pcc->collation = pg_regex_collation;
+	pcc->locale = pg_regex_locale;
 	pcc->cv.nchrs = 0;
 	pcc->cv.chrspace = 128;
 	pcc->cv.chrs = (chr *) malloc(pcc->cv.chrspace * sizeof(chr));

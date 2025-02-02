@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2024, PostgreSQL Global Development Group
+# Copyright (c) 2022-2025, PostgreSQL Global Development Group
 
 if not llvm.found()
   subdir_done()
@@ -14,6 +14,7 @@ llvmjit_sources += files(
   'llvmjit_error.cpp',
   'llvmjit_inline.cpp',
   'llvmjit_wrap.cpp',
+  'SectionMemoryManager.cpp',
 )
 
 # Code generation

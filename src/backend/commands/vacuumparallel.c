@@ -16,7 +16,7 @@
  * the parallel context is re-initialized so that the same DSM can be used for
  * multiple passes of index bulk-deletion and index cleanup.
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -375,7 +375,7 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 		(nindexes_mwm > 0) ?
 		maintenance_work_mem / Min(parallel_workers, nindexes_mwm) :
 		maintenance_work_mem;
-	shared->dead_items_info.max_bytes = vac_work_mem * 1024L;
+	shared->dead_items_info.max_bytes = vac_work_mem * (size_t) 1024;
 
 	/* Prepare DSA space for dead items */
 	dead_items = TidStoreCreateShared(shared->dead_items_info.max_bytes,
@@ -474,7 +474,6 @@ parallel_vacuum_get_dead_items(ParallelVacuumState *pvs, VacDeadItemsInfo **dead
 void
 parallel_vacuum_reset_dead_items(ParallelVacuumState *pvs)
 {
-	TidStore   *dead_items = pvs->dead_items;
 	VacDeadItemsInfo *dead_items_info = &(pvs->shared->dead_items_info);
 
 	/*
@@ -482,13 +481,13 @@ parallel_vacuum_reset_dead_items(ParallelVacuumState *pvs)
 	 * operating system. Then we recreate the tidstore with the same max_bytes
 	 * limitation we just used.
 	 */
-	TidStoreDestroy(dead_items);
+	TidStoreDestroy(pvs->dead_items);
 	pvs->dead_items = TidStoreCreateShared(dead_items_info->max_bytes,
 										   LWTRANCHE_PARALLEL_VACUUM_DSA);
 
 	/* Update the DSA pointer for dead_items to the new one */
-	pvs->shared->dead_items_dsa_handle = dsa_get_handle(TidStoreGetDSA(dead_items));
-	pvs->shared->dead_items_handle = TidStoreGetHandle(dead_items);
+	pvs->shared->dead_items_dsa_handle = dsa_get_handle(TidStoreGetDSA(pvs->dead_items));
+	pvs->shared->dead_items_handle = TidStoreGetHandle(pvs->dead_items);
 
 	/* Reset the counter */
 	dead_items_info->num_items = 0;
@@ -1033,6 +1032,13 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	vac_open_indexes(rel, RowExclusiveLock, &nindexes, &indrels);
 	Assert(nindexes > 0);
 
+	/*
+	 * Apply the desired value of maintenance_work_mem within this process.
+	 * Really we should use SetConfigOption() to change a GUC, but since we're
+	 * already in parallel mode guc.c would complain about that.  Fortunately,
+	 * by the same token guc.c will not let any user-defined code change it.
+	 * So just avert your eyes while we do this:
+	 */
 	if (shared->maintenance_work_mem_worker > 0)
 		maintenance_work_mem = shared->maintenance_work_mem_worker;
 

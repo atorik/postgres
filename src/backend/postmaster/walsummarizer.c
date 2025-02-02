@@ -13,7 +13,7 @@
  * summary files when the file timestamp is older than a configurable
  * threshold (but only if the WAL has been removed first).
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/postmaster/walsummarizer.c
@@ -626,7 +626,7 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
 }
 
 /*
- * Attempt to set the WAL summarizer's latch.
+ * Wake up the WAL summarizer process.
  *
  * This might not work, because there's no guarantee that the WAL summarizer
  * process was successfully started, and it also might have started but
@@ -634,7 +634,7 @@ GetOldestUnsummarizedLSN(TimeLineID *tli, bool *lsn_is_exact)
  * latch set, but there's no guarantee.
  */
 void
-SetWalSummarizerLatch(void)
+WakeupWalSummarizer(void)
 {
 	ProcNumber	pgprocno;
 

@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2024, PostgreSQL Global Development Group
+# Copyright (c) 2022-2025, PostgreSQL Global Development Group
 
 if not get_option('injection_points')
   subdir_done()
@@ -8,6 +8,7 @@ injection_points_sources = files(
   'injection_points.c',
   'injection_stats.c',
   'injection_stats_fixed.c',
+  'regress_injection.c',
 )
 
 if host_system == 'windows'
@@ -44,7 +45,9 @@ tests += {
     'specs': [
       'basic',
       'inplace',
+      'syscache-update-pruned',
     ],
+    'runningcheck': false, # see syscache-update-pruned
   },
   'tap': {
     'env': {

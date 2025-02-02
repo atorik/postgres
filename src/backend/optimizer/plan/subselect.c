@@ -6,7 +6,7 @@
  * This module deals with SubLinks and CTEs, but not subquery RTEs (i.e.,
  * not sub-SELECT-in-FROM cases).
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -354,17 +354,19 @@ build_subplan(PlannerInfo *root, Plan *plan, Path *path,
 		Node	   *arg = pitem->item;
 
 		/*
-		 * The Var, PlaceHolderVar, Aggref or GroupingFunc has already been
-		 * adjusted to have the correct varlevelsup, phlevelsup, or
-		 * agglevelsup.
+		 * The Var, PlaceHolderVar, Aggref, GroupingFunc, or ReturningExpr has
+		 * already been adjusted to have the correct varlevelsup, phlevelsup,
+		 * agglevelsup, or retlevelsup.
 		 *
-		 * If it's a PlaceHolderVar, Aggref or GroupingFunc, its arguments
-		 * might contain SubLinks, which have not yet been processed (see the
-		 * comments for SS_replace_correlation_vars).  Do that now.
+		 * If it's a PlaceHolderVar, Aggref, GroupingFunc, or ReturningExpr,
+		 * its arguments might contain SubLinks, which have not yet been
+		 * processed (see the comments for SS_replace_correlation_vars).  Do
+		 * that now.
 		 */
 		if (IsA(arg, PlaceHolderVar) ||
 			IsA(arg, Aggref) ||
-			IsA(arg, GroupingFunc))
+			IsA(arg, GroupingFunc) ||
+			IsA(arg, ReturningExpr))
 			arg = SS_process_sublinks(root, arg, false);
 
 		splan->parParam = lappend_int(splan->parParam, pitem->paramId);
@@ -697,9 +699,7 @@ convert_testexpr_mutator(Node *node,
 		 */
 		return node;
 	}
-	return expression_tree_mutator(node,
-								   convert_testexpr_mutator,
-								   (void *) context);
+	return expression_tree_mutator(node, convert_testexpr_mutator, context);
 }
 
 /*
@@ -1121,14 +1121,13 @@ contain_outer_selfref_walker(Node *node, Index *depth)
 		(*depth)++;
 
 		result = query_tree_walker(query, contain_outer_selfref_walker,
-								   (void *) depth, QTW_EXAMINE_RTES_BEFORE);
+								   depth, QTW_EXAMINE_RTES_BEFORE);
 
 		(*depth)--;
 
 		return result;
 	}
-	return expression_tree_walker(node, contain_outer_selfref_walker,
-								  (void *) depth);
+	return expression_tree_walker(node, contain_outer_selfref_walker, depth);
 }
 
 /*
@@ -1866,8 +1865,8 @@ convert_EXISTS_to_ANY(PlannerInfo *root, Query *subselect,
 /*
  * Replace correlation vars (uplevel vars) with Params.
  *
- * Uplevel PlaceHolderVars, aggregates, GROUPING() expressions, and
- * MergeSupportFuncs are replaced, too.
+ * Uplevel PlaceHolderVars, aggregates, GROUPING() expressions,
+ * MergeSupportFuncs, and ReturningExprs are replaced, too.
  *
  * Note: it is critical that this runs immediately after SS_process_sublinks.
  * Since we do not recurse into the arguments of uplevel PHVs and aggregates,
@@ -1927,9 +1926,13 @@ replace_correlation_vars_mutator(Node *node, PlannerInfo *root)
 			return (Node *) replace_outer_merge_support(root,
 														(MergeSupportFunc *) node);
 	}
-	return expression_tree_mutator(node,
-								   replace_correlation_vars_mutator,
-								   (void *) root);
+	if (IsA(node, ReturningExpr))
+	{
+		if (((ReturningExpr *) node)->retlevelsup > 0)
+			return (Node *) replace_outer_returning(root,
+													(ReturningExpr *) node);
+	}
+	return expression_tree_mutator(node, replace_correlation_vars_mutator, root);
 }
 
 /*
@@ -1982,11 +1985,11 @@ process_sublinks_mutator(Node *node, process_sublinks_context *context)
 	}
 
 	/*
-	 * Don't recurse into the arguments of an outer PHV, Aggref or
-	 * GroupingFunc here.  Any SubLinks in the arguments have to be dealt with
-	 * at the outer query level; they'll be handled when build_subplan
-	 * collects the PHV, Aggref or GroupingFunc into the arguments to be
-	 * passed down to the current subplan.
+	 * Don't recurse into the arguments of an outer PHV, Aggref, GroupingFunc,
+	 * or ReturningExpr here.  Any SubLinks in the arguments have to be dealt
+	 * with at the outer query level; they'll be handled when build_subplan
+	 * collects the PHV, Aggref, GroupingFunc, or ReturningExpr into the
+	 * arguments to be passed down to the current subplan.
 	 */
 	if (IsA(node, PlaceHolderVar))
 	{
@@ -2001,6 +2004,11 @@ process_sublinks_mutator(Node *node, process_sublinks_context *context)
 	else if (IsA(node, GroupingFunc))
 	{
 		if (((GroupingFunc *) node)->agglevelsup > 0)
+			return node;
+	}
+	else if (IsA(node, ReturningExpr))
+	{
+		if (((ReturningExpr *) node)->retlevelsup > 0)
 			return node;
 	}
 
@@ -2077,7 +2085,7 @@ process_sublinks_mutator(Node *node, process_sublinks_context *context)
 
 	return expression_tree_mutator(node,
 								   process_sublinks_mutator,
-								   (void *) &locContext);
+								   &locContext);
 }
 
 /*
@@ -2115,7 +2123,9 @@ SS_identify_outer_params(PlannerInfo *root)
 	outer_params = NULL;
 	for (proot = root->parent_root; proot != NULL; proot = proot->parent_root)
 	{
-		/* Include ordinary Var/PHV/Aggref/GroupingFunc params */
+		/*
+		 * Include ordinary Var/PHV/Aggref/GroupingFunc/ReturningExpr params.
+		 */
 		foreach(l, proot->plan_params)
 		{
 			PlannerParamItem *pitem = (PlannerParamItem *) lfirst(l);
@@ -2985,8 +2995,7 @@ finalize_primnode(Node *node, finalize_primnode_context *context)
 
 		return false;			/* no more to do here */
 	}
-	return expression_tree_walker(node, finalize_primnode,
-								  (void *) context);
+	return expression_tree_walker(node, finalize_primnode, context);
 }
 
 /*
@@ -3008,8 +3017,7 @@ finalize_agg_primnode(Node *node, finalize_primnode_context *context)
 		finalize_primnode((Node *) agg->aggfilter, context);
 		return false;			/* there can't be any Aggrefs below here */
 	}
-	return expression_tree_walker(node, finalize_agg_primnode,
-								  (void *) context);
+	return expression_tree_walker(node, finalize_agg_primnode, context);
 }
 
 /*

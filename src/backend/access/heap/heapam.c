@@ -3,7 +3,7 @@
  * heapam.c
  *	  heap access method code
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -49,8 +49,10 @@
 #include "storage/predicate.h"
 #include "storage/procarray.h"
 #include "utils/datum.h"
+#include "utils/injection_point.h"
 #include "utils/inval.h"
 #include "utils/spccache.h"
+#include "utils/syscache.h"
 
 
 static HeapTuple heap_prepare_insert(Relation relation, HeapTuple tup,
@@ -378,6 +380,8 @@ initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 	ItemPointerSetInvalid(&scan->rs_ctup.t_self);
 	scan->rs_cbuf = InvalidBuffer;
 	scan->rs_cblock = InvalidBlockNumber;
+	scan->rs_ntuples = 0;
+	scan->rs_cindex = 0;
 
 	/*
 	 * Initialize to ForwardScanDirection because it is most common and
@@ -943,8 +947,8 @@ heapgettup_pagemode(HeapScanDesc scan,
 {
 	HeapTuple	tuple = &(scan->rs_ctup);
 	Page		page;
-	int			lineindex;
-	int			linesleft;
+	uint32		lineindex;
+	uint32		linesleft;
 
 	if (likely(scan->rs_inited))
 	{
@@ -989,6 +993,7 @@ continue_page:
 			ItemId		lpp;
 			OffsetNumber lineoff;
 
+			Assert(lineindex <= scan->rs_ntuples);
 			lineoff = scan->rs_vistuples[lineindex];
 			lpp = PageGetItemId(page, lineoff);
 			Assert(ItemIdIsNormal(lpp));
@@ -1045,7 +1050,16 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 	/*
 	 * allocate and initialize scan descriptor
 	 */
-	scan = (HeapScanDesc) palloc(sizeof(HeapScanDescData));
+	if (flags & SO_TYPE_BITMAPSCAN)
+	{
+		BitmapHeapScanDesc bscan = palloc(sizeof(BitmapHeapScanDescData));
+
+		bscan->rs_vmbuffer = InvalidBuffer;
+		bscan->rs_empty_tuples_pending = 0;
+		scan = (HeapScanDesc) bscan;
+	}
+	else
+		scan = (HeapScanDesc) palloc(sizeof(HeapScanDescData));
 
 	scan->rs_base.rs_rd = relation;
 	scan->rs_base.rs_snapshot = snapshot;
@@ -1053,8 +1067,6 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 	scan->rs_base.rs_flags = flags;
 	scan->rs_base.rs_parallel = parallel_scan;
 	scan->rs_strategy = NULL;	/* set in initscan */
-	scan->rs_vmbuffer = InvalidBuffer;
-	scan->rs_empty_tuples_pending = 0;
 
 	/*
 	 * Disable page-at-a-time mode if it's not a MVCC-safe snapshot.
@@ -1170,18 +1182,23 @@ heap_rescan(TableScanDesc sscan, ScanKey key, bool set_params,
 	if (BufferIsValid(scan->rs_cbuf))
 		ReleaseBuffer(scan->rs_cbuf);
 
-	if (BufferIsValid(scan->rs_vmbuffer))
+	if (scan->rs_base.rs_flags & SO_TYPE_BITMAPSCAN)
 	{
-		ReleaseBuffer(scan->rs_vmbuffer);
-		scan->rs_vmbuffer = InvalidBuffer;
-	}
+		BitmapHeapScanDesc bscan = (BitmapHeapScanDesc) scan;
 
-	/*
-	 * Reset rs_empty_tuples_pending, a field only used by bitmap heap scan,
-	 * to avoid incorrectly emitting NULL-filled tuples from a previous scan
-	 * on rescan.
-	 */
-	scan->rs_empty_tuples_pending = 0;
+		/*
+		 * Reset empty_tuples_pending, a field only used by bitmap heap scan,
+		 * to avoid incorrectly emitting NULL-filled tuples from a previous
+		 * scan on rescan.
+		 */
+		bscan->rs_empty_tuples_pending = 0;
+
+		if (BufferIsValid(bscan->rs_vmbuffer))
+		{
+			ReleaseBuffer(bscan->rs_vmbuffer);
+			bscan->rs_vmbuffer = InvalidBuffer;
+		}
+	}
 
 	/*
 	 * The read stream is reset on rescan. This must be done before
@@ -1210,8 +1227,14 @@ heap_endscan(TableScanDesc sscan)
 	if (BufferIsValid(scan->rs_cbuf))
 		ReleaseBuffer(scan->rs_cbuf);
 
-	if (BufferIsValid(scan->rs_vmbuffer))
-		ReleaseBuffer(scan->rs_vmbuffer);
+	if (scan->rs_base.rs_flags & SO_TYPE_BITMAPSCAN)
+	{
+		BitmapHeapScanDesc bscan = (BitmapHeapScanDesc) sscan;
+
+		bscan->rs_empty_tuples_pending = 0;
+		if (BufferIsValid(bscan->rs_vmbuffer))
+			ReleaseBuffer(bscan->rs_vmbuffer);
+	}
 
 	/*
 	 * Must free the read stream before freeing the BufferAccessStrategy.
@@ -3233,6 +3256,7 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 	interesting_attrs = bms_add_members(interesting_attrs, id_attrs);
 
 	block = ItemPointerGetBlockNumber(otid);
+	INJECTION_POINT("heap_update-before-pin");
 	buffer = ReadBuffer(relation, block);
 	page = BufferGetPage(buffer);
 
@@ -3248,7 +3272,51 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 
 	lp = PageGetItemId(page, ItemPointerGetOffsetNumber(otid));
-	Assert(ItemIdIsNormal(lp));
+
+	/*
+	 * Usually, a buffer pin and/or snapshot blocks pruning of otid, ensuring
+	 * we see LP_NORMAL here.  When the otid origin is a syscache, we may have
+	 * neither a pin nor a snapshot.  Hence, we may see other LP_ states, each
+	 * of which indicates concurrent pruning.
+	 *
+	 * Failing with TM_Updated would be most accurate.  However, unlike other
+	 * TM_Updated scenarios, we don't know the successor ctid in LP_UNUSED and
+	 * LP_DEAD cases.  While the distinction between TM_Updated and TM_Deleted
+	 * does matter to SQL statements UPDATE and MERGE, those SQL statements
+	 * hold a snapshot that ensures LP_NORMAL.  Hence, the choice between
+	 * TM_Updated and TM_Deleted affects only the wording of error messages.
+	 * Settle on TM_Deleted, for two reasons.  First, it avoids complicating
+	 * the specification of when tmfd->ctid is valid.  Second, it creates
+	 * error log evidence that we took this branch.
+	 *
+	 * Since it's possible to see LP_UNUSED at otid, it's also possible to see
+	 * LP_NORMAL for a tuple that replaced LP_UNUSED.  If it's a tuple for an
+	 * unrelated row, we'll fail with "duplicate key value violates unique".
+	 * XXX if otid is the live, newer version of the newtup row, we'll discard
+	 * changes originating in versions of this catalog row after the version
+	 * the caller got from syscache.  See syscache-update-pruned.spec.
+	 */
+	if (!ItemIdIsNormal(lp))
+	{
+		Assert(RelationSupportsSysCache(RelationGetRelid(relation)));
+
+		UnlockReleaseBuffer(buffer);
+		Assert(!have_tuple_lock);
+		if (vmbuffer != InvalidBuffer)
+			ReleaseBuffer(vmbuffer);
+		tmfd->ctid = *otid;
+		tmfd->xmax = InvalidTransactionId;
+		tmfd->cmax = InvalidCommandId;
+		*update_indexes = TU_None;
+
+		bms_free(hot_attrs);
+		bms_free(sum_attrs);
+		bms_free(key_attrs);
+		bms_free(id_attrs);
+		/* modified_attrs not yet initialized */
+		bms_free(interesting_attrs);
+		return TM_Deleted;
+	}
 
 	/*
 	 * Fill in enough data in oldtup for HeapDetermineColumnsInfo to work
@@ -4197,8 +4265,6 @@ static bool
 heap_attr_equals(TupleDesc tupdesc, int attrnum, Datum value1, Datum value2,
 				 bool isnull1, bool isnull2)
 {
-	Form_pg_attribute att;
-
 	/*
 	 * If one value is NULL and other is not, then they are certainly not
 	 * equal
@@ -4228,8 +4294,10 @@ heap_attr_equals(TupleDesc tupdesc, int attrnum, Datum value1, Datum value2,
 	}
 	else
 	{
+		CompactAttribute *att;
+
 		Assert(attrnum <= tupdesc->natts);
-		att = TupleDescAttr(tupdesc, attrnum - 1);
+		att = TupleDescCompactAttr(tupdesc, attrnum - 1);
 		return datumIsEqual(value1, value2, att->attbyval, att->attlen);
 	}
 }
@@ -4311,7 +4379,7 @@ HeapDetermineColumnsInfo(Relation relation,
 		 * that system attributes can't be stored externally.
 		 */
 		if (attrnum < 0 || isnull1 ||
-			TupleDescAttr(tupdesc, attrnum - 1)->attlen != -1)
+			TupleDescCompactAttr(tupdesc, attrnum - 1)->attlen != -1)
 			continue;
 
 		/*
@@ -6165,8 +6233,8 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
  * transaction.  If compatible, return true with the buffer exclusive-locked,
  * and the caller must release that by calling
  * heap_inplace_update_and_unlock(), calling heap_inplace_unlock(), or raising
- * an error.  Otherwise, return false after blocking transactions, if any,
- * have ended.
+ * an error.  Otherwise, call release_callback(arg), wait for blocking
+ * transactions to end, and return false.
  *
  * Since this is intended for system catalogs and SERIALIZABLE doesn't cover
  * DDL, this doesn't guarantee any particular predicate locking.
@@ -6200,7 +6268,8 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
  */
 bool
 heap_inplace_lock(Relation relation,
-				  HeapTuple oldtup_ptr, Buffer buffer)
+				  HeapTuple oldtup_ptr, Buffer buffer,
+				  void (*release_callback) (void *), void *arg)
 {
 	HeapTupleData oldtup = *oldtup_ptr; /* minimize diff vs. heap_update() */
 	TM_Result	result;
@@ -6212,6 +6281,17 @@ heap_inplace_lock(Relation relation,
 #endif
 
 	Assert(BufferIsValid(buffer));
+
+	/*
+	 * Construct shared cache inval if necessary.  Because we pass a tuple
+	 * version without our own inplace changes or inplace changes other
+	 * sessions complete while we wait for locks, inplace update mustn't
+	 * change catcache lookup keys.  But we aren't bothering with index
+	 * updates either, so that's true a fortiori.  After LockBuffer(), it
+	 * would be too late, because this might reach a
+	 * CatalogCacheInitializeCache() that locks "buffer".
+	 */
+	CacheInvalidateHeapTupleInplace(relation, oldtup_ptr, NULL);
 
 	LockTuple(relation, &oldtup.t_self, InplaceUpdateTupleLock);
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
@@ -6265,6 +6345,7 @@ heap_inplace_lock(Relation relation,
 										lockmode, NULL))
 			{
 				LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+				release_callback(arg);
 				ret = false;
 				MultiXactIdWait((MultiXactId) xwait, mxact_status, infomask,
 								relation, &oldtup.t_self, XLTW_Update,
@@ -6280,6 +6361,7 @@ heap_inplace_lock(Relation relation,
 		else
 		{
 			LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+			release_callback(arg);
 			ret = false;
 			XactLockTableWait(xwait, relation, &oldtup.t_self,
 							  XLTW_Update);
@@ -6291,6 +6373,7 @@ heap_inplace_lock(Relation relation,
 		if (!ret)
 		{
 			LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+			release_callback(arg);
 		}
 	}
 
@@ -6305,6 +6388,7 @@ heap_inplace_lock(Relation relation,
 	if (!ret)
 	{
 		UnlockTuple(relation, &oldtup.t_self, InplaceUpdateTupleLock);
+		ForgetInplace_Inval();
 		InvalidateCatalogSnapshot();
 	}
 	return ret;
@@ -6341,14 +6425,6 @@ heap_inplace_update_and_unlock(Relation relation,
 	dst = (char *) htup + htup->t_hoff;
 	src = (char *) tuple->t_data + tuple->t_data->t_hoff;
 
-	/*
-	 * Construct shared cache inval if necessary.  Note that because we only
-	 * pass the new version of the tuple, this mustn't be used for any
-	 * operations that could change catcache lookup keys.  But we aren't
-	 * bothering with index updates either, so that's true a fortiori.
-	 */
-	CacheInvalidateHeapTupleInplace(relation, tuple, NULL);
-
 	/* Like RecordTransactionCommit(), log only if needed */
 	if (XLogStandbyInfoActive())
 		nmsgs = inplaceGetInvalidationMessages(&invalMessages,
@@ -6376,7 +6452,7 @@ heap_inplace_update_and_unlock(Relation relation,
 	 *
 	 * ["D" is a VACUUM (ONLY_DATABASE_STATS)]
 	 * ["R" is a VACUUM tbl]
-	 * D: vac_update_datfrozenid() -> systable_beginscan(pg_class)
+	 * D: vac_update_datfrozenxid() -> systable_beginscan(pg_class)
 	 * D: systable_getnext() returns pg_class tuple of tbl
 	 * R: memcpy() into pg_class tuple of tbl
 	 * D: raise pg_database.datfrozenxid, XLogInsert(), finish
@@ -6477,6 +6553,7 @@ heap_inplace_unlock(Relation relation,
 {
 	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 	UnlockTuple(relation, &oldtup->t_self, InplaceUpdateTupleLock);
+	ForgetInplace_Inval();
 }
 
 #define		FRM_NOOP				0x0001
@@ -7407,10 +7484,10 @@ MultiXactIdGetUpdateXid(TransactionId xmax, uint16 t_infomask)
  * checking the hint bits.
  */
 TransactionId
-HeapTupleGetUpdateXid(HeapTupleHeader tuple)
+HeapTupleGetUpdateXid(const HeapTupleHeaderData *tup)
 {
-	return MultiXactIdGetUpdateXid(HeapTupleHeaderGetRawXmax(tuple),
-								   tuple->t_infomask);
+	return MultiXactIdGetUpdateXid(HeapTupleHeaderGetRawXmax(tup),
+								   tup->t_infomask);
 }
 
 /*
@@ -8293,7 +8370,6 @@ index_delete_sort(TM_IndexDeleteOp *delstate)
 {
 	TM_IndexDelete *deltids = delstate->deltids;
 	int			ndeltids = delstate->ndeltids;
-	int			low = 0;
 
 	/*
 	 * Shellsort gap sequence (taken from Sedgewick-Incerpi paper).
@@ -8309,7 +8385,7 @@ index_delete_sort(TM_IndexDeleteOp *delstate)
 
 	for (int g = 0; g < lengthof(gaps); g++)
 	{
-		for (int hi = gaps[g], i = low + hi; i < ndeltids; i++)
+		for (int hi = gaps[g], i = hi; i < ndeltids; i++)
 		{
 			TM_IndexDelete d = deltids[i];
 			int			j = i;

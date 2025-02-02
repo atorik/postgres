@@ -2,7 +2,7 @@
  *
  * rewriteManip.c
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -22,6 +22,7 @@
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
+#include "utils/lsyscache.h"
 
 
 typedef struct
@@ -94,7 +95,7 @@ contain_aggs_of_level(Node *node, int levelsup)
 	 */
 	return query_or_expression_tree_walker(node,
 										   contain_aggs_of_level_walker,
-										   (void *) &context,
+										   &context,
 										   0);
 }
 
@@ -124,12 +125,12 @@ contain_aggs_of_level_walker(Node *node,
 		context->sublevels_up++;
 		result = query_tree_walker((Query *) node,
 								   contain_aggs_of_level_walker,
-								   (void *) context, 0);
+								   context, 0);
 		context->sublevels_up--;
 		return result;
 	}
 	return expression_tree_walker(node, contain_aggs_of_level_walker,
-								  (void *) context);
+								  context);
 }
 
 /*
@@ -159,7 +160,7 @@ locate_agg_of_level(Node *node, int levelsup)
 	 */
 	(void) query_or_expression_tree_walker(node,
 										   locate_agg_of_level_walker,
-										   (void *) &context,
+										   &context,
 										   0);
 
 	return context.agg_location;
@@ -198,12 +199,11 @@ locate_agg_of_level_walker(Node *node,
 		context->sublevels_up++;
 		result = query_tree_walker((Query *) node,
 								   locate_agg_of_level_walker,
-								   (void *) context, 0);
+								   context, 0);
 		context->sublevels_up--;
 		return result;
 	}
-	return expression_tree_walker(node, locate_agg_of_level_walker,
-								  (void *) context);
+	return expression_tree_walker(node, locate_agg_of_level_walker, context);
 }
 
 /*
@@ -232,8 +232,7 @@ contain_windowfuncs_walker(Node *node, void *context)
 	if (IsA(node, WindowFunc))
 		return true;			/* abort the tree traversal and return true */
 	/* Mustn't recurse into subselects */
-	return expression_tree_walker(node, contain_windowfuncs_walker,
-								  (void *) context);
+	return expression_tree_walker(node, contain_windowfuncs_walker, context);
 }
 
 /*
@@ -262,7 +261,7 @@ locate_windowfunc(Node *node)
 	 */
 	(void) query_or_expression_tree_walker(node,
 										   locate_windowfunc_walker,
-										   (void *) &context,
+										   &context,
 										   0);
 
 	return context.win_location;
@@ -283,8 +282,7 @@ locate_windowfunc_walker(Node *node, locate_windowfunc_context *context)
 		/* else fall through to examine argument */
 	}
 	/* Mustn't recurse into subselects */
-	return expression_tree_walker(node, locate_windowfunc_walker,
-								  (void *) context);
+	return expression_tree_walker(node, locate_windowfunc_walker, context);
 }
 
 /*
@@ -468,12 +466,11 @@ OffsetVarNodes_walker(Node *node, OffsetVarNodes_context *context)
 
 		context->sublevels_up++;
 		result = query_tree_walker((Query *) node, OffsetVarNodes_walker,
-								   (void *) context, 0);
+								   context, 0);
 		context->sublevels_up--;
 		return result;
 	}
-	return expression_tree_walker(node, OffsetVarNodes_walker,
-								  (void *) context);
+	return expression_tree_walker(node, OffsetVarNodes_walker, context);
 }
 
 void
@@ -521,8 +518,7 @@ OffsetVarNodes(Node *node, int offset, int sublevels_up)
 				rc->rti += offset;
 			}
 		}
-		query_tree_walker(qry, OffsetVarNodes_walker,
-						  (void *) &context, 0);
+		query_tree_walker(qry, OffsetVarNodes_walker, &context, 0);
 	}
 	else
 		OffsetVarNodes_walker(node, &context);
@@ -662,12 +658,11 @@ ChangeVarNodes_walker(Node *node, ChangeVarNodes_context *context)
 
 		context->sublevels_up++;
 		result = query_tree_walker((Query *) node, ChangeVarNodes_walker,
-								   (void *) context, 0);
+								   context, 0);
 		context->sublevels_up--;
 		return result;
 	}
-	return expression_tree_walker(node, ChangeVarNodes_walker,
-								  (void *) context);
+	return expression_tree_walker(node, ChangeVarNodes_walker, context);
 }
 
 void
@@ -718,8 +713,7 @@ ChangeVarNodes(Node *node, int rt_index, int new_index, int sublevels_up)
 					rc->rti = new_index;
 			}
 		}
-		query_tree_walker(qry, ChangeVarNodes_walker,
-						  (void *) &context, 0);
+		query_tree_walker(qry, ChangeVarNodes_walker, &context, 0);
 	}
 	else
 		ChangeVarNodes_walker(node, &context);
@@ -817,6 +811,14 @@ IncrementVarSublevelsUp_walker(Node *node,
 			phv->phlevelsup += context->delta_sublevels_up;
 		/* fall through to recurse into argument */
 	}
+	if (IsA(node, ReturningExpr))
+	{
+		ReturningExpr *rexpr = (ReturningExpr *) node;
+
+		if (rexpr->retlevelsup >= context->min_sublevels_up)
+			rexpr->retlevelsup += context->delta_sublevels_up;
+		/* fall through to recurse into argument */
+	}
 	if (IsA(node, RangeTblEntry))
 	{
 		RangeTblEntry *rte = (RangeTblEntry *) node;
@@ -836,13 +838,12 @@ IncrementVarSublevelsUp_walker(Node *node,
 		context->min_sublevels_up++;
 		result = query_tree_walker((Query *) node,
 								   IncrementVarSublevelsUp_walker,
-								   (void *) context,
+								   context,
 								   QTW_EXAMINE_RTES_BEFORE);
 		context->min_sublevels_up--;
 		return result;
 	}
-	return expression_tree_walker(node, IncrementVarSublevelsUp_walker,
-								  (void *) context);
+	return expression_tree_walker(node, IncrementVarSublevelsUp_walker, context);
 }
 
 void
@@ -860,7 +861,7 @@ IncrementVarSublevelsUp(Node *node, int delta_sublevels_up,
 	 */
 	query_or_expression_tree_walker(node,
 									IncrementVarSublevelsUp_walker,
-									(void *) &context,
+									&context,
 									QTW_EXAMINE_RTES_BEFORE);
 }
 
@@ -879,10 +880,71 @@ IncrementVarSublevelsUp_rtable(List *rtable, int delta_sublevels_up,
 
 	range_table_walker(rtable,
 					   IncrementVarSublevelsUp_walker,
-					   (void *) &context,
+					   &context,
 					   QTW_EXAMINE_RTES_BEFORE);
 }
 
+/*
+ * SetVarReturningType - adjust Var nodes for a specified varreturningtype.
+ *
+ * Find all Var nodes referring to the specified result relation in the given
+ * expression and set their varreturningtype to the specified value.
+ *
+ * NOTE: although this has the form of a walker, we cheat and modify the
+ * Var nodes in-place.  The given expression tree should have been copied
+ * earlier to ensure that no unwanted side-effects occur!
+ */
+
+typedef struct
+{
+	int			result_relation;
+	int			sublevels_up;
+	VarReturningType returning_type;
+} SetVarReturningType_context;
+
+static bool
+SetVarReturningType_walker(Node *node, SetVarReturningType_context *context)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, Var))
+	{
+		Var		   *var = (Var *) node;
+
+		if (var->varno == context->result_relation &&
+			var->varlevelsup == context->sublevels_up)
+			var->varreturningtype = context->returning_type;
+
+		return false;
+	}
+
+	if (IsA(node, Query))
+	{
+		/* Recurse into subselects */
+		bool		result;
+
+		context->sublevels_up++;
+		result = query_tree_walker((Query *) node, SetVarReturningType_walker,
+								   context, 0);
+		context->sublevels_up--;
+		return result;
+	}
+	return expression_tree_walker(node, SetVarReturningType_walker, context);
+}
+
+static void
+SetVarReturningType(Node *node, int result_relation, int sublevels_up,
+					VarReturningType returning_type)
+{
+	SetVarReturningType_context context;
+
+	context.result_relation = result_relation;
+	context.sublevels_up = sublevels_up;
+	context.returning_type = returning_type;
+
+	/* Expect to start with an expression */
+	SetVarReturningType_walker(node, &context);
+}
 
 /*
  * rangeTableEntry_used - detect whether an RTE is referenced somewhere
@@ -954,12 +1016,11 @@ rangeTableEntry_used_walker(Node *node,
 
 		context->sublevels_up++;
 		result = query_tree_walker((Query *) node, rangeTableEntry_used_walker,
-								   (void *) context, 0);
+								   context, 0);
 		context->sublevels_up--;
 		return result;
 	}
-	return expression_tree_walker(node, rangeTableEntry_used_walker,
-								  (void *) context);
+	return expression_tree_walker(node, rangeTableEntry_used_walker, context);
 }
 
 bool
@@ -976,7 +1037,7 @@ rangeTableEntry_used(Node *node, int rt_index, int sublevels_up)
 	 */
 	return query_or_expression_tree_walker(node,
 										   rangeTableEntry_used_walker,
-										   (void *) &context,
+										   &context,
 										   0);
 }
 
@@ -1218,13 +1279,12 @@ add_nulling_relids_mutator(Node *node,
 		context->sublevels_up++;
 		newnode = query_tree_mutator((Query *) node,
 									 add_nulling_relids_mutator,
-									 (void *) context,
+									 context,
 									 0);
 		context->sublevels_up--;
 		return (Node *) newnode;
 	}
-	return expression_tree_mutator(node, add_nulling_relids_mutator,
-								   (void *) context);
+	return expression_tree_mutator(node, add_nulling_relids_mutator, context);
 }
 
 /*
@@ -1289,7 +1349,7 @@ remove_nulling_relids_mutator(Node *node,
 			phv = (PlaceHolderVar *)
 				expression_tree_mutator(node,
 										remove_nulling_relids_mutator,
-										(void *) context);
+										context);
 			/* ... and replace the copy's phnullingrels field */
 			phv->phnullingrels = bms_difference(phv->phnullingrels,
 												context->removable_relids);
@@ -1309,13 +1369,12 @@ remove_nulling_relids_mutator(Node *node,
 		context->sublevels_up++;
 		newnode = query_tree_mutator((Query *) node,
 									 remove_nulling_relids_mutator,
-									 (void *) context,
+									 context,
 									 0);
 		context->sublevels_up--;
 		return (Node *) newnode;
 	}
-	return expression_tree_mutator(node, remove_nulling_relids_mutator,
-								   (void *) context);
+	return expression_tree_mutator(node, remove_nulling_relids_mutator, context);
 }
 
 
@@ -1372,7 +1431,7 @@ replace_rte_variables(Node *node, int target_varno, int sublevels_up,
 	 */
 	result = query_or_expression_tree_mutator(node,
 											  replace_rte_variables_mutator,
-											  (void *) &context,
+											  &context,
 											  0);
 
 	if (context.inserted_sublink)
@@ -1442,15 +1501,14 @@ replace_rte_variables_mutator(Node *node,
 		context->inserted_sublink = ((Query *) node)->hasSubLinks;
 		newnode = query_tree_mutator((Query *) node,
 									 replace_rte_variables_mutator,
-									 (void *) context,
+									 context,
 									 0);
 		newnode->hasSubLinks |= context->inserted_sublink;
 		context->inserted_sublink = save_inserted_sublink;
 		context->sublevels_up--;
 		return (Node *) newnode;
 	}
-	return expression_tree_mutator(node, replace_rte_variables_mutator,
-								   (void *) context);
+	return expression_tree_mutator(node, replace_rte_variables_mutator, context);
 }
 
 
@@ -1601,13 +1659,12 @@ map_variable_attnos_mutator(Node *node,
 		context->sublevels_up++;
 		newnode = query_tree_mutator((Query *) node,
 									 map_variable_attnos_mutator,
-									 (void *) context,
+									 context,
 									 0);
 		context->sublevels_up--;
 		return (Node *) newnode;
 	}
-	return expression_tree_mutator(node, map_variable_attnos_mutator,
-								   (void *) context);
+	return expression_tree_mutator(node, map_variable_attnos_mutator, context);
 }
 
 Node *
@@ -1632,7 +1689,7 @@ map_variable_attnos(Node *node,
 	 */
 	return query_or_expression_tree_mutator(node,
 											map_variable_attnos_mutator,
-											(void *) &context,
+											&context,
 											0);
 }
 
@@ -1653,6 +1710,15 @@ map_variable_attnos(Node *node,
  * relation.  This is needed to handle whole-row Vars referencing the target.
  * We expand such Vars into RowExpr constructs.
  *
+ * In addition, for INSERT/UPDATE/DELETE/MERGE queries, the caller must
+ * provide result_relation, the index of the result relation in the rewritten
+ * query.  This is needed to handle OLD/NEW RETURNING list Vars referencing
+ * target_varno.  When such Vars are expanded, their varreturningtype is
+ * copied onto any replacement Vars referencing result_relation.  In addition,
+ * if the replacement expression from the targetlist is not simply a Var
+ * referencing result_relation, it is wrapped in a ReturningExpr node (causing
+ * the executor to return NULL if the OLD/NEW row doesn't exist).
+ *
  * outer_hasSubLinks works the same as for replace_rte_variables().
  */
 
@@ -1660,6 +1726,7 @@ typedef struct
 {
 	RangeTblEntry *target_rte;
 	List	   *targetlist;
+	int			result_relation;
 	ReplaceVarsNoMatchOption nomatch_option;
 	int			nomatch_varno;
 } ReplaceVarsFromTargetList_context;
@@ -1684,10 +1751,13 @@ ReplaceVarsFromTargetList_callback(Var *var,
 		 * dropped columns.  If the var is RECORD (ie, this is a JOIN), then
 		 * omit dropped columns.  In the latter case, attach column names to
 		 * the RowExpr for use of the executor and ruleutils.c.
+		 *
+		 * The varreturningtype is copied onto each individual field Var, so
+		 * that it is handled correctly when we recurse.
 		 */
 		expandRTE(rcon->target_rte,
-				  var->varno, var->varlevelsup, var->location,
-				  (var->vartype != RECORDOID),
+				  var->varno, var->varlevelsup, var->varreturningtype,
+				  var->location, (var->vartype != RECORDOID),
 				  &colnames, &fields);
 		/* Adjust the generated per-field Vars... */
 		fields = (List *) replace_rte_variables_mutator((Node *) fields,
@@ -1698,6 +1768,18 @@ ReplaceVarsFromTargetList_callback(Var *var,
 		rowexpr->row_format = COERCE_IMPLICIT_CAST;
 		rowexpr->colnames = (var->vartype == RECORDOID) ? colnames : NIL;
 		rowexpr->location = var->location;
+
+		/* Wrap it in a ReturningExpr, if needed, per comments above */
+		if (var->varreturningtype != VAR_RETURNING_DEFAULT)
+		{
+			ReturningExpr *rexpr = makeNode(ReturningExpr);
+
+			rexpr->retlevelsup = var->varlevelsup;
+			rexpr->retold = (var->varreturningtype == VAR_RETURNING_OLD);
+			rexpr->retexpr = (Expr *) rowexpr;
+
+			return (Node *) rexpr;
+		}
 
 		return (Node *) rowexpr;
 	}
@@ -1721,20 +1803,21 @@ ReplaceVarsFromTargetList_callback(Var *var,
 				return (Node *) var;
 
 			case REPLACEVARS_SUBSTITUTE_NULL:
+				{
+					/*
+					 * If Var is of domain type, we must add a CoerceToDomain
+					 * node, in case there is a NOT NULL domain constraint.
+					 */
+					int16		vartyplen;
+					bool		vartypbyval;
 
-				/*
-				 * If Var is of domain type, we should add a CoerceToDomain
-				 * node, in case there is a NOT NULL domain constraint.
-				 */
-				return coerce_to_domain((Node *) makeNullConst(var->vartype,
-															   var->vartypmod,
-															   var->varcollid),
-										InvalidOid, -1,
-										var->vartype,
-										COERCION_IMPLICIT,
-										COERCE_IMPLICIT_CAST,
-										-1,
-										false);
+					get_typlenbyval(var->vartype, &vartyplen, &vartypbyval);
+					return coerce_null_to_domain(var->vartype,
+												 var->vartypmod,
+												 var->varcollid,
+												 vartyplen,
+												 vartypbyval);
+				}
 		}
 		elog(ERROR, "could not find replacement targetlist entry for attno %d",
 			 var->varattno);
@@ -1764,6 +1847,34 @@ ReplaceVarsFromTargetList_callback(Var *var,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("NEW variables in ON UPDATE rules cannot reference columns that are part of a multiple assignment in the subject UPDATE command")));
 
+		/* Handle any OLD/NEW RETURNING list Vars */
+		if (var->varreturningtype != VAR_RETURNING_DEFAULT)
+		{
+			/*
+			 * Copy varreturningtype onto any Vars in the tlist item that
+			 * refer to result_relation (which had better be non-zero).
+			 */
+			if (rcon->result_relation == 0)
+				elog(ERROR, "variable returning old/new found outside RETURNING list");
+
+			SetVarReturningType((Node *) newnode, rcon->result_relation,
+								var->varlevelsup, var->varreturningtype);
+
+			/* Wrap it in a ReturningExpr, if needed, per comments above */
+			if (!IsA(newnode, Var) ||
+				((Var *) newnode)->varno != rcon->result_relation ||
+				((Var *) newnode)->varlevelsup != var->varlevelsup)
+			{
+				ReturningExpr *rexpr = makeNode(ReturningExpr);
+
+				rexpr->retlevelsup = var->varlevelsup;
+				rexpr->retold = (var->varreturningtype == VAR_RETURNING_OLD);
+				rexpr->retexpr = newnode;
+
+				newnode = (Expr *) rexpr;
+			}
+		}
+
 		return (Node *) newnode;
 	}
 }
@@ -1773,6 +1884,7 @@ ReplaceVarsFromTargetList(Node *node,
 						  int target_varno, int sublevels_up,
 						  RangeTblEntry *target_rte,
 						  List *targetlist,
+						  int result_relation,
 						  ReplaceVarsNoMatchOption nomatch_option,
 						  int nomatch_varno,
 						  bool *outer_hasSubLinks)
@@ -1781,11 +1893,12 @@ ReplaceVarsFromTargetList(Node *node,
 
 	context.target_rte = target_rte;
 	context.targetlist = targetlist;
+	context.result_relation = result_relation;
 	context.nomatch_option = nomatch_option;
 	context.nomatch_varno = nomatch_varno;
 
 	return replace_rte_variables(node, target_varno, sublevels_up,
 								 ReplaceVarsFromTargetList_callback,
-								 (void *) &context,
+								 &context,
 								 outer_hasSubLinks);
 }

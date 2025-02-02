@@ -1,5 +1,5 @@
 
-# Copyright (c) 2021-2024, PostgreSQL Global Development Group
+# Copyright (c) 2021-2025, PostgreSQL Global Development Group
 
 # OVERVIEW
 # --------
@@ -455,7 +455,7 @@ nogssuser   disable      disable      postgres       connect, authok            
 		connect_test(
 			$node,
 			"user=testuser gssencmode=prefer sslmode=disable",
-			'connect, v2error -> fail');
+			'connect, v2error, reconnect, v2error -> fail');
 		$node->restart;
 
 		$node->safe_psql(

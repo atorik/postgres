@@ -47,6 +47,7 @@ AggSplit
 AggState
 AggStatePerAgg
 AggStatePerGroup
+AggStatePerGroupData
 AggStatePerHash
 AggStatePerPhase
 AggStatePerTrans
@@ -230,11 +231,11 @@ BTWriteState
 BUF_MEM
 BYTE
 BY_HANDLE_FILE_INFORMATION
-Backend
 BackendParameters
 BackendStartupData
 BackendState
 BackendType
+BackendTypeMask
 BackgroundWorker
 BackgroundWorkerArray
 BackgroundWorkerHandle
@@ -263,6 +264,7 @@ BitmapAndState
 BitmapHeapPath
 BitmapHeapScan
 BitmapHeapScanInstrumentation
+BitmapHeapScanDesc
 BitmapHeapScanState
 BitmapIndexScan
 BitmapIndexScanState
@@ -383,6 +385,7 @@ CaseTestExpr
 CaseWhen
 Cash
 CastInfo
+CatCInProgress
 CatCList
 CatCTup
 CatCache
@@ -454,7 +457,9 @@ CommitTimestampEntry
 CommitTimestampShared
 CommonEntry
 CommonTableExpr
+CompactAttribute
 CompareScalarsContext
+CompareType
 CompiledExprState
 CompositeIOData
 CompositeTypeStmt
@@ -619,6 +624,7 @@ DirectoryMethodFile
 DisableTimeoutParams
 DiscardMode
 DiscardStmt
+DispatchOption
 DistanceValue
 DistinctExpr
 DoState
@@ -1767,6 +1773,7 @@ OprCacheKey
 OprInfo
 OprProofCacheEntry
 OprProofCacheKey
+OrArgIndexMatch
 OuterJoinClauseInfo
 OutputPluginCallbacks
 OutputPluginOptions
@@ -1931,6 +1938,8 @@ PLyTransformToOb
 PLyTupleToOb
 PLyUnicode_FromStringAndSize_t
 PLy_elog_impl_t
+PMChild
+PMChildPool
 PMINIDUMP_CALLBACK_INFORMATION
 PMINIDUMP_EXCEPTION_INFORMATION
 PMINIDUMP_USER_STREAM_INFORMATION
@@ -1977,6 +1986,7 @@ PX_Combo
 PX_HMAC
 PX_MD
 Page
+PageData
 PageGistNSN
 PageHeader
 PageHeaderData
@@ -2117,6 +2127,7 @@ PgFdwSamplingMethod
 PgFdwScanState
 PgIfAddrCallback
 PgStatShared_Archiver
+PgStatShared_Backend
 PgStatShared_BgWriter
 PgStatShared_Checkpointer
 PgStatShared_Common
@@ -2132,6 +2143,8 @@ PgStatShared_SLRU
 PgStatShared_Subscription
 PgStatShared_Wal
 PgStat_ArchiverStats
+PgStat_Backend
+PgStat_BackendPending
 PgStat_BackendSubEntry
 PgStat_BgWriterStats
 PgStat_BktypeIO
@@ -2263,6 +2276,7 @@ PublicationPartOpt
 PublicationRelInfo
 PublicationSchemaInfo
 PublicationTable
+PublishGencolsType
 PullFilter
 PullFilterOps
 PushFilter
@@ -2468,6 +2482,10 @@ ResultRelInfo
 ResultState
 ReturnSetInfo
 ReturnStmt
+ReturningClause
+ReturningExpr
+ReturningOption
+ReturningOptionKind
 RevmapContents
 RevokeRoleGrantAction
 RewriteMappingDataEntry
@@ -2484,7 +2502,6 @@ RoleSpecType
 RoleStmtType
 RollupData
 RowCompareExpr
-RowCompareType
 RowExpr
 RowIdentityVarInfo
 RowMarkClause
@@ -2608,11 +2625,14 @@ SetOpCmd
 SetOpPath
 SetOpState
 SetOpStatePerGroup
+SetOpStatePerGroupData
+SetOpStatePerInput
 SetOpStrategy
 SetOperation
 SetOperationStmt
 SetQuantifier
 SetToDefault
+SetVarReturningType_context
 SetupWorkerPtrType
 ShDependObjectInfo
 SharedAggInfo
@@ -2808,6 +2828,7 @@ TAR_MEMBER
 TBMIterateResult
 TBMIteratingState
 TBMIterator
+TBMPrivateIterator
 TBMSharedIterator
 TBMSharedIteratorState
 TBMStatus
@@ -3018,6 +3039,7 @@ TypeCat
 TypeFuncClass
 TypeInfo
 TypeName
+TzAbbrevCache
 U32
 U8
 UChar
@@ -3073,6 +3095,7 @@ Var
 VarBit
 VarChar
 VarParamState
+VarReturningType
 VarString
 VarStringSortSupport
 Variable
@@ -3126,9 +3149,6 @@ WaitEventIO
 WaitEventIPC
 WaitEventSet
 WaitEventTimeout
-WaitLSNProcInfo
-WaitLSNResult
-WaitLSNState
 WaitPMResult
 WalCloseMethod
 WalCompression
@@ -3476,6 +3496,7 @@ fill_string_relopt
 finalize_primnode_context
 find_dependent_phvs_context
 find_expr_references_context
+fireRIRonSubLink_context
 fix_join_expr_context
 fix_scan_expr_context
 fix_upper_expr_context
@@ -3596,6 +3617,8 @@ json_manifest_version_callback
 json_ofield_action
 json_scalar_action
 json_struct_action
+keepwal_entry
+keepwal_hash
 keyEntryData
 key_t
 lclContext
@@ -3662,6 +3685,7 @@ nodeitem
 normal_rand_fctx
 nsphash_hash
 ntile_context
+nullingrel_info
 numeric
 object_access_hook_type
 object_access_hook_type_str
@@ -3732,6 +3756,7 @@ pg_sha256_ctx
 pg_sha384_ctx
 pg_sha512_ctx
 pg_snapshot
+pg_special_case
 pg_stack_base_t
 pg_time_t
 pg_time_usec_t

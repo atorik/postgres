@@ -4,7 +4,7 @@
  *	  PostgreSQL logical replay/reorder buffer management
  *
  *
- * Copyright (c) 2012-2024, PostgreSQL Global Development Group
+ * Copyright (c) 2012-2025, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -1663,7 +1663,7 @@ ReorderBufferTruncateTXN(ReorderBuffer *rb, ReorderBufferTXN *txn, bool txn_prep
 		/* Check we're not mixing changes from different transactions. */
 		Assert(change->txn == txn);
 
-		/* remove the change from it's containing list */
+		/* remove the change from its containing list */
 		dlist_delete(&change->node);
 
 		/*
@@ -1861,9 +1861,9 @@ ReorderBufferCopySnap(ReorderBuffer *rb, Snapshot orig_snap,
 	snap->subxip[i++] = txn->xid;
 
 	/*
-	 * subxcnt isn't decreased when subtransactions abort, so count manually.
-	 * Since it's an upper boundary it is safe to use it for the allocation
-	 * above.
+	 * txn->nsubtxns isn't decreased when subtransactions abort, so count
+	 * manually. Since it's an upper boundary it is safe to use it for the
+	 * allocation above.
 	 */
 	snap->subxcnt = 1;
 
@@ -3643,7 +3643,7 @@ ReorderBufferCheckMemoryLimit(ReorderBuffer *rb)
 	 * haven't exceeded the memory limit.
 	 */
 	if (debug_logical_replication_streaming == DEBUG_LOGICAL_REP_STREAMING_BUFFERED &&
-		rb->size < logical_decoding_work_mem * 1024L)
+		rb->size < logical_decoding_work_mem * (Size) 1024)
 		return;
 
 	/*
@@ -3656,7 +3656,7 @@ ReorderBufferCheckMemoryLimit(ReorderBuffer *rb)
 	 * because a user can reduce the logical_decoding_work_mem to a smaller
 	 * value before the most recent change.
 	 */
-	while (rb->size >= logical_decoding_work_mem * 1024L ||
+	while (rb->size >= logical_decoding_work_mem * (Size) 1024 ||
 		   (debug_logical_replication_streaming == DEBUG_LOGICAL_REP_STREAMING_IMMEDIATE &&
 			rb->size > 0))
 	{
@@ -3699,8 +3699,7 @@ ReorderBufferCheckMemoryLimit(ReorderBuffer *rb)
 	}
 
 	/* We must be under the memory limit now. */
-	Assert(rb->size < logical_decoding_work_mem * 1024L);
-
+	Assert(rb->size < logical_decoding_work_mem * (Size) 1024);
 }
 
 /*

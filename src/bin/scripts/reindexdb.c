@@ -2,7 +2,7 @@
  *
  * reindexdb
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  *
  * src/bin/scripts/reindexdb.c
  *
@@ -15,7 +15,6 @@
 
 #include "catalog/pg_class_d.h"
 #include "common.h"
-#include "common/connect.h"
 #include "common/logging.h"
 #include "fe_utils/cancel.h"
 #include "fe_utils/option_utils.h"

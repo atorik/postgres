@@ -5,7 +5,7 @@
  *	  Planning is complete, we just need to convert the selected
  *	  Path into a Plan.
  *
- * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -301,9 +301,9 @@ static Unique *make_unique_from_pathkeys(Plan *lefttree,
 										 List *pathkeys, int numCols);
 static Gather *make_gather(List *qptlist, List *qpqual,
 						   int nworkers, int rescan_param, bool single_copy, Plan *subplan);
-static SetOp *make_setop(SetOpCmd cmd, SetOpStrategy strategy, Plan *lefttree,
-						 List *distinctList, AttrNumber flagColIdx, int firstFlag,
-						 long numGroups);
+static SetOp *make_setop(SetOpCmd cmd, SetOpStrategy strategy,
+						 List *tlist, Plan *lefttree, Plan *righttree,
+						 List *groupList, long numGroups);
 static LockRows *make_lockrows(Plan *lefttree, List *rowMarks, int epqParam);
 static Result *make_result(List *tlist, Node *resconstantqual, Plan *subplan);
 static ProjectSet *make_project_set(List *tlist, Plan *subplan);
@@ -1227,7 +1227,6 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 	ListCell   *subpaths;
 	int			nasyncplans = 0;
 	RelOptInfo *rel = best_path->path.parent;
-	PartitionPruneInfo *partpruneinfo = NULL;
 	int			nodenumsortkeys = 0;
 	AttrNumber *nodeSortColIdx = NULL;
 	Oid		   *nodeSortOperators = NULL;
@@ -1378,6 +1377,9 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 		subplans = lappend(subplans, subplan);
 	}
 
+	/* Set below if we find quals that we can use to run-time prune */
+	plan->part_prune_index = -1;
+
 	/*
 	 * If any quals exist, they may be useful to perform further partition
 	 * pruning during execution.  Gather information needed by the executor to
@@ -1401,16 +1403,14 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 		}
 
 		if (prunequal != NIL)
-			partpruneinfo =
-				make_partition_pruneinfo(root, rel,
-										 best_path->subpaths,
-										 prunequal);
+			plan->part_prune_index = make_partition_pruneinfo(root, rel,
+															  best_path->subpaths,
+															  prunequal);
 	}
 
 	plan->appendplans = subplans;
 	plan->nasyncplans = nasyncplans;
 	plan->first_partial_plan = best_path->first_partial_path;
-	plan->part_prune_info = partpruneinfo;
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
 
@@ -1449,7 +1449,6 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 	List	   *subplans = NIL;
 	ListCell   *subpaths;
 	RelOptInfo *rel = best_path->path.parent;
-	PartitionPruneInfo *partpruneinfo = NULL;
 
 	/*
 	 * We don't have the actual creation of the MergeAppend node split out
@@ -1542,6 +1541,9 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 		subplans = lappend(subplans, subplan);
 	}
 
+	/* Set below if we find quals that we can use to run-time prune */
+	node->part_prune_index = -1;
+
 	/*
 	 * If any quals exist, they may be useful to perform further partition
 	 * pruning during execution.  Gather information needed by the executor to
@@ -1557,13 +1559,12 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 		Assert(best_path->path.param_info == NULL);
 
 		if (prunequal != NIL)
-			partpruneinfo = make_partition_pruneinfo(root, rel,
-													 best_path->subpaths,
-													 prunequal);
+			node->part_prune_index = make_partition_pruneinfo(root, rel,
+															  best_path->subpaths,
+															  prunequal);
 	}
 
 	node->mergeplans = subplans;
-	node->part_prune_info = partpruneinfo;
 
 	/*
 	 * If prepare_sort_from_pathkeys added sort columns, but we were told to
@@ -2719,25 +2720,29 @@ static SetOp *
 create_setop_plan(PlannerInfo *root, SetOpPath *best_path, int flags)
 {
 	SetOp	   *plan;
-	Plan	   *subplan;
+	List	   *tlist = build_path_tlist(root, &best_path->path);
+	Plan	   *leftplan;
+	Plan	   *rightplan;
 	long		numGroups;
 
 	/*
 	 * SetOp doesn't project, so tlist requirements pass through; moreover we
 	 * need grouping columns to be labeled.
 	 */
-	subplan = create_plan_recurse(root, best_path->subpath,
-								  flags | CP_LABEL_TLIST);
+	leftplan = create_plan_recurse(root, best_path->leftpath,
+								   flags | CP_LABEL_TLIST);
+	rightplan = create_plan_recurse(root, best_path->rightpath,
+									flags | CP_LABEL_TLIST);
 
 	/* Convert numGroups to long int --- but 'ware overflow! */
 	numGroups = clamp_cardinality_to_long(best_path->numGroups);
 
 	plan = make_setop(best_path->cmd,
 					  best_path->strategy,
-					  subplan,
-					  best_path->distinctList,
-					  best_path->flagColIdx,
-					  best_path->firstFlag,
+					  tlist,
+					  leftplan,
+					  rightplan,
+					  best_path->groupList,
 					  numGroups);
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
@@ -5037,9 +5042,7 @@ replace_nestloop_params_mutator(Node *node, PlannerInfo *root)
 		/* Replace the PlaceHolderVar with a nestloop Param */
 		return (Node *) replace_nestloop_param_placeholdervar(root, phv);
 	}
-	return expression_tree_mutator(node,
-								   replace_nestloop_params_mutator,
-								   (void *) root);
+	return expression_tree_mutator(node, replace_nestloop_params_mutator, root);
 }
 
 /*
@@ -6952,57 +6955,62 @@ make_gather(List *qptlist,
 }
 
 /*
- * distinctList is a list of SortGroupClauses, identifying the targetlist
- * items that should be considered by the SetOp filter.  The input path must
- * already be sorted accordingly.
+ * groupList is a list of SortGroupClauses, identifying the targetlist
+ * items that should be considered by the SetOp filter.  The input plans must
+ * already be sorted accordingly, if we're doing SETOP_SORTED mode.
  */
 static SetOp *
-make_setop(SetOpCmd cmd, SetOpStrategy strategy, Plan *lefttree,
-		   List *distinctList, AttrNumber flagColIdx, int firstFlag,
-		   long numGroups)
+make_setop(SetOpCmd cmd, SetOpStrategy strategy,
+		   List *tlist, Plan *lefttree, Plan *righttree,
+		   List *groupList, long numGroups)
 {
 	SetOp	   *node = makeNode(SetOp);
 	Plan	   *plan = &node->plan;
-	int			numCols = list_length(distinctList);
+	int			numCols = list_length(groupList);
 	int			keyno = 0;
-	AttrNumber *dupColIdx;
-	Oid		   *dupOperators;
-	Oid		   *dupCollations;
+	AttrNumber *cmpColIdx;
+	Oid		   *cmpOperators;
+	Oid		   *cmpCollations;
+	bool	   *cmpNullsFirst;
 	ListCell   *slitem;
 
-	plan->targetlist = lefttree->targetlist;
+	plan->targetlist = tlist;
 	plan->qual = NIL;
 	plan->lefttree = lefttree;
-	plan->righttree = NULL;
+	plan->righttree = righttree;
 
 	/*
-	 * convert SortGroupClause list into arrays of attr indexes and equality
+	 * convert SortGroupClause list into arrays of attr indexes and comparison
 	 * operators, as wanted by executor
 	 */
-	dupColIdx = (AttrNumber *) palloc(sizeof(AttrNumber) * numCols);
-	dupOperators = (Oid *) palloc(sizeof(Oid) * numCols);
-	dupCollations = (Oid *) palloc(sizeof(Oid) * numCols);
+	cmpColIdx = (AttrNumber *) palloc(sizeof(AttrNumber) * numCols);
+	cmpOperators = (Oid *) palloc(sizeof(Oid) * numCols);
+	cmpCollations = (Oid *) palloc(sizeof(Oid) * numCols);
+	cmpNullsFirst = (bool *) palloc(sizeof(bool) * numCols);
 
-	foreach(slitem, distinctList)
+	foreach(slitem, groupList)
 	{
 		SortGroupClause *sortcl = (SortGroupClause *) lfirst(slitem);
 		TargetEntry *tle = get_sortgroupclause_tle(sortcl, plan->targetlist);
 
-		dupColIdx[keyno] = tle->resno;
-		dupOperators[keyno] = sortcl->eqop;
-		dupCollations[keyno] = exprCollation((Node *) tle->expr);
-		Assert(OidIsValid(dupOperators[keyno]));
+		cmpColIdx[keyno] = tle->resno;
+		if (strategy == SETOP_HASHED)
+			cmpOperators[keyno] = sortcl->eqop;
+		else
+			cmpOperators[keyno] = sortcl->sortop;
+		Assert(OidIsValid(cmpOperators[keyno]));
+		cmpCollations[keyno] = exprCollation((Node *) tle->expr);
+		cmpNullsFirst[keyno] = sortcl->nulls_first;
 		keyno++;
 	}
 
 	node->cmd = cmd;
 	node->strategy = strategy;
 	node->numCols = numCols;
-	node->dupColIdx = dupColIdx;
-	node->dupOperators = dupOperators;
-	node->dupCollations = dupCollations;
-	node->flagColIdx = flagColIdx;
-	node->firstFlag = firstFlag;
+	node->cmpColIdx = cmpColIdx;
+	node->cmpOperators = cmpOperators;
+	node->cmpCollations = cmpCollations;
+	node->cmpNullsFirst = cmpNullsFirst;
 	node->numGroups = numGroups;
 
 	return node;
@@ -7114,6 +7122,8 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 				 int epqParam)
 {
 	ModifyTable *node = makeNode(ModifyTable);
+	bool		returning_old_or_new = false;
+	bool		returning_old_or_new_valid = false;
 	List	   *fdw_private_list;
 	Bitmapset  *direct_modify_plans;
 	ListCell   *lc;
@@ -7178,6 +7188,8 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 	}
 	node->updateColnosLists = updateColnosLists;
 	node->withCheckOptionLists = withCheckOptionLists;
+	node->returningOldAlias = root->parse->returningOldAlias;
+	node->returningNewAlias = root->parse->returningNewAlias;
 	node->returningLists = returningLists;
 	node->rowMarks = rowMarks;
 	node->mergeActionLists = mergeActionLists;
@@ -7258,7 +7270,8 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 		 * callback functions needed for that and (2) there are no local
 		 * structures that need to be run for each modified row: row-level
 		 * triggers on the foreign table, stored generated columns, WITH CHECK
-		 * OPTIONs from parent views.
+		 * OPTIONs from parent views, or Vars returning OLD/NEW in the
+		 * RETURNING list.
 		 */
 		direct_modify = false;
 		if (fdwroutine != NULL &&
@@ -7269,7 +7282,18 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 			withCheckOptionLists == NIL &&
 			!has_row_triggers(root, rti, operation) &&
 			!has_stored_generated_columns(root, rti))
-			direct_modify = fdwroutine->PlanDirectModify(root, node, rti, i);
+		{
+			/* returning_old_or_new is the same for all result relations */
+			if (!returning_old_or_new_valid)
+			{
+				returning_old_or_new =
+					contain_vars_returning_old_or_new((Node *)
+													  root->parse->returningList);
+				returning_old_or_new_valid = true;
+			}
+			if (!returning_old_or_new)
+				direct_modify = fdwroutine->PlanDirectModify(root, node, rti, i);
+		}
 		if (direct_modify)
 			direct_modify_plans = bms_add_member(direct_modify_plans, i);
 

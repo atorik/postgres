@@ -2435,6 +2435,25 @@ create trigger my_table_col_update_trig
 drop table my_table;
 
 --
+-- Verify that transition tables can't be used in, eg, a view.
+--
+
+create table my_table (a int);
+create function make_bogus_matview() returns trigger as
+$$ begin
+  create materialized view transition_test_mv as select * from new_table;
+  return new;
+end $$
+language plpgsql;
+create trigger make_bogus_matview
+  after insert on my_table
+  referencing new table as new_table
+  for each statement execute function make_bogus_matview();
+insert into my_table values (42);  -- error
+drop table my_table;
+drop function make_bogus_matview();
+
+--
 -- Test firing of triggers with transition tables by foreign key cascades
 --
 
@@ -2820,3 +2839,66 @@ alter trigger parenttrig on parent rename to anothertrig;
 
 drop table parent, child;
 drop function f();
+
+-- Test who runs deferred trigger functions
+
+-- setup
+create role regress_groot;
+create role regress_outis;
+create function whoami() returns trigger language plpgsql
+as $$
+begin
+  raise notice 'I am %', current_user;
+  return null;
+end;
+$$;
+alter function whoami() owner to regress_outis;
+
+create table defer_trig (id integer);
+grant insert on defer_trig to public;
+create constraint trigger whoami after insert on defer_trig
+  deferrable initially deferred
+  for each row
+  execute function whoami();
+
+-- deferred triggers must run as the user that queued the trigger
+begin;
+set role regress_groot;
+insert into defer_trig values (1);
+reset role;
+set role regress_outis;
+insert into defer_trig values (2);
+reset role;
+commit;
+
+-- security definer functions override the user who queued the trigger
+alter function whoami() security definer;
+begin;
+set role regress_groot;
+insert into defer_trig values (3);
+reset role;
+commit;
+alter function whoami() security invoker;
+
+-- make sure the current user is restored after error
+create or replace function whoami() returns trigger language plpgsql
+as $$
+begin
+  raise notice 'I am %', current_user;
+  perform 1 / 0;
+  return null;
+end;
+$$;
+
+begin;
+set role regress_groot;
+insert into defer_trig values (4);
+reset role;
+commit;  -- error expected
+select current_user = session_user;
+
+-- clean up
+drop table defer_trig;
+drop function whoami();
+drop role regress_outis;
+drop role regress_groot;
