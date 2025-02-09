@@ -523,10 +523,7 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	{
 		memset(&bufusage, 0, sizeof(BufferUsage));
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
-	}
 
-	if (es->buffers)
-	{
 		GetStorageIOUsage(&storageio);
 		storageio.inblock -= storageio_start.inblock;
 		storageio.outblock -= storageio_start.outblock;
@@ -4306,11 +4303,7 @@ peek_storageio_usage(ExplainState *es, const StorageIOUsage *usage)
 	if (es->format != EXPLAIN_FORMAT_TEXT)
 		return true;
 
-	if (usage->inblock <= 0 && usage->outblock <= 0)
-		return false;
-
-	else
-		return true;
+	return usage->inblock > 0 || usage->outblock > 0;
 }
 
 /*

@@ -305,6 +305,7 @@ StorageIOUsageAdd(StorageIOUsage *dst, const StorageIOUsage *add)
 	dst->outblock += add->outblock;
 }
 
+/* dst += add - sub */
 void
 StorageIOUsageAccumDiff(StorageIOUsage *dst, const StorageIOUsage *add, const StorageIOUsage *sub)
 {
