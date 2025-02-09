@@ -69,7 +69,14 @@ typedef struct PlannedStmt
 
 	struct Plan *planTree;		/* tree of Plan nodes */
 
+	List	   *partPruneInfos; /* List of PartitionPruneInfo contained in the
+								 * plan */
+
 	List	   *rtable;			/* list of RangeTblEntry nodes */
+
+	Bitmapset  *unprunableRelids;	/* RT indexes of relations that are not
+									 * subject to runtime pruning or are
+									 * needed to perform runtime pruning */
 
 	List	   *permInfos;		/* list of RTEPermissionInfo nodes for rtable
 								 * entries needing one */
@@ -278,8 +285,12 @@ typedef struct Append
 	 */
 	int			first_partial_plan;
 
-	/* Info for run-time subplan pruning; NULL if we're not doing that */
-	struct PartitionPruneInfo *part_prune_info;
+	/*
+	 * Index into PlannedStmt.partPruneInfos and parallel lists in EState:
+	 * es_part_prune_states and es_part_prune_results. Set to -1 if no
+	 * run-time pruning is used.
+	 */
+	int			part_prune_index;
 } Append;
 
 /* ----------------
@@ -313,8 +324,12 @@ typedef struct MergeAppend
 	/* NULLS FIRST/LAST directions */
 	bool	   *nullsFirst pg_node_attr(array_size(numCols));
 
-	/* Info for run-time subplan pruning; NULL if we're not doing that */
-	struct PartitionPruneInfo *part_prune_info;
+	/*
+	 * Index into PlannedStmt.partPruneInfos and parallel lists in EState:
+	 * es_part_prune_states and es_part_prune_results. Set to -1 if no
+	 * run-time pruning is used.
+	 */
+	int			part_prune_index;
 } MergeAppend;
 
 /* ----------------
@@ -1148,7 +1163,7 @@ typedef struct Gather
 	bool		single_copy;	/* don't execute plan more than once */
 	bool		invisible;		/* suppress EXPLAIN display (for testing)? */
 	Bitmapset  *initParam;		/* param id's of initplans which are referred
-								 * at gather or one of it's child node */
+								 * at gather or one of its child nodes */
 } Gather;
 
 /* ------------
@@ -1184,7 +1199,7 @@ typedef struct GatherMerge
 
 	/*
 	 * param id's of initplans which are referred at gather merge or one of
-	 * it's child node
+	 * its child nodes
 	 */
 	Bitmapset  *initParam;
 } GatherMerge;
@@ -1413,6 +1428,10 @@ typedef struct PlanRowMark
  * Then, since an Append-type node could have multiple partitioning
  * hierarchies among its children, we have an unordered List of those Lists.
  *
+ * relids				RelOptInfo.relids of the parent plan node (e.g. Append
+ *						or MergeAppend) to which this PartitionPruneInfo node
+ *						belongs.  The pruning logic ensures that this matches
+ *						the parent plan node's apprelids.
  * prune_infos			List of Lists containing PartitionedRelPruneInfo nodes,
  *						one sublist per run-time-prunable partition hierarchy
  *						appearing in the parent plan node's subplans.
@@ -1425,6 +1444,7 @@ typedef struct PartitionPruneInfo
 	pg_node_attr(no_equal, no_query_jumble)
 
 	NodeTag		type;
+	Bitmapset  *relids;
 	List	   *prune_infos;
 	Bitmapset  *other_subplans;
 } PartitionPruneInfo;
@@ -1433,18 +1453,22 @@ typedef struct PartitionPruneInfo
  * PartitionedRelPruneInfo - Details required to allow the executor to prune
  * partitions for a single partitioned table.
  *
- * subplan_map[] and subpart_map[] are indexed by partition index of the
- * partitioned table referenced by 'rtindex', the partition index being the
- * order that the partitions are defined in the table's PartitionDesc.  For a
- * leaf partition p, subplan_map[p] contains the zero-based index of the
- * partition's subplan in the parent plan's subplan list; it is -1 if the
- * partition is non-leaf or has been pruned.  For a non-leaf partition p,
- * subpart_map[p] contains the zero-based index of that sub-partition's
- * PartitionedRelPruneInfo in the hierarchy's PartitionedRelPruneInfo list;
- * it is -1 if the partition is a leaf or has been pruned.  Note that subplan
- * indexes, as stored in 'subplan_map', are global across the parent plan
- * node, but partition indexes are valid only within a particular hierarchy.
- * relid_map[p] contains the partition's OID, or 0 if the partition was pruned.
+ * subplan_map[], subpart_map[], and leafpart_rti_map[] are indexed by partition
+ * index of the partitioned table referenced by 'rtindex', the partition index
+ * being the order that the partitions are defined in the table's
+ * PartitionDesc.  For a leaf partition p, subplan_map[p] contains the
+ * zero-based index of the partition's subplan in the parent plan's subplan
+ * list; it is -1 if the partition is non-leaf or has been pruned.  For a
+ * non-leaf partition p, subpart_map[p] contains the zero-based index of that
+ * sub-partition's PartitionedRelPruneInfo in the hierarchy's
+ * PartitionedRelPruneInfo list; it is -1 if the partition is a leaf or has
+ * been pruned.  leafpart_rti_map[p] contains the RT index of a leaf partition
+ * if its subplan is in the parent plan' subplan list; it is 0 either if the
+ * partition is non-leaf or it is leaf but has been pruned during planning.
+ * Note that subplan indexes, as stored in 'subplan_map', are global across the
+ * parent plan node, but partition indexes are valid only within a particular
+ * hierarchy.  relid_map[p] contains the partition's OID, or 0 if the partition
+ * was pruned.
  */
 typedef struct PartitionedRelPruneInfo
 {
@@ -1466,6 +1490,9 @@ typedef struct PartitionedRelPruneInfo
 
 	/* subpart index by partition index, or -1 */
 	int		   *subpart_map pg_node_attr(array_size(nparts));
+
+	/* RT index by partition index, or 0 */
+	int		   *leafpart_rti_map pg_node_attr(array_size(nparts));
 
 	/* relation OID by partition index, or 0 */
 	Oid		   *relid_map pg_node_attr(array_size(nparts));

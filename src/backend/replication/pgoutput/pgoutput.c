@@ -27,6 +27,7 @@
 #include "replication/logicalproto.h"
 #include "replication/origin.h"
 #include "replication/pgoutput.h"
+#include "rewrite/rewriteHandler.h"
 #include "utils/builtins.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
@@ -820,7 +821,8 @@ create_estate_for_relation(Relation rel)
 
 	addRTEPermissionInfo(&perminfos, rte);
 
-	ExecInitRangeTable(estate, list_make1(rte), perminfos);
+	ExecInitRangeTable(estate, list_make1(rte), perminfos,
+					   bms_make_singleton(1));
 
 	estate->es_output_cid = GetCurrentCommandId(false);
 
@@ -1009,7 +1011,7 @@ pgoutput_row_filter_init(PGOutputData *data, List *publications,
 				continue;
 
 			foreach(lc, rfnodes[idx])
-				filters = lappend(filters, stringToNode((char *) lfirst(lc)));
+				filters = lappend(filters, expand_generated_columns_in_expr(stringToNode((char *) lfirst(lc)), relation, 1));
 
 			/* combine the row filter and cache the ExprState */
 			rfnode = make_orclause(filters);
@@ -1849,7 +1851,7 @@ pgoutput_stream_stop(struct LogicalDecodingContext *ctx,
 
 /*
  * Notify downstream to discard the streamed transaction (along with all
- * it's subtransactions, if it's a toplevel transaction).
+ * its subtransactions, if it's a toplevel transaction).
  */
 static void
 pgoutput_stream_abort(struct LogicalDecodingContext *ctx,
@@ -1882,7 +1884,7 @@ pgoutput_stream_abort(struct LogicalDecodingContext *ctx,
 
 /*
  * Notify downstream to apply the streamed transaction (along with all
- * it's subtransactions).
+ * its subtransactions).
  */
 static void
 pgoutput_stream_commit(struct LogicalDecodingContext *ctx,

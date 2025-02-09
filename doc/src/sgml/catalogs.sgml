@@ -1307,8 +1307,10 @@
       </para>
       <para>
        If a zero byte (<literal>''</literal>), then not a generated column.
-       Otherwise, <literal>s</literal> = stored.  (Other values might be added
-       in the future.)
+       Otherwise, <literal>s</literal> = stored, <literal>v</literal> =
+       virtual.  A stored generated column is physically stored like a normal
+       column.  A virtual generated column is physically stored as a null
+       value, with the actual value being computed at run time.
       </para></entry>
      </row>
 
@@ -6407,7 +6409,7 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
-       <structfield>pubgencols_type</structfield> <type>char</type>
+       <structfield>pubgencols</structfield> <type>char</type>
       </para>
       <para>
        Controls how to handle generated column replication when there is no

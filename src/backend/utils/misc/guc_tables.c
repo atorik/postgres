@@ -1692,7 +1692,7 @@ struct config_bool ConfigureNamesBool[] =
 	},
 	{
 		{"logging_collector", PGC_POSTMASTER, LOGGING_WHERE,
-			gettext_noop("Start a subprocess to capture stderr output and/or csvlogs into log files."),
+			gettext_noop("Start a subprocess to capture stderr, csvlog and/or jsonlog into log files."),
 			NULL
 		},
 		&Logging_collector,
@@ -3299,7 +3299,7 @@ struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_KB
 		},
 		&Log_RotationSize,
-		10 * 1024, 0, INT_MAX / 1024,
+		10 * 1024, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 
@@ -3424,6 +3424,15 @@ struct config_int ConfigureNamesInt[] =
 		},
 		&autovacuum_vac_thresh,
 		50, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+	{
+		{"autovacuum_vacuum_max_threshold", PGC_SIGHUP, VACUUM_AUTOVACUUM,
+			gettext_noop("Maximum number of tuple updates or deletes prior to vacuum, or -1 to disable maximum threshold."),
+			NULL
+		},
+		&autovacuum_vac_max_thresh,
+		100000000, -1, INT_MAX,
 		NULL, NULL, NULL
 	},
 	{

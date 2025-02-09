@@ -116,6 +116,19 @@ typedef struct PlannerGlobal
 	/* "flat" rangetable for executor */
 	List	   *finalrtable;
 
+	/*
+	 * RT indexes of all relation RTEs in finalrtable (RTE_RELATION and
+	 * RTE_SUBQUERY RTEs of views)
+	 */
+	Bitmapset  *allRelids;
+
+	/*
+	 * RT indexes of all leaf partitions in nodes that support pruning and are
+	 * subject to runtime pruning at plan initialization time ("initial"
+	 * pruning).
+	 */
+	Bitmapset  *prunableRelids;
+
 	/* "flat" list of RTEPermissionInfos */
 	List	   *finalrteperminfos;
 
@@ -127,6 +140,9 @@ typedef struct PlannerGlobal
 
 	/* "flat" list of AppendRelInfos */
 	List	   *appendRelations;
+
+	/* "flat" list of PartitionPruneInfos */
+	List	   *partPruneInfos;
 
 	/* OIDs of relations the plan depends on */
 	List	   *relationOids;
@@ -559,6 +575,9 @@ struct PlannerInfo
 
 	/* Does this query modify any partition key columns? */
 	bool		partColsUpdated;
+
+	/* PartitionPruneInfos added in this query's plan. */
+	List	   *partPruneInfos;
 };
 
 
