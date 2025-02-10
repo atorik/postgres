@@ -64,6 +64,7 @@
 #define PARALLEL_KEY_QUERY_TEXT		UINT64CONST(0xE000000000000008)
 #define PARALLEL_KEY_JIT_INSTRUMENTATION UINT64CONST(0xE000000000000009)
 #define PARALLEL_KEY_WAL_USAGE			UINT64CONST(0xE00000000000000A)
+#define PARALLEL_KEY_STORAGEIO_USAGE	UINT64CONST(0xE00000000000000B)
 
 #define PARALLEL_TUPLE_QUEUE_SIZE		65536
 
@@ -599,6 +600,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	char	   *pstmt_space;
 	char	   *paramlistinfo_space;
 	BufferUsage *bufusage_space;
+	StorageIOUsage *storageiousage_space;
 	WalUsage   *walusage_space;
 	SharedExecutorInstrumentation *instrumentation = NULL;
 	SharedJitInstrumentation *jit_instrumentation = NULL;
@@ -678,6 +680,13 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	 */
 	shm_toc_estimate_chunk(&pcxt->estimator,
 						   mul_size(sizeof(WalUsage), pcxt->nworkers));
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	/*
+	 * Same thing for StorageIOUsage.
+	 */
+	shm_toc_estimate_chunk(&pcxt->estimator,
+						   mul_size(sizeof(StorageIOUsage), pcxt->nworkers));
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
 	/* Estimate space for tuple queues. */
@@ -774,6 +783,12 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 									  mul_size(sizeof(WalUsage), pcxt->nworkers));
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_WAL_USAGE, walusage_space);
 	pei->wal_usage = walusage_space;
+
+	/* Same for StorageIOUsage. */
+	storageiousage_space = shm_toc_allocate(pcxt->toc,
+											mul_size(sizeof(StorageIOUsage), pcxt->nworkers));
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_STORAGEIO_USAGE, storageiousage_space);
+	pei->storageio_usage = storageiousage_space;
 
 	/* Set up the tuple queues that the workers will write into. */
 	pei->tqueue = ExecParallelSetupTupleQueues(pcxt, false);
@@ -1170,11 +1185,11 @@ ExecParallelFinish(ParallelExecutorInfo *pei)
 	WaitForParallelWorkersToFinish(pei->pcxt);
 
 	/*
-	 * Next, accumulate buffer/WAL usage.  (This must wait for the workers to
-	 * finish, or we might get incomplete data.)
+	 * Next, accumulate buffer, WAL, and Storage I/O usage. (This must wait
+	 * for the workers to finish, or we might get incomplete data.)
 	 */
 	for (i = 0; i < nworkers; i++)
-		InstrAccumParallelQuery(&pei->buffer_usage[i], &pei->wal_usage[i]);
+		InstrAccumParallelQuery(&pei->buffer_usage[i], &pei->storageio_usage[i], &pei->wal_usage[i]);
 
 	pei->finished = true;
 }
@@ -1406,6 +1421,8 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 {
 	FixedParallelExecutorState *fpes;
 	BufferUsage *buffer_usage;
+	StorageIOUsage *storageio_usage;
+	StorageIOUsage storageio_usage_start = {0};
 	WalUsage   *wal_usage;
 	DestReceiver *receiver;
 	QueryDesc  *queryDesc;
@@ -1459,13 +1476,14 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	ExecSetTupleBound(fpes->tuples_needed, queryDesc->planstate);
 
 	/*
-	 * Prepare to track buffer/WAL usage during query execution.
+	 * Prepare to track buffer, WAL, and StorageI/O usage during query
+	 * execution.
 	 *
 	 * We do this after starting up the executor to match what happens in the
 	 * leader, which also doesn't count buffer accesses and WAL activity that
 	 * occur during executor startup.
 	 */
-	InstrStartParallelQuery();
+	InstrStartParallelQuery(&storageio_usage_start);
 
 	/*
 	 * Run the plan.  If we specified a tuple bound, be careful not to demand
@@ -1478,11 +1496,14 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	/* Shut down the executor */
 	ExecutorFinish(queryDesc);
 
-	/* Report buffer/WAL usage during parallel execution. */
+	/* Report buffer, WAL, and storageIO usage during parallel execution. */
 	buffer_usage = shm_toc_lookup(toc, PARALLEL_KEY_BUFFER_USAGE, false);
+	storageio_usage = shm_toc_lookup(toc, PARALLEL_KEY_STORAGEIO_USAGE, false);
 	wal_usage = shm_toc_lookup(toc, PARALLEL_KEY_WAL_USAGE, false);
 	InstrEndParallelQuery(&buffer_usage[ParallelWorkerNumber],
-						  &wal_usage[ParallelWorkerNumber]);
+						  &storageio_usage[ParallelWorkerNumber],
+						  &wal_usage[ParallelWorkerNumber],
+						  &storageio_usage_start);
 
 	/* Report instrumentation data if any instrumentation options are set. */
 	if (instrumentation != NULL)
