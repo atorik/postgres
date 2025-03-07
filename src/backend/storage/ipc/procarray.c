@@ -58,6 +58,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/pg_lfind.h"
+#include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/acl.h"
@@ -1125,11 +1126,18 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 					 "recovery snapshots are now enabled");
 			}
 			else
+			{
+				/*
+				 * Let postmaster know we are waiting for non-overflowed snapshot,
+				 * so that it can notify why connection is not yet acceptable.
+				 */
+				SendPostmasterSignal(PMSIGNAL_SNAPSHOT_PENDING);
 				elog(DEBUG1,
 					 "recovery snapshot waiting for non-overflowed snapshot or "
 					 "until oldest active xid on standby is at least %u (now %u)",
 					 standbySnapshotPendingXmin,
 					 running->oldestRunningXid);
+			}
 			return;
 		}
 	}
@@ -1303,11 +1311,18 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 	if (standbyState == STANDBY_SNAPSHOT_READY)
 		elog(DEBUG1, "recovery snapshots are now enabled");
 	else
+	{
+		/*
+		 * Let postmaster know we are waiting for non-overflowed snapshot,
+		 * so that it can notify why connection is not yet acceptable.
+		 */
+		SendPostmasterSignal(PMSIGNAL_SNAPSHOT_PENDING);
 		elog(DEBUG1,
 			 "recovery snapshot waiting for non-overflowed snapshot or "
 			 "until oldest active xid on standby is at least %u (now %u)",
 			 standbySnapshotPendingXmin,
 			 running->oldestRunningXid);
+	}
 }
 
 /*

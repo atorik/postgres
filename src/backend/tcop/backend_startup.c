@@ -296,7 +296,20 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 					ereport(FATAL,
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
 							 errmsg("the database system is not yet accepting connections"),
-							 errdetail("Consistent recovery state has not been yet reached.")));
+							 errdetail("Consistent recovery state has not been yet reached")));
+				else
+					ereport(FATAL,
+							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
+							 errmsg("the database system is not accepting connections"),
+							 errdetail("Hot standby mode is disabled.")));
+				break;
+			case CAC_SNAPSHOT_PENDING:
+				if (EnableHotStandby)
+					ereport(FATAL,
+							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
+							 errmsg("the database system is not yet accepting connections"),
+							 errdetail("Snapshot is pending because subtransaction is overflowed"),
+							 errhint("aaaaaaaaaaaa")));
 				else
 					ereport(FATAL,
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),

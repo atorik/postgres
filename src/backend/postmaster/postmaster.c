@@ -333,6 +333,7 @@ typedef enum
 	PM_INIT,					/* postmaster starting */
 	PM_STARTUP,					/* waiting for startup subprocess */
 	PM_RECOVERY,				/* in archive recovery mode */
+	PM_SNAPSHOT_PENDING,		/* */
 	PM_HOT_STANDBY,				/* in hot standby mode */
 	PM_RUN,						/* normal "database is alive" state */
 	PM_STOP_BACKENDS,			/* need to stop remaining backends */
@@ -1814,6 +1815,8 @@ canAcceptConnections(BackendType backend_type)
 		else if (!FatalError && pmState == PM_RECOVERY)
 			return CAC_NOTCONSISTENT;	/* not yet at consistent recovery
 										 * state */
+		else if (!FatalError && pmState == PM_SNAPSHOT_PENDING)
+			return CAC_SNAPSHOT_PENDING;	/* */
 		else
 			return CAC_RECOVERY;	/* else must be crash recovery */
 	}
@@ -2111,7 +2114,7 @@ process_pm_shutdown_request(void)
 			 */
 			if (pmState == PM_RUN || pmState == PM_HOT_STANDBY)
 				connsAllowed = false;
-			else if (pmState == PM_STARTUP || pmState == PM_RECOVERY)
+			else if (pmState == PM_STARTUP || pmState == PM_RECOVERY || pmState == PM_SNAPSHOT_PENDING)
 			{
 				/* There should be no clients, so proceed to stop children */
 				UpdatePMState(PM_STOP_BACKENDS);
@@ -2145,7 +2148,7 @@ process_pm_shutdown_request(void)
 			sd_notify(0, "STOPPING=1");
 #endif
 
-			if (pmState == PM_STARTUP || pmState == PM_RECOVERY)
+			if (pmState == PM_STARTUP || pmState == PM_RECOVERY || pmState == PM_SNAPSHOT_PENDING)
 			{
 				/* Just shut down background processes silently */
 				UpdatePMState(PM_STOP_BACKENDS);
@@ -2711,6 +2714,7 @@ HandleFatalError(QuitSignalReason reason, bool consider_sigabrt)
 
 			/* wait for children to die */
 		case PM_RECOVERY:
+		case PM_SNAPSHOT_PENDING:
 		case PM_HOT_STANDBY:
 		case PM_RUN:
 		case PM_STOP_BACKENDS:
@@ -3193,6 +3197,7 @@ pmstate_name(PMState state)
 			PM_TOSTR_CASE(PM_INIT);
 			PM_TOSTR_CASE(PM_STARTUP);
 			PM_TOSTR_CASE(PM_RECOVERY);
+			PM_TOSTR_CASE(PM_SNAPSHOT_PENDING);
 			PM_TOSTR_CASE(PM_HOT_STANDBY);
 			PM_TOSTR_CASE(PM_RUN);
 			PM_TOSTR_CASE(PM_STOP_BACKENDS);
@@ -3245,7 +3250,7 @@ LaunchMissingBackgroundProcesses(void)
 	 * the shutdown checkpoint.  That's done in PostmasterStateMachine(), not
 	 * here.)
 	 */
-	if (pmState == PM_RUN || pmState == PM_RECOVERY ||
+	if (pmState == PM_RUN || pmState == PM_RECOVERY || pmState == PM_SNAPSHOT_PENDING ||
 		pmState == PM_HOT_STANDBY || pmState == PM_STARTUP)
 	{
 		if (CheckpointerPMChild == NULL)
@@ -3281,7 +3286,7 @@ LaunchMissingBackgroundProcesses(void)
 	 */
 	if (PgArchPMChild == NULL &&
 		((XLogArchivingActive() && pmState == PM_RUN) ||
-		 (XLogArchivingAlways() && (pmState == PM_RECOVERY || pmState == PM_HOT_STANDBY))) &&
+		 (XLogArchivingAlways() && (pmState == PM_RECOVERY || pmState == PM_SNAPSHOT_PENDING || pmState == PM_HOT_STANDBY))) &&
 		PgArchCanRestart())
 		PgArchPMChild = StartChildProcess(B_ARCHIVER);
 
@@ -3313,7 +3318,7 @@ LaunchMissingBackgroundProcesses(void)
 	if (WalReceiverRequested)
 	{
 		if (WalReceiverPMChild == NULL &&
-			(pmState == PM_STARTUP || pmState == PM_RECOVERY ||
+			(pmState == PM_STARTUP || pmState == PM_RECOVERY || pmState == PM_SNAPSHOT_PENDING ||
 			 pmState == PM_HOT_STANDBY) &&
 			Shutdown <= SmartShutdown)
 		{
@@ -3663,8 +3668,15 @@ process_pm_pmsignal(void)
 		UpdatePMState(PM_RECOVERY);
 	}
 
-	if (CheckPostmasterSignal(PMSIGNAL_BEGIN_HOT_STANDBY) &&
+	if (CheckPostmasterSignal(PMSIGNAL_SNAPSHOT_PENDING) &&
 		pmState == PM_RECOVERY && Shutdown == NoShutdown)
+	{
+		UpdatePMState(PM_SNAPSHOT_PENDING);
+	}
+
+	if (CheckPostmasterSignal(PMSIGNAL_BEGIN_HOT_STANDBY) &&
+		(pmState == PM_RECOVERY || pmState == PM_SNAPSHOT_PENDING) &&
+		Shutdown == NoShutdown)
 	{
 		ereport(LOG,
 				(errmsg("database system is ready to accept read-only connections")));
@@ -3806,7 +3818,7 @@ process_pm_pmsignal(void)
 	}
 
 	if (StartupPMChild != NULL &&
-		(pmState == PM_STARTUP || pmState == PM_RECOVERY ||
+		(pmState == PM_STARTUP || pmState == PM_RECOVERY || pmState == PM_SNAPSHOT_PENDING ||
 		 pmState == PM_HOT_STANDBY) &&
 		CheckPromoteSignal())
 	{
@@ -4130,6 +4142,7 @@ bgworker_should_start_now(BgWorkerStartTime start_time)
 			/* fall through */
 
 		case PM_RECOVERY:
+		case PM_SNAPSHOT_PENDING:
 		case PM_STARTUP:
 		case PM_INIT:
 			if (start_time == BgWorkerStart_PostmasterStart)
