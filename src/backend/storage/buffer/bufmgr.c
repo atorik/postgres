@@ -1330,10 +1330,7 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 		 * StartReadBuffers() were made for the same blocks before
 		 * WaitReadBuffers(), only the first would issue the advice. That'd be
 		 * a better simulation of true asynchronous I/O, which would only
-		 * start the I/O once, but isn't done here for simplicity.  Note also
-		 * that the following call might actually issue two advice calls if we
-		 * cross a segment boundary; in a true asynchronous version we might
-		 * choose to process only one real I/O at a time in that case.
+		 * start the I/O once, but isn't done here for simplicity.
 		 */
 		smgrprefetch(operation->smgr,
 					 operation->forknum,
@@ -1512,7 +1509,7 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 			io_pages[io_buffers_len++] = BufferGetBlock(buffers[i]);
 		}
 
-		io_start = pgstat_prepare_io_time(track_io_timing);
+		io_start = pgstat_prepare_io_time();
 		smgrreadv(operation->smgr, forknum, io_first_block, io_pages, io_buffers_len);
 		pgstat_count_io_op_time(io_object, io_context, IOOP_READ, io_start,
 								1, io_buffers_len * BLCKSZ);
@@ -2221,7 +2218,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 		buf_block = BufHdrGetBlock(GetBufferDescriptor(buffers[i] - 1));
 
 		/* new buffers are zero-filled */
-		MemSet((char *) buf_block, 0, BLCKSZ);
+		MemSet(buf_block, 0, BLCKSZ);
 	}
 
 	/*
@@ -2404,7 +2401,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 		}
 	}
 
-	io_start = pgstat_prepare_io_time(track_io_timing);
+	io_start = pgstat_prepare_io_time();
 
 	/*
 	 * Note: if smgrzeroextend fails, we will end up with buffers that are
@@ -3861,7 +3858,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 	 */
 	bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum);
 
-	io_start = pgstat_prepare_io_time(track_io_timing);
+	io_start = pgstat_prepare_io_time();
 
 	/*
 	 * bufToWrite is either the shared buffer or a copy, as appropriate.
@@ -3984,8 +3981,8 @@ BufferIsPermanent(Buffer buffer)
 XLogRecPtr
 BufferGetLSNAtomic(Buffer buffer)
 {
-	BufferDesc *bufHdr = GetBufferDescriptor(buffer - 1);
 	char	   *page = BufferGetPage(buffer);
+	BufferDesc *bufHdr;
 	XLogRecPtr	lsn;
 	uint32		buf_state;
 
@@ -3999,6 +3996,7 @@ BufferGetLSNAtomic(Buffer buffer)
 	Assert(BufferIsValid(buffer));
 	Assert(BufferIsPinned(buffer));
 
+	bufHdr = GetBufferDescriptor(buffer - 1);
 	buf_state = LockBufHdr(bufHdr);
 	lsn = PageGetLSN(page);
 	UnlockBufHdr(bufHdr, buf_state);
@@ -4462,7 +4460,7 @@ FlushRelationBuffers(Relation rel)
 
 				PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
-				io_start = pgstat_prepare_io_time(track_io_timing);
+				io_start = pgstat_prepare_io_time();
 
 				smgrwrite(srel,
 						  BufTagGetForkNum(&bufHdr->tag),
@@ -5919,7 +5917,7 @@ IssuePendingWritebacks(WritebackContext *wb_context, IOContext io_context)
 	sort_pending_writebacks(wb_context->pending_writebacks,
 							wb_context->nr_pending);
 
-	io_start = pgstat_prepare_io_time(track_io_timing);
+	io_start = pgstat_prepare_io_time();
 
 	/*
 	 * Coalesce neighbouring writes, but nothing else. For that we iterate

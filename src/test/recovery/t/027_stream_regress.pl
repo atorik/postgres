@@ -107,7 +107,7 @@ command_ok(
 	[
 		'pg_dumpall',
 		'--file' => $outputdir . '/primary.dump',
-		'--no-sync',
+		'--no-sync', '--no-statistics',
 		'--port' => $node_primary->port,
 		'--no-unlogged-table-data',    # if unlogged, standby has schema only
 	],
@@ -116,12 +116,13 @@ command_ok(
 	[
 		'pg_dumpall',
 		'--file' => $outputdir . '/standby.dump',
-		'--no-sync',
+		'--no-sync', '--no-statistics',
 		'--port' => $node_standby_1->port,
 	],
 	'dump standby server');
-command_ok(
-	[ 'diff', $outputdir . '/primary.dump', $outputdir . '/standby.dump', ],
+compare_files(
+	$outputdir . '/primary.dump',
+	$outputdir . '/standby.dump',
 	'compare primary and standby dumps');
 
 # Likewise for the catalogs of the regression database, after disabling
@@ -150,12 +151,9 @@ command_ok(
 		'regression',
 	],
 	'dump catalogs of standby server');
-command_ok(
-	[
-		'diff',
-		$outputdir . '/catalogs_primary.dump',
-		$outputdir . '/catalogs_standby.dump',
-	],
+compare_files(
+	$outputdir . '/catalogs_primary.dump',
+	$outputdir . '/catalogs_standby.dump',
 	'compare primary and standby catalog dumps');
 
 # Check some data from pg_stat_statements.

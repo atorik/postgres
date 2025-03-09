@@ -42,6 +42,7 @@
 #include "storage/condition_variable.h"
 #include "utils/hsearch.h"
 #include "utils/queryenvironment.h"
+#include "utils/plancache.h"
 #include "utils/reltrigger.h"
 #include "utils/sharedtuplestore.h"
 #include "utils/snapshot.h"
@@ -490,6 +491,8 @@ typedef struct ResultRelInfo
 
 	/* For UPDATE, attnums of generated columns to be computed */
 	Bitmapset  *ri_extraUpdatedCols;
+	/* true if the above has been computed */
+	bool		ri_extraUpdatedCols_valid;
 
 	/* Projection to generate new tuple in an INSERT/UPDATE */
 	ProjectionInfo *ri_projectNew;
@@ -655,9 +658,14 @@ typedef struct EState
 										 * ExecRowMarks, or NULL if none */
 	List	   *es_rteperminfos;	/* List of RTEPermissionInfo */
 	PlannedStmt *es_plannedstmt;	/* link to top of plan tree */
+	CachedPlan *es_cachedplan;	/* CachedPlan providing the plan tree */
 	List	   *es_part_prune_infos;	/* List of PartitionPruneInfo */
 	List	   *es_part_prune_states;	/* List of PartitionPruneState */
 	List	   *es_part_prune_results;	/* List of Bitmapset */
+	Bitmapset  *es_unpruned_relids; /* PlannedStmt.unprunableRelids + RT
+									 * indexes of leaf partitions that survive
+									 * initial pruning; see
+									 * ExecDoInitialPruning() */
 	const char *es_sourceText;	/* Source text from QueryDesc */
 
 	JunkFilter *es_junkFilter;	/* top-level junk filter, if any */
@@ -703,6 +711,7 @@ typedef struct EState
 	int			es_top_eflags;	/* eflags passed to ExecutorStart */
 	int			es_instrument;	/* OR of InstrumentOption flags */
 	bool		es_finished;	/* true when ExecutorFinish is done */
+	bool		es_aborted;		/* true when execution was aborted */
 
 	List	   *es_exprcontexts;	/* List of ExprContexts within EState */
 
@@ -1443,6 +1452,15 @@ typedef struct ModifyTableState
 	double		mt_merge_inserted;
 	double		mt_merge_updated;
 	double		mt_merge_deleted;
+
+	/*
+	 * Lists of valid updateColnosLists, mergeActionLists, and
+	 * mergeJoinConditions.  These contain only entries for unpruned
+	 * relations, filtered from the corresponding lists in ModifyTable.
+	 */
+	List	   *mt_updateColnosLists;
+	List	   *mt_mergeActionLists;
+	List	   *mt_mergeJoinConditions;
 } ModifyTableState;
 
 /* ----------------

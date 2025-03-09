@@ -1008,6 +1008,40 @@ AC_SUBST(with_uuid)
 
 
 #
+# libcurl
+#
+AC_MSG_CHECKING([whether to build with libcurl support])
+PGAC_ARG_BOOL(with, libcurl, no, [build with libcurl support],
+              [AC_DEFINE([USE_LIBCURL], 1, [Define to 1 to build with libcurl support. (--with-libcurl)])])
+AC_MSG_RESULT([$with_libcurl])
+AC_SUBST(with_libcurl)
+
+if test "$with_libcurl" = yes ; then
+  # Check for libcurl 7.61.0 or higher (corresponding to RHEL8 and the ability
+  # to explicitly set TLS 1.3 ciphersuites).
+  PKG_CHECK_MODULES(LIBCURL, [libcurl >= 7.61.0])
+
+  # We only care about -I, -D, and -L switches;
+  # note that -lcurl will be added by PGAC_CHECK_LIBCURL below.
+  for pgac_option in $LIBCURL_CFLAGS; do
+    case $pgac_option in
+      -I*|-D*) CPPFLAGS="$CPPFLAGS $pgac_option";;
+    esac
+  done
+  for pgac_option in $LIBCURL_LIBS; do
+    case $pgac_option in
+      -L*) LDFLAGS="$LDFLAGS $pgac_option";;
+    esac
+  done
+
+  # OAuth requires python for testing
+  if test "$with_python" != yes; then
+    AC_MSG_WARN([*** OAuth support tests require --with-python to run])
+  fi
+fi
+
+
+#
 # XML
 #
 AC_MSG_CHECKING([whether to build with XML support])
@@ -1294,6 +1328,13 @@ failure.  It is possible the compiler isn't looking in the proper directory.
 Use --without-zlib to disable zlib support.])])
 fi
 
+# XXX libcurl must link after libgssapi_krb5 on FreeBSD to avoid segfaults
+# during gss_acquire_cred(). This is possibly related to Curl's Heimdal
+# dependency on that platform?
+if test "$with_libcurl" = yes ; then
+  PGAC_CHECK_LIBCURL
+fi
+
 if test "$with_gssapi" = yes ; then
   if test "$PORTNAME" != "win32"; then
     AC_SEARCH_LIBS(gss_store_cred_into, [gssapi_krb5 gss 'gssapi -lkrb5 -lcrypto'], [],
@@ -1322,13 +1363,8 @@ if test "$with_ssl" = openssl ; then
   # Minimum required OpenSSL version is 1.1.1
   AC_DEFINE(OPENSSL_API_COMPAT, [0x10101000L],
             [Define to the OpenSSL API version in use. This avoids deprecation warnings from newer OpenSSL versions.])
-  if test "$PORTNAME" != "win32"; then
-     AC_CHECK_LIB(crypto, CRYPTO_new_ex_data, [], [AC_MSG_ERROR([library 'crypto' is required for OpenSSL])])
-     AC_CHECK_LIB(ssl,    SSL_new, [], [AC_MSG_ERROR([library 'ssl' is required for OpenSSL])])
-  else
-     AC_SEARCH_LIBS(CRYPTO_new_ex_data, [eay32 crypto], [], [AC_MSG_ERROR([library 'eay32' or 'crypto' is required for OpenSSL])])
-     AC_SEARCH_LIBS(SSL_new, [ssleay32 ssl], [], [AC_MSG_ERROR([library 'ssleay32' or 'ssl' is required for OpenSSL])])
-  fi
+  AC_CHECK_LIB(crypto, CRYPTO_new_ex_data, [], [AC_MSG_ERROR([library 'crypto' is required for OpenSSL])])
+  AC_CHECK_LIB(ssl,    SSL_new, [], [AC_MSG_ERROR([library 'ssl' is required for OpenSSL])])
   # Functions introduced in OpenSSL 1.1.1.
   AC_CHECK_FUNCS([SSL_CTX_set_ciphersuites], [], [AC_MSG_ERROR([OpenSSL version >= 1.1.1 is required for SSL support])])
   # Function introduced in OpenSSL 1.0.2, not in LibreSSL.

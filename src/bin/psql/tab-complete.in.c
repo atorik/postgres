@@ -1000,6 +1000,15 @@ static const SchemaQuery Query_for_trigger_of_table = {
 "SELECT datname FROM pg_catalog.pg_database "\
 " WHERE datname LIKE '%s'"
 
+#define Query_for_list_of_database_vars \
+"SELECT conf FROM ("\
+"       SELECT setdatabase, pg_catalog.split_part(unnest(setconfig),'=',1) conf"\
+"         FROM pg_db_role_setting "\
+"       ) s, pg_database d "\
+" WHERE s.setdatabase = d.oid "\
+"   AND conf LIKE '%s'"\
+"   AND d.datname LIKE '%s'"
+
 #define Query_for_list_of_tablespaces \
 "SELECT spcname FROM pg_catalog.pg_tablespace "\
 " WHERE spcname LIKE '%s'"
@@ -1067,6 +1076,11 @@ Keywords_for_list_of_owner_roles, "PUBLIC"
 " SELECT usename "\
 "   FROM pg_catalog.pg_user_mappings "\
 "  WHERE usename LIKE '%s'"
+
+#define Query_for_list_of_user_vars \
+" SELECT pg_catalog.split_part(pg_catalog.unnest(rolconfig),'=',1) "\
+"   FROM pg_catalog.pg_roles "\
+"  WHERE rolname LIKE '%s'"
 
 #define Query_for_list_of_access_methods \
 " SELECT amname "\
@@ -1368,6 +1382,7 @@ static const char *const table_storage_parameters[] = {
 	"autovacuum_vacuum_cost_limit",
 	"autovacuum_vacuum_insert_scale_factor",
 	"autovacuum_vacuum_insert_threshold",
+	"autovacuum_vacuum_max_threshold",
 	"autovacuum_vacuum_scale_factor",
 	"autovacuum_vacuum_threshold",
 	"fillfactor",
@@ -1384,14 +1399,17 @@ static const char *const table_storage_parameters[] = {
 	"toast.autovacuum_vacuum_cost_limit",
 	"toast.autovacuum_vacuum_insert_scale_factor",
 	"toast.autovacuum_vacuum_insert_threshold",
+	"toast.autovacuum_vacuum_max_threshold",
 	"toast.autovacuum_vacuum_scale_factor",
 	"toast.autovacuum_vacuum_threshold",
 	"toast.log_autovacuum_min_duration",
 	"toast.vacuum_index_cleanup",
+	"toast.vacuum_max_eager_freeze_failure_rate",
 	"toast.vacuum_truncate",
 	"toast_tuple_target",
 	"user_catalog_table",
 	"vacuum_index_cleanup",
+	"vacuum_max_eager_freeze_failure_rate",
 	"vacuum_truncate",
 	NULL
 };
@@ -1867,9 +1885,9 @@ psql_completion(const char *text, int start, int end)
 		"\\drds", "\\drg", "\\dRs", "\\dRp", "\\ds",
 		"\\dt", "\\dT", "\\dv", "\\du", "\\dx", "\\dX", "\\dy",
 		"\\echo", "\\edit", "\\ef", "\\elif", "\\else", "\\encoding",
-		"\\endif", "\\errverbose", "\\ev",
-		"\\f",
-		"\\g", "\\gdesc", "\\getenv", "\\gexec", "\\gset", "\\gx",
+		"\\endif", "\\endpipeline", "\\errverbose", "\\ev",
+		"\\f", "\\flush", "\\flushrequest",
+		"\\g", "\\gdesc", "\\getenv", "\\getresults", "\\gexec", "\\gset", "\\gx",
 		"\\help", "\\html",
 		"\\if", "\\include", "\\include_relative", "\\ir",
 		"\\list", "\\lo_import", "\\lo_export", "\\lo_list", "\\lo_unlink",
@@ -1877,7 +1895,7 @@ psql_completion(const char *text, int start, int end)
 		"\\parse", "\\password", "\\print", "\\prompt", "\\pset",
 		"\\qecho", "\\quit",
 		"\\reset",
-		"\\s", "\\set", "\\setenv", "\\sf", "\\sv",
+		"\\s", "\\set", "\\setenv", "\\sf", "\\startpipeline", "\\sv", "\\syncpipeline",
 		"\\t", "\\T", "\\timing",
 		"\\unset",
 		"\\x",
@@ -2316,6 +2334,13 @@ match_previous_words(int pattern_id,
 					  "IS_TEMPLATE", "ALLOW_CONNECTIONS",
 					  "CONNECTION LIMIT");
 
+	/* ALTER DATABASE <name> RESET */
+	else if (Matches("ALTER", "DATABASE", MatchAny, "RESET"))
+	{
+		set_completion_reference(prev2_wd);
+		COMPLETE_WITH_QUERY_PLUS(Query_for_list_of_database_vars, "ALL");
+	}
+
 	/* ALTER DATABASE <name> SET TABLESPACE */
 	else if (Matches("ALTER", "DATABASE", MatchAny, "SET", "TABLESPACE"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_tablespaces);
@@ -2466,6 +2491,10 @@ match_previous_words(int pattern_id,
 					  "NOLOGIN", "NOREPLICATION", "NOSUPERUSER", "PASSWORD",
 					  "RENAME TO", "REPLICATION", "RESET", "SET", "SUPERUSER",
 					  "VALID UNTIL", "WITH");
+
+	/* ALTER USER,ROLE <name> RESET */
+	else if (Matches("ALTER", "USER|ROLE", MatchAny, "RESET"))
+		COMPLETE_WITH_QUERY_PLUS(Query_for_list_of_user_vars, "ALL");
 
 	/* ALTER USER,ROLE <name> WITH */
 	else if (Matches("ALTER", "USER|ROLE", MatchAny, "WITH"))
@@ -4902,7 +4931,9 @@ match_previous_words(int pattern_id,
 
 /* SET, RESET, SHOW */
 	/* Complete with a variable name */
-	else if (TailMatches("SET|RESET") && !TailMatches("UPDATE", MatchAny, "SET"))
+	else if (TailMatches("SET|RESET") &&
+			 !TailMatches("UPDATE", MatchAny, "SET") &&
+			 !TailMatches("ALTER", "DATABASE", MatchAny, "RESET"))
 		COMPLETE_WITH_QUERY_VERBATIM_PLUS(Query_for_list_of_set_vars,
 										  "CONSTRAINTS",
 										  "TRANSACTION",

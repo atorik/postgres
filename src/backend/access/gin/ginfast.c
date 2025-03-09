@@ -122,7 +122,7 @@ writeListPage(Relation index, Buffer buffer,
 		data.ntuples = ntuples;
 
 		XLogBeginInsert();
-		XLogRegisterData((char *) &data, sizeof(ginxlogInsertListPage));
+		XLogRegisterData(&data, sizeof(ginxlogInsertListPage));
 
 		XLogRegisterBuffer(0, buffer, REGBUF_WILL_INIT);
 		XLogRegisterBufData(0, workspace.data, size);
@@ -431,7 +431,7 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 		memcpy(&data.metadata, metadata, sizeof(GinMetaPageData));
 
 		XLogRegisterBuffer(0, metabuffer, REGBUF_WILL_INIT | REGBUF_STANDARD);
-		XLogRegisterData((char *) &data, sizeof(ginxlogUpdateMeta));
+		XLogRegisterData(&data, sizeof(ginxlogUpdateMeta));
 
 		recptr = XLogInsert(RM_GIN_ID, XLOG_GIN_UPDATE_META_PAGE);
 		PageSetLSN(metapage, recptr);
@@ -646,7 +646,7 @@ shiftList(Relation index, Buffer metabuffer, BlockNumber newHead,
 
 			memcpy(&data.metadata, metadata, sizeof(GinMetaPageData));
 
-			XLogRegisterData((char *) &data,
+			XLogRegisterData(&data,
 							 sizeof(ginxlogDeleteListPages));
 
 			recptr = XLogInsert(RM_GIN_ID, XLOG_GIN_DELETE_LISTPAGE);
@@ -892,7 +892,7 @@ ginInsertCleanup(GinState *ginstate, bool full_clean,
 		 */
 		processPendingPage(&accum, &datums, page, FirstOffsetNumber);
 
-		vacuum_delay_point();
+		vacuum_delay_point(false);
 
 		/*
 		 * Is it time to flush memory to disk?	Flush if we are at the end of
@@ -929,7 +929,7 @@ ginInsertCleanup(GinState *ginstate, bool full_clean,
 			{
 				ginEntryInsert(ginstate, attnum, key, category,
 							   list, nlist, NULL);
-				vacuum_delay_point();
+				vacuum_delay_point(false);
 			}
 
 			/*
@@ -1002,7 +1002,7 @@ ginInsertCleanup(GinState *ginstate, bool full_clean,
 		/*
 		 * Read next page in pending list
 		 */
-		vacuum_delay_point();
+		vacuum_delay_point(false);
 		buffer = ReadBuffer(index, blkno);
 		LockBuffer(buffer, GIN_SHARE);
 		page = BufferGetPage(buffer);

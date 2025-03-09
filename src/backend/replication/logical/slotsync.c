@@ -1326,7 +1326,7 @@ reset_syncing_flag()
  * information periodically in order to create and sync the slots.
  */
 void
-ReplSlotSyncWorkerMain(char *startup_data, size_t startup_data_len)
+ReplSlotSyncWorkerMain(const void *startup_data, size_t startup_data_len)
 {
 	WalReceiverConn *wrconn = NULL;
 	char	   *dbname;
@@ -1541,9 +1541,7 @@ update_synced_slots_inactive_since(void)
 			if (now == 0)
 				now = GetCurrentTimestamp();
 
-			SpinLockAcquire(&s->mutex);
-			s->inactive_since = now;
-			SpinLockRelease(&s->mutex);
+			ReplicationSlotSetInactiveSince(s, now, true);
 		}
 	}
 

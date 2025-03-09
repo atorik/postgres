@@ -602,6 +602,7 @@ SELECT pg_stat_get_subscription_stats(NULL);
 -- - extends of relations using shared buffers
 -- - fsyncs done to ensure the durability of data dirtying shared buffers
 -- - shared buffer hits
+-- - WAL writes and fsyncs in IOContext IOCONTEXT_NORMAL
 
 -- There is no test for blocks evicted from shared buffers, because we cannot
 -- be sure of the state of shared buffers at the point the test is run.
@@ -621,6 +622,9 @@ SELECT sum(writes) AS writes, sum(fsyncs) AS fsyncs
 SELECT sum(writes) AS writes, sum(fsyncs) AS fsyncs
   FROM pg_stat_get_backend_io(pg_backend_pid())
   WHERE object = 'relation' \gset my_io_sum_shared_before_
+SELECT sum(writes) AS writes, sum(fsyncs) AS fsyncs
+  FROM pg_stat_io
+  WHERE context = 'normal' AND object = 'wal' \gset io_sum_wal_normal_before_
 CREATE TABLE test_io_shared(a int);
 INSERT INTO test_io_shared SELECT i FROM generate_series(1,100)i;
 SELECT pg_stat_force_next_flush();
@@ -649,6 +653,13 @@ SELECT sum(writes) AS writes, sum(fsyncs) AS fsyncs
 SELECT :my_io_sum_shared_after_writes >= :my_io_sum_shared_before_writes;
 SELECT current_setting('fsync') = 'off'
   OR :my_io_sum_shared_after_fsyncs >= :my_io_sum_shared_before_fsyncs;
+SELECT sum(writes) AS writes, sum(fsyncs) AS fsyncs
+  FROM pg_stat_io
+  WHERE context = 'normal' AND object = 'wal' \gset io_sum_wal_normal_after_
+SELECT current_setting('synchronous_commit') = 'on';
+SELECT :io_sum_wal_normal_after_writes > :io_sum_wal_normal_before_writes;
+SELECT current_setting('fsync') = 'off'
+  OR :io_sum_wal_normal_after_fsyncs > :io_sum_wal_normal_before_fsyncs;
 
 -- Change the tablespace so that the table is rewritten directly, then SELECT
 -- from it to cause it to be read back into shared buffers.
@@ -883,5 +894,21 @@ SELECT COUNT(*) FROM brin_hot_3 WHERE a = 2;
 DROP TABLE brin_hot_3;
 
 SET enable_seqscan = on;
+
+-- Test that estimation of relation size works with tuples wider than the
+-- relation fillfactor. We create a table with wide inline attributes and
+-- low fillfactor, insert rows and then see how many rows EXPLAIN shows
+-- before running analyze. We disable autovacuum so that it does not
+-- interfere with the test.
+CREATE TABLE table_fillfactor (
+  n char(1000)
+) with (fillfactor=10, autovacuum_enabled=off);
+
+INSERT INTO table_fillfactor
+SELECT 'x' FROM generate_series(1,1000);
+
+SELECT * FROM check_estimated_rows('SELECT * FROM table_fillfactor');
+
+DROP TABLE table_fillfactor;
 
 -- End of Stats Test

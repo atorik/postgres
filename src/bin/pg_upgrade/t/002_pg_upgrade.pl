@@ -6,9 +6,8 @@ use warnings FATAL => 'all';
 
 use Cwd            qw(abs_path);
 use File::Basename qw(dirname);
-use File::Compare;
-use File::Find qw(find);
-use File::Path qw(rmtree);
+use File::Find     qw(find);
+use File::Path     qw(rmtree);
 
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
@@ -279,6 +278,9 @@ push @initdb_params, ('--locale-provider', 'libc');
 $node_params{extra} = \@initdb_params;
 $newnode->init(%node_params);
 
+# Stabilize stats for comparison.
+$newnode->append_conf('postgresql.conf', 'autovacuum = off');
+
 my $newbindir = $newnode->config_data('--bindir');
 my $oldbindir = $oldnode->config_data('--bindir');
 
@@ -314,6 +316,10 @@ if (defined($ENV{oldinstall}))
 			"ran version adaptation commands for database $updb");
 	}
 }
+
+# Stabilize stats before pg_dumpall.
+$oldnode->append_conf('postgresql.conf', 'autovacuum = off');
+$oldnode->restart;
 
 # Take a dump before performing the upgrade as a base comparison. Note
 # that we need to use pg_dumpall from the new node here.
@@ -515,20 +521,7 @@ my $dump1_filtered = filter_dump(1, $oldnode->pg_version, $dump1_file);
 my $dump2_filtered = filter_dump(0, $oldnode->pg_version, $dump2_file);
 
 # Compare the two dumps, there should be no differences.
-my $compare_res = compare($dump1_filtered, $dump2_filtered);
-is($compare_res, 0, 'old and new dumps match after pg_upgrade');
-
-# Provide more context if the dumps do not match.
-if ($compare_res != 0)
-{
-	my ($stdout, $stderr) =
-	  run_command([ 'diff', '-u', $dump1_filtered, $dump2_filtered ]);
-	print "=== diff of $dump1_filtered and $dump2_filtered\n";
-	print "=== stdout ===\n";
-	print $stdout;
-	print "=== stderr ===\n";
-	print $stderr;
-	print "=== EOF ===\n";
-}
+compare_files($dump1_filtered, $dump2_filtered,
+	'old and new dumps match after pg_upgrade');
 
 done_testing();

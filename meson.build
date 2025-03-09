@@ -557,7 +557,8 @@ test_c_args = cppflags + cflags
 bsd_authopt = get_option('bsd_auth')
 bsd_auth = not_found_dep
 if cc.check_header('bsd_auth.h', required: bsd_authopt,
-    args: test_c_args, include_directories: postgres_inc)
+    args: test_c_args, prefix: '#include <sys/types.h>',
+    include_directories: postgres_inc)
   cdata.set('USE_BSD_AUTH', 1)
   bsd_auth = declare_dependency()
 endif
@@ -850,6 +851,101 @@ if not icuopt.disabled()
 else
   icu = not_found_dep
   icu_i18n = not_found_dep
+endif
+
+
+
+###############################################################
+# Library: libcurl
+###############################################################
+
+libcurlopt = get_option('libcurl')
+if not libcurlopt.disabled()
+  # Check for libcurl 7.61.0 or higher (corresponding to RHEL8 and the ability
+  # to explicitly set TLS 1.3 ciphersuites).
+  libcurl = dependency('libcurl', version: '>= 7.61.0', required: libcurlopt)
+  if libcurl.found()
+    cdata.set('USE_LIBCURL', 1)
+
+    # Check to see whether the current platform supports thread-safe Curl
+    # initialization.
+    libcurl_threadsafe_init = false
+
+    if not meson.is_cross_build()
+      r = cc.run('''
+        #include <curl/curl.h>
+
+        int main(void)
+        {
+            curl_version_info_data *info;
+
+            if (curl_global_init(CURL_GLOBAL_ALL))
+                return -1;
+
+            info = curl_version_info(CURLVERSION_NOW);
+        #ifdef CURL_VERSION_THREADSAFE
+            if (info->features & CURL_VERSION_THREADSAFE)
+                return 0;
+        #endif
+
+            return 1;
+        }''',
+        name: 'test for curl_global_init thread safety',
+        dependencies: libcurl,
+      )
+
+      assert(r.compiled())
+      if r.returncode() == 0
+        libcurl_threadsafe_init = true
+        message('curl_global_init is thread-safe')
+      elif r.returncode() == 1
+        message('curl_global_init is not thread-safe')
+      else
+        message('curl_global_init failed; assuming not thread-safe')
+      endif
+    endif
+
+    if libcurl_threadsafe_init
+      cdata.set('HAVE_THREADSAFE_CURL_GLOBAL_INIT', 1)
+    endif
+
+    # Warn if a thread-friendly DNS resolver isn't built.
+    libcurl_async_dns = false
+
+    if not meson.is_cross_build()
+      r = cc.run('''
+        #include <curl/curl.h>
+
+        int main(void)
+        {
+            curl_version_info_data *info;
+
+            if (curl_global_init(CURL_GLOBAL_ALL))
+                return -1;
+
+            info = curl_version_info(CURLVERSION_NOW);
+            return (info->features & CURL_VERSION_ASYNCHDNS) ? 0 : 1;
+        }''',
+        name: 'test for curl support for asynchronous DNS',
+        dependencies: libcurl,
+      )
+
+      assert(r.compiled())
+      if r.returncode() == 0
+        libcurl_async_dns = true
+      endif
+    endif
+
+    if not libcurl_async_dns
+      warning('''
+*** The installed version of libcurl does not support asynchronous DNS
+*** lookups. Connection timeouts will not be honored during DNS resolution,
+*** which may lead to hangs in client programs.''')
+    endif
+  endif
+
+else
+  libcurl = not_found_dep
 endif
 
 
@@ -3028,12 +3124,26 @@ frontend_shlib_code = declare_dependency(
   dependencies: [shlib_code, os_deps, libintl],
 )
 
+# For frontend code that doesn't use fe_utils - this mainly exists for libpq's
+# tests, which are defined before fe_utils is defined, as fe_utils depends on
+# libpq.
+frontend_no_fe_utils_code = declare_dependency(
+  include_directories: [postgres_inc],
+  link_with: [common_static, pgport_static],
+  sources: generated_headers,
+  dependencies: [os_deps, libintl],
+)
+
 # Dependencies both for static and shared libpq
 libpq_deps += [
   thread_dep,
 
   gssapi,
   ldap_r,
+  # XXX libcurl must link after libgssapi_krb5 on FreeBSD to avoid segfaults
+  # during gss_acquire_cred(). This is possibly related to Curl's Heimdal
+  # dependency on that platform?
+  libcurl,
   libintl,
   ssl,
 ]
@@ -3095,7 +3205,6 @@ subdir('src')
 subdir('contrib')
 
 subdir('src/test')
-subdir('src/interfaces/libpq/test')
 subdir('src/interfaces/ecpg/test')
 
 subdir('doc/src/sgml')
@@ -3189,15 +3298,21 @@ if libintl.found() and meson.version().version_compare('>=0.60')
 endif
 
 
-all_built = [
+# all targets that 'meson install' needs
+installed_targets = [
   backend_targets,
   bin_targets,
   libpq_st,
   pl_targets,
   contrib_targets,
   nls_mo_targets,
-  testprep_targets,
   ecpg_targets,
+]
+
+# all targets that require building code
+all_built = [
+  installed_targets,
+  testprep_targets,
 ]
 
 # Meson's default install target is quite verbose. Provide one that is quiet.
@@ -3206,7 +3321,7 @@ install_quiet = custom_target('install-quiet',
   build_always_stale: true,
   build_by_default: false,
   command: [meson_bin, meson_args, 'install', '--quiet', '--no-rebuild'],
-  depends: all_built,
+  depends: installed_targets,
 )
 
 # Target to install files used for tests, which aren't installed by default
@@ -3261,6 +3376,7 @@ test('tmp_install',
     priority: setup_tests_priority,
     timeout: 300,
     is_parallel: false,
+    depends: installed_targets,
     suite: ['setup'])
 
 test('install_test_files',
@@ -3285,6 +3401,8 @@ test_initdb_template = meson.build_root() / 'tmp_install' / 'initdb-template'
 test_env.set('PG_REGRESS', pg_regress.full_path())
 test_env.set('REGRESS_SHLIB', regress_module.full_path())
 test_env.set('INITDB_TEMPLATE', test_initdb_template)
+# for Cluster.pm's portlock logic
+test_env.set('top_builddir', meson.build_root())
 
 # Add the temporary installation to the library search path on platforms where
 # that works (everything but windows, basically). On windows everything
@@ -3704,6 +3822,7 @@ if meson.version().version_compare('>=0.57')
       'gss': gssapi,
       'icu': icu,
       'ldap': ldap,
+      'libcurl': libcurl,
       'libxml': libxml,
       'libxslt': libxslt,
       'llvm': llvm,

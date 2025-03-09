@@ -1137,7 +1137,7 @@ backtrack:
 	backtrack_to = P_NONE;
 
 	/* call vacuum_delay_point while not holding any buffer lock */
-	vacuum_delay_point();
+	vacuum_delay_point(false);
 
 	/*
 	 * We can't use _bt_getbuf() here because it always applies
@@ -1513,7 +1513,7 @@ btgettreeheight(Relation rel)
 }
 
 CompareType
-bttranslatestrategy(StrategyNumber strategy, Oid opfamily, Oid opcintype)
+bttranslatestrategy(StrategyNumber strategy, Oid opfamily)
 {
 	switch (strategy)
 	{
@@ -1533,7 +1533,7 @@ bttranslatestrategy(StrategyNumber strategy, Oid opfamily, Oid opcintype)
 }
 
 StrategyNumber
-bttranslatecmptype(CompareType cmptype, Oid opfamily, Oid opcintype)
+bttranslatecmptype(CompareType cmptype, Oid opfamily)
 {
 	switch (cmptype)
 	{

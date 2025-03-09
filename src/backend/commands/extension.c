@@ -907,11 +907,13 @@ execute_sql_string(const char *sql, const char *filename)
 				QueryDesc  *qdesc;
 
 				qdesc = CreateQueryDesc(stmt,
+										NULL,
 										sql,
 										GetActiveSnapshot(), NULL,
 										dest, NULL, NULL, 0);
 
-				ExecutorStart(qdesc, 0);
+				if (!ExecutorStart(qdesc, 0))
+					elog(ERROR, "ExecutorStart() failed unexpectedly");
 				ExecutorRun(qdesc, ForwardScanDirection, 0);
 				ExecutorFinish(qdesc);
 				ExecutorEnd(qdesc);
@@ -982,7 +984,7 @@ execute_extension_script(Oid extensionOid, ExtensionControlFile *control,
 						 const char *from_version,
 						 const char *version,
 						 List *requiredSchemas,
-						 const char *schemaName, Oid schemaOid)
+						 const char *schemaName)
 {
 	bool		switch_to_superuser = false;
 	char	   *filename;
@@ -1788,7 +1790,7 @@ CreateExtensionInternal(char *extensionName,
 	execute_extension_script(extensionOid, control,
 							 NULL, versionName,
 							 requiredSchemas,
-							 schemaName, schemaOid);
+							 schemaName);
 
 	/*
 	 * If additional update scripts have to be executed, apply the updates as
@@ -3380,7 +3382,7 @@ ApplyExtensionUpdates(Oid extensionOid,
 		execute_extension_script(extensionOid, control,
 								 oldVersionName, versionName,
 								 requiredSchemas,
-								 schemaName, schemaOid);
+								 schemaName);
 
 		/*
 		 * Update prior-version name and loop around.  Since
