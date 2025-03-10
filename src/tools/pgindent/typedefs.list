@@ -501,6 +501,7 @@ ConvertRowtypeExpr
 CookedConstraint
 CopyDest
 CopyFormatOptions
+CopyFromRoutine
 CopyFromState
 CopyFromStateData
 CopyHeaderChoice
@@ -512,6 +513,7 @@ CopyMultiInsertInfo
 CopyOnErrorChoice
 CopySource
 CopyStmt
+CopyToRoutine
 CopyToState
 CopyToStateData
 Cost
@@ -1030,11 +1032,14 @@ GinBtreeData
 GinBtreeDataLeafInsertData
 GinBtreeEntryInsertData
 GinBtreeStack
+GinBuffer
+GinBuildShared
 GinBuildState
 GinChkVal
 GinEntries
 GinEntryAccumulator
 GinIndexStat
+GinLeader
 GinMetaPageData
 GinNullCategory
 GinOptions
@@ -1047,9 +1052,11 @@ GinScanEntry
 GinScanKey
 GinScanOpaque
 GinScanOpaqueData
+GinSegmentInfo
 GinState
 GinStatsData
 GinTernaryValue
+GinTuple
 GinTupleCollector
 GinVacuumState
 GistBuildMode
@@ -1623,6 +1630,7 @@ Material
 MaterialPath
 MaterialState
 MdfdVec
+MdPathStr
 Memoize
 MemoizeEntry
 MemoizeInstrumentation
@@ -2188,6 +2196,7 @@ PgStat_SubXactStatus
 PgStat_TableCounts
 PgStat_TableStatus
 PgStat_TableXactStatus
+PgStat_WalCounters
 PgStat_WalStats
 PgXmlErrorContext
 PgXmlStrictness
@@ -2410,6 +2419,7 @@ RelMapFile
 RelMapping
 RelOptInfo
 RelOptKind
+RelPathStr
 RelStatsInfo
 RelToCheck
 RelToCluster

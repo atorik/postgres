@@ -3495,7 +3495,7 @@ ProcessInterrupts(void)
 		ProcessProcSignalBarrier();
 
 	if (ParallelMessagePending)
-		HandleParallelMessages();
+		ProcessParallelMessages();
 
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
@@ -3504,7 +3504,7 @@ ProcessInterrupts(void)
 		ProcessLogQueryPlanInterrupt();
 
 	if (ParallelApplyMessagePending)
-		HandleParallelApplyMessages();
+		ProcessParallelApplyMessages();
 }
 
 /*
