@@ -296,7 +296,8 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 					ereport(FATAL,
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
 							 errmsg("the database system is not yet accepting connections"),
-							 errdetail("Consistent recovery state has not been yet reached.")));
+							 errdetail("Consistent recovery state has not been yet reached, or a snappshot is pending because subtransaction is overflowed."),
+							 errhint("In the latter case, find and close the transaction with more than %d subtransactions", PGPROC_MAX_CACHED_SUBXIDS)));
 				else
 					ereport(FATAL,
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
