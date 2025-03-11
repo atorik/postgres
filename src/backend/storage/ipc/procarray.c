@@ -1128,8 +1128,9 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 			else
 			{
 				/*
-				 * Let postmaster know we are waiting for non-overflowed snapshot,
-				 * so that it can notify why connection is not yet acceptable.
+				 * Inform postmaster that we are waiting for a non-overflowed
+				 * snapshot, so it can notify clients why the connection is
+				 * not yet acceptable.
 				 */
 				SendPostmasterSignal(PMSIGNAL_SNAPSHOT_PENDING);
 				elog(DEBUG1,
@@ -1313,8 +1314,9 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 	else
 	{
 		/*
-		 * Let postmaster know we are waiting for non-overflowed snapshot,
-		 * so that it can notify why connection is not yet acceptable.
+		 * Inform postmaster that we are waiting for a non-overflowed
+		 * snapshot, so it can notify clients why the connection is not yet
+		 * acceptable.
 		 */
 		SendPostmasterSignal(PMSIGNAL_SNAPSHOT_PENDING);
 		elog(DEBUG1,

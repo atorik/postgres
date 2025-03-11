@@ -33,7 +33,8 @@
 typedef enum
 {
 	PMSIGNAL_RECOVERY_STARTED,	/* recovery has started */
-	PMSIGNAL_SNAPSHOT_PENDING,	/* */
+	PMSIGNAL_SNAPSHOT_PENDING,	/* snapshot is pending because of an
+								 * overflowed subtransaction */
 	PMSIGNAL_BEGIN_HOT_STANDBY, /* begin Hot Standby */
 	PMSIGNAL_ROTATE_LOGFILE,	/* send SIGUSR1 to syslogger to rotate logfile */
 	PMSIGNAL_START_AUTOVAC_LAUNCHER,	/* start an autovacuum launcher */

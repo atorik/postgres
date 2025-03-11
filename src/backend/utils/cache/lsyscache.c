@@ -690,10 +690,11 @@ get_op_btree_interpretation(Oid opno)
  *		semantics.
  *
  * This is trivially true if they are the same operator.  Otherwise,
- * we look to see if they can be found in the same btree or hash opfamily.
- * Either finding allows us to assume that they have compatible notions
- * of equality.  (The reason we need to do these pushups is that one might
- * be a cross-type operator; for instance int24eq vs int4eq.)
+ * Otherwise, we look to see if they both belong to an opfamily that
+ * guarantees compatible semantics for equality.  Either finding allows us to
+ * assume that they have compatible notions of equality.  (The reason we need
+ * to do these pushups is that one might be a cross-type operator; for
+ * instance int24eq vs int4eq.)
  */
 bool
 equality_ops_are_compatible(Oid opno1, Oid opno2)
@@ -717,11 +718,15 @@ equality_ops_are_compatible(Oid opno1, Oid opno2)
 		HeapTuple	op_tuple = &catlist->members[i]->tuple;
 		Form_pg_amop op_form = (Form_pg_amop) GETSTRUCT(op_tuple);
 
-		/* must be btree or hash */
-		if (op_form->amopmethod == BTREE_AM_OID ||
-			op_form->amopmethod == HASH_AM_OID)
+		/*
+		 * op_in_opfamily() is cheaper than GetIndexAmRoutineByAmId(), so
+		 * check it first
+		 */
+		if (op_in_opfamily(opno2, op_form->amopfamily))
 		{
-			if (op_in_opfamily(opno2, op_form->amopfamily))
+			IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(op_form->amopmethod, false);
+
+			if (amroutine->amconsistentequality)
 			{
 				result = true;
 				break;
@@ -739,12 +744,13 @@ equality_ops_are_compatible(Oid opno1, Oid opno2)
  *		Return true if the two given comparison operators have compatible
  *		semantics.
  *
- * This is trivially true if they are the same operator.  Otherwise,
- * we look to see if they can be found in the same btree opfamily.
- * For example, '<' and '>=' ops match if they belong to the same family.
+ * This is trivially true if they are the same operator.  Otherwise, we look
+ * to see if they both belong to an opfamily that guarantees compatible
+ * semantics for ordering.  (For example, for btree, '<' and '>=' ops match if
+ * they belong to the same family.)
  *
- * (This is identical to equality_ops_are_compatible(), except that we
- * don't bother to examine hash opclasses.)
+ * (This is identical to equality_ops_are_compatible(), except that we check
+ * amconsistentordering instead of amconsistentequality.)
  */
 bool
 comparison_ops_are_compatible(Oid opno1, Oid opno2)
@@ -768,9 +774,15 @@ comparison_ops_are_compatible(Oid opno1, Oid opno2)
 		HeapTuple	op_tuple = &catlist->members[i]->tuple;
 		Form_pg_amop op_form = (Form_pg_amop) GETSTRUCT(op_tuple);
 
-		if (op_form->amopmethod == BTREE_AM_OID)
+		/*
+		 * op_in_opfamily() is cheaper than GetIndexAmRoutineByAmId(), so
+		 * check it first
+		 */
+		if (op_in_opfamily(opno2, op_form->amopfamily))
 		{
-			if (op_in_opfamily(opno2, op_form->amopfamily))
+			IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(op_form->amopmethod, false);
+
+			if (amroutine->amconsistentordering)
 			{
 				result = true;
 				break;

@@ -51,10 +51,11 @@ pgstat_report_wal(bool force)
 	nowait = !force;
 
 	/* flush wal stats */
-	pgstat_flush_wal(nowait);
+	(void) pgstat_wal_flush_cb(nowait);
 
 	/* flush IO stats */
 	pgstat_flush_io(nowait);
+	(void) pgstat_flush_backend(nowait, PGSTAT_BACKEND_FLUSH_IO);
 }
 
 /*
@@ -67,15 +68,6 @@ pgstat_fetch_stat_wal(void)
 	pgstat_snapshot_fixed(PGSTAT_KIND_WAL);
 
 	return &pgStatLocal.snapshot.wal;
-}
-
-/*
- * Simple wrapper of pgstat_wal_flush_cb()
- */
-void
-pgstat_flush_wal(bool nowait)
-{
-	(void) pgstat_wal_flush_cb(nowait);
 }
 
 /*
@@ -115,7 +107,7 @@ pgstat_wal_flush_cb(bool nowait)
 		return true;
 
 #define WALSTAT_ACC(fld, var_to_add) \
-	(stats_shmem->stats.fld += var_to_add.fld)
+	(stats_shmem->stats.wal_counters.fld += var_to_add.fld)
 	WALSTAT_ACC(wal_records, wal_usage_diff);
 	WALSTAT_ACC(wal_fpi, wal_usage_diff);
 	WALSTAT_ACC(wal_bytes, wal_usage_diff);

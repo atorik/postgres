@@ -333,7 +333,8 @@ typedef enum
 	PM_INIT,					/* postmaster starting */
 	PM_STARTUP,					/* waiting for startup subprocess */
 	PM_RECOVERY,				/* in archive recovery mode */
-	PM_SNAPSHOT_PENDING,		/* */
+	PM_SNAPSHOT_PENDING,		/* in snapshot pending because of an
+								 * overflowed subtransaction */
 	PM_HOT_STANDBY,				/* in hot standby mode */
 	PM_RUN,						/* normal "database is alive" state */
 	PM_STOP_BACKENDS,			/* need to stop remaining backends */
@@ -549,7 +550,7 @@ PostmasterMain(int argc, char *argv[])
 	pqsignal(SIGCHLD, handle_pm_child_exit_signal);
 
 	/* This may configure SIGURG, depending on platform. */
-	InitializeLatchSupport();
+	InitializeWaitEventSupport();
 	InitProcessLocalLatch();
 
 	/*
@@ -1816,7 +1817,8 @@ canAcceptConnections(BackendType backend_type)
 			return CAC_NOTCONSISTENT;	/* not yet at consistent recovery
 										 * state */
 		else if (!FatalError && pmState == PM_SNAPSHOT_PENDING)
-			return CAC_SNAPSHOT_PENDING;	/* */
+			return CAC_SNAPSHOT_PENDING;	/* waiting for non-overflowed
+											 * snapshot */
 		else
 			return CAC_RECOVERY;	/* else must be crash recovery */
 	}

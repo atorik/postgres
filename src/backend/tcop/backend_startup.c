@@ -296,7 +296,7 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 					ereport(FATAL,
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
 							 errmsg("the database system is not yet accepting connections"),
-							 errdetail("Consistent recovery state has not been yet reached")));
+							 errdetail("Consistent recovery state has not been yet reached.")));
 				else
 					ereport(FATAL,
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
@@ -308,8 +308,8 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 					ereport(FATAL,
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
 							 errmsg("the database system is not yet accepting connections"),
-							 errdetail("Snapshot is pending because subtransaction is overflowed"),
-							 errhint("aaaaaaaaaaaa")));
+							 errdetail("Snapshot is pending because subtransaction is overflowed."),
+							 errhint("Find and close a transaction with over %d subtransactions", PGPROC_MAX_CACHED_SUBXIDS)));
 				else
 					ereport(FATAL,
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
