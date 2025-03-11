@@ -202,7 +202,7 @@ RelationFindReplTupleByIndex(Relation rel, Oid idxoid,
 	skey_attoff = build_replindex_scan_key(skey, rel, idxrel, searchslot);
 
 	/* Start an index scan. */
-	scan = index_beginscan(rel, idxrel, &snap, skey_attoff, 0);
+	scan = index_beginscan(rel, idxrel, &snap, NULL, skey_attoff, 0);
 
 retry:
 	found = false;
@@ -253,7 +253,7 @@ retry:
 
 		PushActiveSnapshot(GetLatestSnapshot());
 
-		res = table_tuple_lock(rel, &(outslot->tts_tid), GetLatestSnapshot(),
+		res = table_tuple_lock(rel, &(outslot->tts_tid), GetActiveSnapshot(),
 							   outslot,
 							   GetCurrentCommandId(false),
 							   lockmode,
@@ -411,7 +411,7 @@ retry:
 
 		PushActiveSnapshot(GetLatestSnapshot());
 
-		res = table_tuple_lock(rel, &(outslot->tts_tid), GetLatestSnapshot(),
+		res = table_tuple_lock(rel, &(outslot->tts_tid), GetActiveSnapshot(),
 							   outslot,
 							   GetCurrentCommandId(false),
 							   lockmode,
@@ -468,7 +468,7 @@ retry:
 
 	PushActiveSnapshot(GetLatestSnapshot());
 
-	res = table_tuple_lock(rel, &conflictTid, GetLatestSnapshot(),
+	res = table_tuple_lock(rel, &conflictTid, GetActiveSnapshot(),
 						   *conflictslot,
 						   GetCurrentCommandId(false),
 						   LockTupleShare,
