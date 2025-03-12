@@ -309,7 +309,7 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
 							 errmsg("the database system is not yet accepting connections"),
 							 errdetail("Snapshot is pending because subtransaction is overflowed."),
-							 errhint("Find and close a transaction with over %d subtransactions", PGPROC_MAX_CACHED_SUBXIDS)));
+							 errhint("Find and close a transaction with more than %d subtransactions", PGPROC_MAX_CACHED_SUBXIDS)));
 				else
 					ereport(FATAL,
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
