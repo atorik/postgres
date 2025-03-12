@@ -1812,7 +1812,7 @@ canAcceptConnections(BackendType backend_type)
 		else if (!FatalError && pmState == PM_STARTUP)
 			return CAC_STARTUP; /* normal startup */
 		else if (!FatalError && pmState == PM_RECOVERY)
-			return CAC_NOTCONSISTENT;	/* not yet at consistent recovery
+			return CAC_NOTCONSISTENT_OR_OVERFLOWED;	/* not yet at consistent recovery
 										 * state */
 		else
 			return CAC_RECOVERY;	/* else must be crash recovery */

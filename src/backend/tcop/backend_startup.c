@@ -291,7 +291,7 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 						(errcode(ERRCODE_CANNOT_CONNECT_NOW),
 						 errmsg("the database system is starting up")));
 				break;
-			case CAC_NOTCONSISTENT:
+			case CAC_NOTCONSISTENT_OR_OVERFLOWED:
 				if (EnableHotStandby)
 					ereport(FATAL,
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
