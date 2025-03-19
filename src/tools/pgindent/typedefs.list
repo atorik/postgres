@@ -157,6 +157,7 @@ ArrayType
 AsyncQueueControl
 AsyncQueueEntry
 AsyncRequest
+ATAlterConstraint
 AttInMetadata
 AttStatsSlot
 AttoptCacheEntry
@@ -371,6 +372,9 @@ CState
 CTECycleClause
 CTEMaterialize
 CTESearchClause
+CURL
+CURLM
+CURLoption
 CV
 CachedExpression
 CachedPlan
@@ -1724,6 +1728,7 @@ NumericDigit
 NumericSortSupport
 NumericSumAccum
 NumericVar
+OAuthValidatorCallbacks
 OM_uint32
 OP
 OSAPerGroupState
@@ -1792,6 +1797,7 @@ PGAsyncStatusType
 PGCALL2
 PGChecksummablePage
 PGContextVisibility
+PGErrorVerbosity
 PGEvent
 PGEventConnDestroy
 PGEventConnReset
@@ -1832,6 +1838,7 @@ PGVerbosity
 PG_Locale_Strategy
 PG_Lock_Status
 PG_init_t
+PGauthData
 PGcancel
 PGcancelConn
 PGcmdQueueEntry
@@ -1839,7 +1846,9 @@ PGconn
 PGdataValue
 PGlobjfuncs
 PGnotify
+PGoauthBearerRequest
 PGpipelineStatus
+PGpromptOAuthDevice
 PGresAttDesc
 PGresAttValue
 PGresParamDesc
@@ -1873,6 +1882,7 @@ PLpgSQL_rec
 PLpgSQL_recfield
 PLpgSQL_resolve_option
 PLpgSQL_row
+PLpgSQL_rwopt
 PLpgSQL_stmt
 PLpgSQL_stmt_assert
 PLpgSQL_stmt_assign
@@ -1951,6 +1961,7 @@ PQArgBlock
 PQEnvironmentOption
 PQExpBuffer
 PQExpBufferData
+PQauthDataHook_type
 PQcommMethods
 PQconninfoOption
 PQnoticeProcessor
@@ -2162,7 +2173,6 @@ PgStat_KindInfo
 PgStat_LocalState
 PgStat_PendingDroppedStatsItem
 PgStat_PendingIO
-PgStat_PendingWalStats
 PgStat_SLRUStats
 PgStat_ShmemControl
 PgStat_Snapshot
@@ -2400,6 +2410,7 @@ RelMapFile
 RelMapping
 RelOptInfo
 RelOptKind
+RelStatsInfo
 RelToCheck
 RelToCluster
 RelabelType
@@ -2593,6 +2604,7 @@ SeenRelsEntry
 SelectLimit
 SelectStmt
 Selectivity
+SelfJoinCandidate
 SemTPadded
 SemiAntiJoinFactors
 SeqScan
@@ -2688,6 +2700,7 @@ SkipPages
 SlabBlock
 SlabContext
 SlabSlot
+SlotInvalidationCauseMap
 SlotNumber
 SlotSyncCtxStruct
 SlruCtl
@@ -2804,6 +2817,7 @@ SubscriptionRelState
 SummarizerReadLocalXLogPrivate
 SupportRequestCost
 SupportRequestIndexCondition
+SupportRequestModifyInPlace
 SupportRequestOptimizeWindowClause
 SupportRequestRows
 SupportRequestSelectivity
@@ -3090,6 +3104,8 @@ VacuumRelation
 VacuumStmt
 ValidIOData
 ValidateIndexState
+ValidatorModuleState
+ValidatorModuleResult
 ValuesScan
 ValuesScanState
 Var
@@ -3415,6 +3431,7 @@ core_yy_extra_type
 core_yyscan_t
 corrupt_items
 cost_qual_eval_context
+count_param_references_context
 cp_hash_func
 create_upper_paths_hook_type
 createdb_failure_params
@@ -3486,6 +3503,7 @@ explain_get_index_name_hook_type
 f_smgr
 fasthash_state
 fd_set
+fe_oauth_state
 fe_scram_state
 fe_scram_state_enum
 fetch_range_request
@@ -3710,6 +3728,9 @@ pam_handle_t
 parallel_worker_main_type
 parse_error_callback_arg
 partition_method_t
+pe_test_config
+pe_test_escape_func
+pe_test_vector
 pendingPosition
 pending_label
 pgParameterStatus
@@ -4051,6 +4072,7 @@ unicodeStyleColumnFormat
 unicodeStyleFormat
 unicodeStyleRowFormat
 unicode_linestyle
+UniqueRelInfo
 unit_conversion
 unlogged_relation_entry
 utf_local_conversion_func

@@ -794,7 +794,7 @@ restart:
 				readOff = ReadPageInternal(state, targetPagePtr,
 										   pageHeaderSize + len);
 
-			memcpy(buffer, (char *) contdata, len);
+			memcpy(buffer, contdata, len);
 			buffer += len;
 			gotlen += len;
 
@@ -1557,7 +1557,7 @@ WALRead(XLogReaderState *state,
 
 #ifndef FRONTEND
 		/* Measure I/O timing when reading segment */
-		io_start = pgstat_prepare_io_time(track_io_timing);
+		io_start = pgstat_prepare_io_time();
 
 		pgstat_report_wait_start(WAIT_EVENT_WAL_READ);
 #endif

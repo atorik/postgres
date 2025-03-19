@@ -1224,6 +1224,7 @@ exec_simple_query(const char *query_string)
 						  query_string,
 						  commandTag,
 						  plantree_list,
+						  NULL,
 						  NULL);
 
 		/*
@@ -2025,7 +2026,8 @@ exec_bind_message(StringInfo input_message)
 					  query_string,
 					  psrc->commandTag,
 					  cplan->stmt_list,
-					  cplan);
+					  cplan,
+					  psrc);
 
 	/* Done with the snapshot used for parameter I/O and parsing/planning */
 	if (snapshot_set)
@@ -4991,8 +4993,8 @@ ShowUsage(const char *title)
 
 	getrusage(RUSAGE_SELF, &r);
 	gettimeofday(&elapse_t, NULL);
-	memcpy((char *) &user, (char *) &r.ru_utime, sizeof(user));
-	memcpy((char *) &sys, (char *) &r.ru_stime, sizeof(sys));
+	memcpy(&user, &r.ru_utime, sizeof(user));
+	memcpy(&sys, &r.ru_stime, sizeof(sys));
 	if (elapse_t.tv_usec < Save_t.tv_usec)
 	{
 		elapse_t.tv_sec--;

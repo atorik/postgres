@@ -530,7 +530,8 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	}
 
 	/* run it (if needed) and produce output */
-	ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
+	ExplainOnePlan(plan, NULL, NULL, -1, into, es, queryString, params,
+				   queryEnv,
 				   &planduration, (es->buffers ? &bufusage : NULL),
 				   (es->buffers ? &storageio : NULL),
 				   es->memory ? &mem_counters : NULL);
@@ -653,7 +654,9 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
  * to call it.
  */
 void
-ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
+ExplainOnePlan(PlannedStmt *plannedstmt, CachedPlan *cplan,
+			   CachedPlanSource *plansource, int query_index,
+			   IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
 			   const BufferUsage *bufusage, const StorageIOUsage *planstorageio,
@@ -722,7 +725,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		dest = None_Receiver;
 
 	/* Create a QueryDesc for the query */
-	queryDesc = CreateQueryDesc(plannedstmt, queryString,
+	queryDesc = CreateQueryDesc(plannedstmt, cplan, queryString,
 								GetActiveSnapshot(), InvalidSnapshot,
 								dest, params, queryEnv, instrument_option);
 
@@ -736,8 +739,17 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	if (into)
 		eflags |= GetIntoRelEFlags(into);
 
-	/* call ExecutorStart to prepare the plan for execution */
-	ExecutorStart(queryDesc, eflags);
+	/* Prepare the plan for execution. */
+	if (queryDesc->cplan)
+	{
+		ExecutorStartCachedPlan(queryDesc, eflags, plansource, query_index);
+		Assert(queryDesc->planstate);
+	}
+	else
+	{
+		if (!ExecutorStart(queryDesc, eflags))
+			elog(ERROR, "ExecutorStart() failed unexpectedly");
+	}
 
 	/* Execute the plan for statistics if asked for */
 	if (es->analyze)
@@ -2038,14 +2050,15 @@ ExplainNode(PlanState *planstate, List *ancestors,
 
 		if (es->format == EXPLAIN_FORMAT_TEXT)
 		{
+			appendStringInfo(es->str, " (actual ");
+
 			if (es->timing)
-				appendStringInfo(es->str,
-								 " (actual time=%.3f..%.3f rows=%.0f loops=%.0f)",
-								 startup_ms, total_ms, rows, nloops);
+				appendStringInfo(es->str, "time=%.3f..%.3f ", startup_ms, total_ms);
+
+			if (nloops > 1)
+				appendStringInfo(es->str, "rows=%.2f loops=%.0f)", rows, nloops);
 			else
-				appendStringInfo(es->str,
-								 " (actual rows=%.0f loops=%.0f)",
-								 rows, nloops);
+				appendStringInfo(es->str, "rows=%.0f loops=%.0f)", rows, nloops);
 		}
 		else
 		{
@@ -2056,8 +2069,16 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				ExplainPropertyFloat("Actual Total Time", "ms", total_ms,
 									 3, es);
 			}
-			ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
-			ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
+			if (nloops > 1)
+			{
+				ExplainPropertyFloat("Actual Rows", NULL, rows, 2, es);
+				ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
+			}
+			else
+			{
+				ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
+				ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
+			}
 		}
 	}
 	else if (es->analyze)
@@ -2109,14 +2130,14 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (es->format == EXPLAIN_FORMAT_TEXT)
 			{
 				ExplainIndentText(es);
+				appendStringInfo(es->str, "actual ");
 				if (es->timing)
-					appendStringInfo(es->str,
-									 "actual time=%.3f..%.3f rows=%.0f loops=%.0f\n",
-									 startup_ms, total_ms, rows, nloops);
+					appendStringInfo(es->str, "time=%.3f..%.3f", startup_ms, total_ms);
+
+				if (nloops > 1)
+					appendStringInfo(es->str, "rows=%.2f loops=%.0f\n", rows, nloops);
 				else
-					appendStringInfo(es->str,
-									 "actual rows=%.0f loops=%.0f\n",
-									 rows, nloops);
+					appendStringInfo(es->str, "rows=%.0f loops=%.0f\n", rows, nloops);
 			}
 			else
 			{
@@ -2127,8 +2148,17 @@ ExplainNode(PlanState *planstate, List *ancestors,
 					ExplainPropertyFloat("Actual Total Time", "ms",
 										 total_ms, 3, es);
 				}
-				ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
-				ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
+
+				if (nloops > 1)
+				{
+					ExplainPropertyFloat("Actual Rows", NULL, rows, 2, es);
+					ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
+				}
+				else
+				{
+					ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
+					ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
+				}
 			}
 
 			ExplainCloseWorker(n, es);
@@ -4344,7 +4374,7 @@ show_wal_usage(ExplainState *es, const WalUsage *usage)
 	{
 		/* Show only positive counter values. */
 		if ((usage->wal_records > 0) || (usage->wal_fpi > 0) ||
-			(usage->wal_bytes > 0))
+			(usage->wal_bytes > 0) || (usage->wal_buffers_full > 0))
 		{
 			ExplainIndentText(es);
 			appendStringInfoString(es->str, "WAL:");
@@ -4358,6 +4388,9 @@ show_wal_usage(ExplainState *es, const WalUsage *usage)
 			if (usage->wal_bytes > 0)
 				appendStringInfo(es->str, " bytes=" UINT64_FORMAT,
 								 usage->wal_bytes);
+			if (usage->wal_buffers_full > 0)
+				appendStringInfo(es->str, " buffers full=%lld",
+								 (long long) usage->wal_buffers_full);
 			appendStringInfoChar(es->str, '\n');
 		}
 	}
@@ -4369,6 +4402,8 @@ show_wal_usage(ExplainState *es, const WalUsage *usage)
 							   usage->wal_fpi, es);
 		ExplainPropertyUInteger("WAL Bytes", NULL,
 								usage->wal_bytes, es);
+		ExplainPropertyInteger("WAL Buffers Full", NULL,
+							   usage->wal_buffers_full, es);
 	}
 }
 

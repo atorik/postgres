@@ -134,7 +134,6 @@ int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
 int			wal_decode_buffer_size = 512 * 1024;
-bool		track_wal_io_timing = false;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -2057,7 +2056,7 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 					WriteRqst.Flush = 0;
 					XLogWrite(WriteRqst, tli, false);
 					LWLockRelease(WALWriteLock);
-					PendingWalStats.wal_buffers_full++;
+					pgWalUsage.wal_buffers_full++;
 					TRACE_POSTGRESQL_WAL_BUFFER_WRITE_DIRTY_DONE();
 				}
 				/* Re-acquire WALBufMappingLock and retry */
@@ -2089,7 +2088,7 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 		 * Be sure to re-zero the buffer so that bytes beyond what we've
 		 * written will look like zeroes and not valid XLOG records...
 		 */
-		MemSet((char *) NewPage, 0, XLOG_BLCKSZ);
+		MemSet(NewPage, 0, XLOG_BLCKSZ);
 
 		/*
 		 * Fill the new page's header
@@ -2436,10 +2435,9 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 				errno = 0;
 
 				/*
-				 * Measure I/O timing to write WAL data, for pg_stat_io and/or
-				 * pg_stat_wal.
+				 * Measure I/O timing to write WAL data, for pg_stat_io.
 				 */
-				start = pgstat_prepare_io_time(track_io_timing || track_wal_io_timing);
+				start = pgstat_prepare_io_time();
 
 				pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
 				written = pg_pwrite(openLogFile, from, nleft, startoffset);
@@ -2447,20 +2445,6 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 
 				pgstat_count_io_op_time(IOOBJECT_WAL, IOCONTEXT_NORMAL,
 										IOOP_WRITE, start, 1, written);
-
-				/*
-				 * Increment the I/O timing and the number of times WAL data
-				 * were written out to disk.
-				 */
-				if (track_wal_io_timing)
-				{
-					instr_time	end;
-
-					INSTR_TIME_SET_CURRENT(end);
-					INSTR_TIME_ACCUM_DIFF(PendingWalStats.wal_write_time, end, start);
-				}
-
-				PendingWalStats.wal_write++;
 
 				if (written <= 0)
 				{
@@ -3264,7 +3248,7 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 				 errmsg("could not create file \"%s\": %m", tmppath)));
 
 	/* Measure I/O timing when initializing segment */
-	io_start = pgstat_prepare_io_time(track_io_timing);
+	io_start = pgstat_prepare_io_time();
 
 	pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_WRITE);
 	save_errno = 0;
@@ -3326,7 +3310,7 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 	}
 
 	/* Measure I/O timing when flushing segment */
-	io_start = pgstat_prepare_io_time(track_io_timing);
+	io_start = pgstat_prepare_io_time();
 
 	pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_SYNC);
 	if (pg_fsync(fd) != 0)
@@ -4284,10 +4268,37 @@ WriteControlFile(void)
 
 	ControlFile->float8ByVal = FLOAT8PASSBYVAL;
 
+	/*
+	 * Initialize the default 'char' signedness.
+	 *
+	 * The signedness of the char type is implementation-defined. For instance
+	 * on x86 architecture CPUs, the char data type is typically treated as
+	 * signed by default, whereas on aarch architecture CPUs, it is typically
+	 * treated as unsigned by default. In v17 or earlier, we accidentally let
+	 * C implementation signedness affect persistent data. This led to
+	 * inconsistent results when comparing char data across different
+	 * platforms.
+	 *
+	 * This flag can be used as a hint to ensure consistent behavior for
+	 * pre-v18 data files that store data sorted by the 'char' type on disk,
+	 * especially in cross-platform replication scenarios.
+	 *
+	 * Newly created database clusters unconditionally set the default char
+	 * signedness to true. pg_upgrade changes this flag for clusters that were
+	 * initialized on signedness=false platforms. As a result,
+	 * signedness=false setting will become rare over time. If we had known
+	 * about this problem during the last development cycle that forced initdb
+	 * (v8.3), we would have made all clusters signed or all clusters
+	 * unsigned. Making pg_upgrade the only source of signedness=false will
+	 * cause the population of database clusters to converge toward that
+	 * retrospective ideal.
+	 */
+	ControlFile->default_char_signedness = true;
+
 	/* Contents are protected with a CRC */
 	INIT_CRC32C(ControlFile->crc);
 	COMP_CRC32C(ControlFile->crc,
-				(char *) ControlFile,
+				ControlFile,
 				offsetof(ControlFileData, crc));
 	FIN_CRC32C(ControlFile->crc);
 
@@ -4405,7 +4416,7 @@ ReadControlFile(void)
 	/* Now check the CRC. */
 	INIT_CRC32C(crc);
 	COMP_CRC32C(crc,
-				(char *) ControlFile,
+				ControlFile,
 				offsetof(ControlFileData, crc));
 	FIN_CRC32C(crc);
 
@@ -4610,6 +4621,19 @@ DataChecksumsEnabled(void)
 {
 	Assert(ControlFile != NULL);
 	return (ControlFile->data_checksum_version > 0);
+}
+
+/*
+ * Return true if the cluster was initialized on a platform where the
+ * default signedness of char is "signed". This function exists for code
+ * that deals with pre-v18 data files that store data sorted by the 'char'
+ * type on disk (e.g., GIN and GiST indexes). See the comments in
+ * WriteControlFile() for details.
+ */
+bool
+GetDefaultCharSignedness(void)
+{
+	return ControlFile->default_char_signedness;
 }
 
 /*
@@ -7078,7 +7102,7 @@ CreateCheckPoint(int flags)
 	{
 		/* Include WAL level in record for WAL summarizer's benefit. */
 		XLogBeginInsert();
-		XLogRegisterData((char *) &wal_level, sizeof(wal_level));
+		XLogRegisterData(&wal_level, sizeof(wal_level));
 		(void) XLogInsert(RM_XLOG_ID, XLOG_CHECKPOINT_REDO);
 
 		/*
@@ -7231,7 +7255,7 @@ CreateCheckPoint(int flags)
 	 * Now insert the checkpoint record into XLOG.
 	 */
 	XLogBeginInsert();
-	XLogRegisterData((char *) (&checkPoint), sizeof(checkPoint));
+	XLogRegisterData(&checkPoint, sizeof(checkPoint));
 	recptr = XLogInsert(RM_XLOG_ID,
 						shutdown ? XLOG_CHECKPOINT_SHUTDOWN :
 						XLOG_CHECKPOINT_ONLINE);
@@ -7337,7 +7361,7 @@ CreateCheckPoint(int flags)
 	 */
 	XLByteToSeg(RedoRecPtr, _logSegNo, wal_segment_size);
 	KeepLogSeg(recptr, &_logSegNo);
-	if (InvalidateObsoleteReplicationSlots(RS_INVAL_WAL_REMOVED,
+	if (InvalidateObsoleteReplicationSlots(RS_INVAL_WAL_REMOVED | RS_INVAL_IDLE_TIMEOUT,
 										   _logSegNo, InvalidOid,
 										   InvalidTransactionId))
 	{
@@ -7413,7 +7437,7 @@ CreateEndOfRecoveryRecord(void)
 	START_CRIT_SECTION();
 
 	XLogBeginInsert();
-	XLogRegisterData((char *) &xlrec, sizeof(xl_end_of_recovery));
+	XLogRegisterData(&xlrec, sizeof(xl_end_of_recovery));
 	recptr = XLogInsert(RM_XLOG_ID, XLOG_END_OF_RECOVERY);
 
 	XLogFlush(recptr);
@@ -7506,7 +7530,7 @@ CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn, XLogRecPtr pagePtr,
 	XLogBeginInsert();
 	xlrec.overwritten_lsn = aborted_lsn;
 	xlrec.overwrite_time = GetCurrentTimestamp();
-	XLogRegisterData((char *) &xlrec, sizeof(xl_overwrite_contrecord));
+	XLogRegisterData(&xlrec, sizeof(xl_overwrite_contrecord));
 	recptr = XLogInsert(RM_XLOG_ID, XLOG_OVERWRITE_CONTRECORD);
 
 	/* check that the record was inserted to the right place */
@@ -7792,7 +7816,7 @@ CreateRestartPoint(int flags)
 	replayPtr = GetXLogReplayRecPtr(&replayTLI);
 	endptr = (receivePtr < replayPtr) ? replayPtr : receivePtr;
 	KeepLogSeg(endptr, &_logSegNo);
-	if (InvalidateObsoleteReplicationSlots(RS_INVAL_WAL_REMOVED,
+	if (InvalidateObsoleteReplicationSlots(RS_INVAL_WAL_REMOVED | RS_INVAL_IDLE_TIMEOUT,
 										   _logSegNo, InvalidOid,
 										   InvalidTransactionId))
 	{
@@ -8044,7 +8068,7 @@ void
 XLogPutNextOid(Oid nextOid)
 {
 	XLogBeginInsert();
-	XLogRegisterData((char *) (&nextOid), sizeof(Oid));
+	XLogRegisterData(&nextOid, sizeof(Oid));
 	(void) XLogInsert(RM_XLOG_ID, XLOG_NEXTOID);
 
 	/*
@@ -8105,7 +8129,7 @@ XLogRestorePoint(const char *rpName)
 	strlcpy(xlrec.rp_name, rpName, MAXFNAMELEN);
 
 	XLogBeginInsert();
-	XLogRegisterData((char *) &xlrec, sizeof(xl_restore_point));
+	XLogRegisterData(&xlrec, sizeof(xl_restore_point));
 
 	RecPtr = XLogInsert(RM_XLOG_ID, XLOG_RESTORE_POINT);
 
@@ -8154,7 +8178,7 @@ XLogReportParameters(void)
 			xlrec.track_commit_timestamp = track_commit_timestamp;
 
 			XLogBeginInsert();
-			XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+			XLogRegisterData(&xlrec, sizeof(xlrec));
 
 			recptr = XLogInsert(RM_XLOG_ID, XLOG_PARAMETER_CHANGE);
 			XLogFlush(recptr);
@@ -8229,7 +8253,7 @@ UpdateFullPageWrites(void)
 	if (XLogStandbyInfoActive() && !recoveryInProgress)
 	{
 		XLogBeginInsert();
-		XLogRegisterData((char *) (&fullPageWrites), sizeof(bool));
+		XLogRegisterData(&fullPageWrites, sizeof(bool));
 
 		XLogInsert(RM_XLOG_ID, XLOG_FPW_CHANGE);
 	}
@@ -8718,10 +8742,9 @@ issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
 		return;
 
 	/*
-	 * Measure I/O timing to sync the WAL file for pg_stat_io and/or
-	 * pg_stat_wal.
+	 * Measure I/O timing to sync the WAL file for pg_stat_io.
 	 */
-	start = pgstat_prepare_io_time(track_io_timing || track_wal_io_timing);
+	start = pgstat_prepare_io_time();
 
 	pgstat_report_wait_start(WAIT_EVENT_WAL_SYNC);
 	switch (wal_sync_method)
@@ -8767,21 +8790,8 @@ issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
 
 	pgstat_report_wait_end();
 
-	/*
-	 * Increment the I/O timing and the number of times WAL files were synced.
-	 */
-	if (track_wal_io_timing)
-	{
-		instr_time	end;
-
-		INSTR_TIME_SET_CURRENT(end);
-		INSTR_TIME_ACCUM_DIFF(PendingWalStats.wal_sync_time, end, start);
-	}
-
 	pgstat_count_io_op_time(IOOBJECT_WAL, IOCONTEXT_NORMAL, IOOP_FSYNC,
 							start, 1, 0);
-
-	PendingWalStats.wal_sync++;
 }
 
 /*
@@ -9272,7 +9282,7 @@ do_pg_backup_stop(BackupState *state, bool waitforarchive)
 		 * Write the backup-end xlog record
 		 */
 		XLogBeginInsert();
-		XLogRegisterData((char *) (&state->startpoint),
+		XLogRegisterData(&state->startpoint,
 						 sizeof(state->startpoint));
 		state->stoppoint = XLogInsert(RM_XLOG_ID, XLOG_BACKUP_END);
 

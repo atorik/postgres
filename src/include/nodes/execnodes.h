@@ -42,6 +42,7 @@
 #include "storage/condition_variable.h"
 #include "utils/hsearch.h"
 #include "utils/queryenvironment.h"
+#include "utils/plancache.h"
 #include "utils/reltrigger.h"
 #include "utils/sharedtuplestore.h"
 #include "utils/snapshot.h"
@@ -657,6 +658,7 @@ typedef struct EState
 										 * ExecRowMarks, or NULL if none */
 	List	   *es_rteperminfos;	/* List of RTEPermissionInfo */
 	PlannedStmt *es_plannedstmt;	/* link to top of plan tree */
+	CachedPlan *es_cachedplan;	/* CachedPlan providing the plan tree */
 	List	   *es_part_prune_infos;	/* List of PartitionPruneInfo */
 	List	   *es_part_prune_states;	/* List of PartitionPruneState */
 	List	   *es_part_prune_results;	/* List of Bitmapset */
@@ -709,6 +711,7 @@ typedef struct EState
 	int			es_top_eflags;	/* eflags passed to ExecutorStart */
 	int			es_instrument;	/* OR of InstrumentOption flags */
 	bool		es_finished;	/* true when ExecutorFinish is done */
+	bool		es_aborted;		/* true when execution was aborted */
 
 	List	   *es_exprcontexts;	/* List of ExprContexts within EState */
 
@@ -1448,10 +1451,13 @@ typedef struct ModifyTableState
 	double		mt_merge_deleted;
 
 	/*
-	 * List of valid updateColnosLists.  Contains only those belonging to
-	 * unpruned relations from ModifyTable.updateColnosLists.
+	 * Lists of valid updateColnosLists, mergeActionLists, and
+	 * mergeJoinConditions.  These contain only entries for unpruned
+	 * relations, filtered from the corresponding lists in ModifyTable.
 	 */
 	List	   *mt_updateColnosLists;
+	List	   *mt_mergeActionLists;
+	List	   *mt_mergeJoinConditions;
 } ModifyTableState;
 
 /* ----------------
