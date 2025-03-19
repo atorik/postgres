@@ -1819,6 +1819,7 @@ adjust_partition_colnos_using_map(List *colnos, AttrMap *attrMap)
 void
 ExecDoInitialPruning(EState *estate)
 {
+	PlannedStmt *stmt = estate->es_plannedstmt;
 	ListCell   *lc;
 	List	   *locked_relids = NIL;
 
@@ -1865,6 +1866,34 @@ ExecDoInitialPruning(EState *estate)
 													 validsubplan_rtis);
 		estate->es_part_prune_results = lappend(estate->es_part_prune_results,
 												validsubplans);
+	}
+
+	/*
+	 * Lock the first result relation of each ModifyTable node, even if it was
+	 * pruned.  This is required for ExecInitModifyTable(), which keeps its
+	 * first result relation if all other result relations have been pruned,
+	 * because some executor paths (e.g., in nodeModifyTable.c and
+	 * execPartition.c) rely on there being at least one result relation.
+	 *
+	 * There's room for improvement here --- we actually only need to do this
+	 * if all other result relations of the ModifyTable node were pruned, but
+	 * we don't have an easy way to tell that here.
+	 */
+	if (stmt->resultRelations && ExecShouldLockRelations(estate))
+	{
+		foreach(lc, stmt->firstResultRels)
+		{
+			Index		firstResultRel = lfirst_int(lc);
+
+			if (!bms_is_member(firstResultRel, estate->es_unpruned_relids))
+			{
+				RangeTblEntry *rte = exec_rt_fetch(firstResultRel, estate);
+
+				Assert(rte->rtekind == RTE_RELATION && rte->rellockmode != NoLock);
+				LockRelationOid(rte->relid, rte->rellockmode);
+				locked_relids = lappend_int(locked_relids, firstResultRel);
+			}
+		}
 	}
 
 	/*
@@ -2076,7 +2105,7 @@ CreatePartitionPruneState(EState *estate, PartitionPruneInfo *pruneinfo,
 			 * because that entry will be held open and locked for the
 			 * duration of this executor run.
 			 */
-			partrel = ExecGetRangeTableRelation(estate, pinfo->rtindex);
+			partrel = ExecGetRangeTableRelation(estate, pinfo->rtindex, false);
 
 			/* Remember for InitExecPartitionPruneContext(). */
 			pprune->partrel = partrel;
@@ -2589,9 +2618,9 @@ ExecFindMatchingSubPlans(PartitionPruneState *prunestate,
  * find_matching_subplans_recurse
  *		Recursive worker function for ExecFindMatchingSubPlans
  *
- * Adds valid (non-prunable) subplan IDs to *validsubplans and the RT indexes
- * of their corresponding leaf partitions to *validsubplan_rtis if
- * it's non-NULL.
+ * Adds valid (non-prunable) subplan IDs to *validsubplans. If
+ * *validsubplan_rtis is non-NULL, it also adds the RT indexes of their
+ * corresponding partitions, but only if they are leaf partitions.
  */
 static void
 find_matching_subplans_recurse(PartitionPruningData *prunedata,
@@ -2628,7 +2657,12 @@ find_matching_subplans_recurse(PartitionPruningData *prunedata,
 		{
 			*validsubplans = bms_add_member(*validsubplans,
 											pprune->subplan_map[i]);
-			if (validsubplan_rtis)
+
+			/*
+			 * Only report leaf partitions. Non-leaf partitions may appear
+			 * here when they use an unflattened Append or MergeAppend.
+			 */
+			if (validsubplan_rtis && pprune->leafpart_rti_map[i])
 				*validsubplan_rtis = bms_add_member(*validsubplan_rtis,
 													pprune->leafpart_rti_map[i]);
 		}

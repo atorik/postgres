@@ -160,9 +160,12 @@ int			maintenance_io_concurrency = DEFAULT_MAINTENANCE_IO_CONCURRENCY;
 /*
  * Limit on how many blocks should be handled in single I/O operations.
  * StartReadBuffers() callers should respect it, as should other operations
- * that call smgr APIs directly.
+ * that call smgr APIs directly.  It is computed as the minimum of underlying
+ * GUCs io_combine_limit_guc and io_max_combine_limit.
  */
 int			io_combine_limit = DEFAULT_IO_COMBINE_LIMIT;
+int			io_combine_limit_guc = DEFAULT_IO_COMBINE_LIMIT;
+int			io_max_combine_limit = DEFAULT_IO_COMBINE_LIMIT;
 
 /*
  * GUC variables about triggering kernel writeback for buffers written; OS
@@ -210,6 +213,8 @@ static HTAB *PrivateRefCountHash = NULL;
 static int32 PrivateRefCountOverflowed = 0;
 static uint32 PrivateRefCountClock = 0;
 static PrivateRefCountEntry *ReservedRefCountEntry = NULL;
+
+static uint32 MaxProportionalPins;
 
 static void ReservePrivateRefCountEntry(void);
 static PrivateRefCountEntry *NewPrivateRefCountEntry(Buffer buffer);
@@ -1036,7 +1041,7 @@ ZeroAndLockBuffer(Buffer buffer, ReadBufferMode mode, bool already_valid)
 	{
 		/* Simple case for non-shared buffers. */
 		bufHdr = GetLocalBufferDescriptor(-buffer - 1);
-		need_to_zero = (pg_atomic_read_u32(&bufHdr->state) & BM_VALID) == 0;
+		need_to_zero = StartLocalBufferIO(bufHdr, true);
 	}
 	else
 	{
@@ -1070,19 +1075,11 @@ ZeroAndLockBuffer(Buffer buffer, ReadBufferMode mode, bool already_valid)
 		if (!isLocalBuf)
 			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_EXCLUSIVE);
 
+		/* Set BM_VALID, terminate IO, and wake up any waiters */
 		if (isLocalBuf)
-		{
-			/* Only need to adjust flags */
-			uint32		buf_state = pg_atomic_read_u32(&bufHdr->state);
-
-			buf_state |= BM_VALID;
-			pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
-		}
+			TerminateLocalBufferIO(bufHdr, false, BM_VALID);
 		else
-		{
-			/* Set BM_VALID, terminate IO, and wake up any waiters */
 			TerminateBufferIO(bufHdr, false, BM_VALID, true);
-		}
 	}
 	else if (!isLocalBuf)
 	{
@@ -1394,11 +1391,7 @@ static inline bool
 WaitReadBuffersCanStartIO(Buffer buffer, bool nowait)
 {
 	if (BufferIsLocal(buffer))
-	{
-		BufferDesc *bufHdr = GetLocalBufferDescriptor(-buffer - 1);
-
-		return (pg_atomic_read_u32(&bufHdr->state) & BM_VALID) == 0;
-	}
+		return StartLocalBufferIO(GetLocalBufferDescriptor(-buffer - 1), true);
 	else
 		return StartBufferIO(GetBufferDescriptor(buffer - 1), true, nowait);
 }
@@ -1509,7 +1502,7 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 			io_pages[io_buffers_len++] = BufferGetBlock(buffers[i]);
 		}
 
-		io_start = pgstat_prepare_io_time();
+		io_start = pgstat_prepare_io_time(track_io_timing);
 		smgrreadv(operation->smgr, forknum, io_first_block, io_pages, io_buffers_len);
 		pgstat_count_io_op_time(io_object, io_context, IOOP_READ, io_start,
 								1, io_buffers_len * BLCKSZ);
@@ -1541,7 +1534,7 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 							(errcode(ERRCODE_DATA_CORRUPTED),
 							 errmsg("invalid page in block %u of relation %s; zeroing out page",
 									io_first_block + j,
-									relpath(operation->smgr->smgr_rlocator, forknum))));
+									relpath(operation->smgr->smgr_rlocator, forknum).str)));
 					memset(bufBlock, 0, BLCKSZ);
 				}
 				else
@@ -1549,22 +1542,14 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 							(errcode(ERRCODE_DATA_CORRUPTED),
 							 errmsg("invalid page in block %u of relation %s",
 									io_first_block + j,
-									relpath(operation->smgr->smgr_rlocator, forknum))));
+									relpath(operation->smgr->smgr_rlocator, forknum).str)));
 			}
 
-			/* Terminate I/O and set BM_VALID. */
+			/* Set BM_VALID, terminate IO, and wake up any waiters */
 			if (persistence == RELPERSISTENCE_TEMP)
-			{
-				uint32		buf_state = pg_atomic_read_u32(&bufHdr->state);
-
-				buf_state |= BM_VALID;
-				pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
-			}
+				TerminateLocalBufferIO(bufHdr, false, BM_VALID);
 			else
-			{
-				/* Set BM_VALID, terminate IO, and wake up any waiters */
 				TerminateBufferIO(bufHdr, false, BM_VALID, true);
-			}
 
 			/* Report I/Os as completing individually. */
 			TRACE_POSTGRESQL_BUFFER_READ_DONE(forknum, io_first_block + j,
@@ -2098,42 +2083,61 @@ again:
 }
 
 /*
+ * Return the maximum number of buffers that a backend should try to pin once,
+ * to avoid exceeding its fair share.  This is the highest value that
+ * GetAdditionalPinLimit() could ever return.  Note that it may be zero on a
+ * system with a very small buffer pool relative to max_connections.
+ */
+uint32
+GetPinLimit(void)
+{
+	return MaxProportionalPins;
+}
+
+/*
+ * Return the maximum number of additional buffers that this backend should
+ * pin if it wants to stay under the per-backend limit, considering the number
+ * of buffers it has already pinned.  Unlike LimitAdditionalPins(), the limit
+ * return by this function can be zero.
+ */
+uint32
+GetAdditionalPinLimit(void)
+{
+	uint32		estimated_pins_held;
+
+	/*
+	 * We get the number of "overflowed" pins for free, but don't know the
+	 * number of pins in PrivateRefCountArray.  The cost of calculating that
+	 * exactly doesn't seem worth it, so just assume the max.
+	 */
+	estimated_pins_held = PrivateRefCountOverflowed + REFCOUNT_ARRAY_ENTRIES;
+
+	/* Is this backend already holding more than its fair share? */
+	if (estimated_pins_held > MaxProportionalPins)
+		return 0;
+
+	return MaxProportionalPins - estimated_pins_held;
+}
+
+/*
  * Limit the number of pins a batch operation may additionally acquire, to
  * avoid running out of pinnable buffers.
  *
- * One additional pin is always allowed, as otherwise the operation likely
- * cannot be performed at all.
- *
- * The number of allowed pins for a backend is computed based on
- * shared_buffers and the maximum number of connections possible. That's very
- * pessimistic, but outside of toy-sized shared_buffers it should allow
- * sufficient pins.
+ * One additional pin is always allowed, on the assumption that the operation
+ * requires at least one to make progress.
  */
 void
 LimitAdditionalPins(uint32 *additional_pins)
 {
-	uint32		max_backends;
-	int			max_proportional_pins;
+	uint32		limit;
 
 	if (*additional_pins <= 1)
 		return;
 
-	max_backends = MaxBackends + NUM_AUXILIARY_PROCS;
-	max_proportional_pins = NBuffers / max_backends;
-
-	/*
-	 * Subtract the approximate number of buffers already pinned by this
-	 * backend. We get the number of "overflowed" pins for free, but don't
-	 * know the number of pins in PrivateRefCountArray. The cost of
-	 * calculating that exactly doesn't seem worth it, so just assume the max.
-	 */
-	max_proportional_pins -= PrivateRefCountOverflowed + REFCOUNT_ARRAY_ENTRIES;
-
-	if (max_proportional_pins <= 0)
-		max_proportional_pins = 1;
-
-	if (*additional_pins > max_proportional_pins)
-		*additional_pins = max_proportional_pins;
+	limit = GetAdditionalPinLimit();
+	limit = Max(limit, 1);
+	if (limit < *additional_pins)
+		*additional_pins = limit;
 }
 
 /*
@@ -2284,7 +2288,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 		ereport(ERROR,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("cannot extend relation %s beyond %u blocks",
-						relpath(bmr.smgr->smgr_rlocator, fork),
+						relpath(bmr.smgr->smgr_rlocator, fork).str,
 						MaxBlockNumber)));
 
 	/*
@@ -2355,7 +2359,8 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 			if (valid && !PageIsNew((Page) buf_block))
 				ereport(ERROR,
 						(errmsg("unexpected data beyond EOF in block %u of relation %s",
-								existing_hdr->tag.blockNum, relpath(bmr.smgr->smgr_rlocator, fork)),
+								existing_hdr->tag.blockNum,
+								relpath(bmr.smgr->smgr_rlocator, fork).str),
 						 errhint("This has been seen to occur with buggy kernels; consider updating your system.")));
 
 			/*
@@ -2401,7 +2406,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 		}
 	}
 
-	io_start = pgstat_prepare_io_time();
+	io_start = pgstat_prepare_io_time(track_io_timing);
 
 	/*
 	 * Note: if smgrzeroextend fails, we will end up with buffers that are
@@ -3574,6 +3579,15 @@ InitBufferManagerAccess(void)
 {
 	HASHCTL		hash_ctl;
 
+	/*
+	 * An advisory limit on the number of pins each backend should hold, based
+	 * on shared_buffers and the maximum number of connections possible.
+	 * That's very pessimistic, but outside toy-sized shared_buffers it should
+	 * allow plenty of pins.  LimitAdditionalPins() and
+	 * GetAdditionalPinLimit() can be used to check the remaining balance.
+	 */
+	MaxProportionalPins = NBuffers / (MaxBackends + NUM_AUXILIARY_PROCS);
+
 	memset(&PrivateRefCountArray, 0, sizeof(PrivateRefCountArray));
 
 	hash_ctl.keysize = sizeof(int32);
@@ -3663,7 +3677,6 @@ DebugPrintBufferRefcount(Buffer buffer)
 {
 	BufferDesc *buf;
 	int32		loccount;
-	char	   *path;
 	char	   *result;
 	ProcNumber	backend;
 	uint32		buf_state;
@@ -3683,15 +3696,14 @@ DebugPrintBufferRefcount(Buffer buffer)
 	}
 
 	/* theoretically we should lock the bufhdr here */
-	path = relpathbackend(BufTagGetRelFileLocator(&buf->tag), backend,
-						  BufTagGetForkNum(&buf->tag));
 	buf_state = pg_atomic_read_u32(&buf->state);
 
 	result = psprintf("[%03d] (rel=%s, blockNum=%u, flags=0x%x, refcount=%u %d)",
-					  buffer, path,
+					  buffer,
+					  relpathbackend(BufTagGetRelFileLocator(&buf->tag), backend,
+									 BufTagGetForkNum(&buf->tag)).str,
 					  buf->tag.blockNum, buf_state & BUF_FLAG_MASK,
 					  BUF_STATE_GET_REFCOUNT(buf_state), loccount);
-	pfree(path);
 	return result;
 }
 
@@ -3858,7 +3870,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 	 */
 	bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum);
 
-	io_start = pgstat_prepare_io_time();
+	io_start = pgstat_prepare_io_time(track_io_timing);
 
 	/*
 	 * bufToWrite is either the shared buffer or a copy, as appropriate.
@@ -4440,7 +4452,6 @@ FlushRelationBuffers(Relation rel)
 		for (i = 0; i < NLocBuffer; i++)
 		{
 			uint32		buf_state;
-			instr_time	io_start;
 
 			bufHdr = GetLocalBufferDescriptor(i);
 			if (BufTagMatchesRelFileLocator(&bufHdr->tag, &rel->rd_locator) &&
@@ -4448,9 +4459,6 @@ FlushRelationBuffers(Relation rel)
 				 (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 			{
 				ErrorContextCallback errcallback;
-				Page		localpage;
-
-				localpage = (char *) LocalBufHdrGetBlock(bufHdr);
 
 				/* Setup error traceback support for ereport() */
 				errcallback.callback = local_buffer_write_error_callback;
@@ -4458,24 +4466,7 @@ FlushRelationBuffers(Relation rel)
 				errcallback.previous = error_context_stack;
 				error_context_stack = &errcallback;
 
-				PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
-
-				io_start = pgstat_prepare_io_time();
-
-				smgrwrite(srel,
-						  BufTagGetForkNum(&bufHdr->tag),
-						  bufHdr->tag.blockNum,
-						  localpage,
-						  false);
-
-				pgstat_count_io_op_time(IOOBJECT_TEMP_RELATION,
-										IOCONTEXT_NORMAL, IOOP_WRITE,
-										io_start, 1, BLCKSZ);
-
-				buf_state &= ~(BM_DIRTY | BM_JUST_DIRTIED);
-				pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
-
-				pgBufferUsage.local_blks_written++;
+				FlushLocalBuffer(bufHdr, srel);
 
 				/* Pop the error context stack */
 				error_context_stack = errcallback.previous;
@@ -5560,8 +5551,11 @@ TerminateBufferIO(BufferDesc *buf, bool clear_dirty, uint32 set_flag_bits,
 	buf_state = LockBufHdr(buf);
 
 	Assert(buf_state & BM_IO_IN_PROGRESS);
+	buf_state &= ~BM_IO_IN_PROGRESS;
 
-	buf_state &= ~(BM_IO_IN_PROGRESS | BM_IO_ERROR);
+	/* Clear earlier errors, if this IO failed, it'll be marked again */
+	buf_state &= ~BM_IO_ERROR;
+
 	if (clear_dirty && !(buf_state & BM_JUST_DIRTIED))
 		buf_state &= ~(BM_DIRTY | BM_CHECKPOINT_NEEDED);
 
@@ -5611,16 +5605,13 @@ AbortBufferIO(Buffer buffer)
 		if (buf_state & BM_IO_ERROR)
 		{
 			/* Buffer is pinned, so we can read tag without spinlock */
-			char	   *path;
-
-			path = relpathperm(BufTagGetRelFileLocator(&buf_hdr->tag),
-							   BufTagGetForkNum(&buf_hdr->tag));
 			ereport(WARNING,
 					(errcode(ERRCODE_IO_ERROR),
 					 errmsg("could not write block %u of %s",
-							buf_hdr->tag.blockNum, path),
+							buf_hdr->tag.blockNum,
+							relpathperm(BufTagGetRelFileLocator(&buf_hdr->tag),
+										BufTagGetForkNum(&buf_hdr->tag)).str),
 					 errdetail("Multiple failures --- write error might be permanent.")));
-			pfree(path);
 		}
 	}
 
@@ -5637,14 +5628,10 @@ shared_buffer_write_error_callback(void *arg)
 
 	/* Buffer is pinned, so we can read the tag without locking the spinlock */
 	if (bufHdr != NULL)
-	{
-		char	   *path = relpathperm(BufTagGetRelFileLocator(&bufHdr->tag),
-									   BufTagGetForkNum(&bufHdr->tag));
-
 		errcontext("writing block %u of relation %s",
-				   bufHdr->tag.blockNum, path);
-		pfree(path);
-	}
+				   bufHdr->tag.blockNum,
+				   relpathperm(BufTagGetRelFileLocator(&bufHdr->tag),
+							   BufTagGetForkNum(&bufHdr->tag)).str);
 }
 
 /*
@@ -5656,15 +5643,11 @@ local_buffer_write_error_callback(void *arg)
 	BufferDesc *bufHdr = (BufferDesc *) arg;
 
 	if (bufHdr != NULL)
-	{
-		char	   *path = relpathbackend(BufTagGetRelFileLocator(&bufHdr->tag),
-										  MyProcNumber,
-										  BufTagGetForkNum(&bufHdr->tag));
-
 		errcontext("writing block %u of relation %s",
-				   bufHdr->tag.blockNum, path);
-		pfree(path);
-	}
+				   bufHdr->tag.blockNum,
+				   relpathbackend(BufTagGetRelFileLocator(&bufHdr->tag),
+								  MyProcNumber,
+								  BufTagGetForkNum(&bufHdr->tag)).str);
 }
 
 /*
@@ -5917,7 +5900,7 @@ IssuePendingWritebacks(WritebackContext *wb_context, IOContext io_context)
 	sort_pending_writebacks(wb_context->pending_writebacks,
 							wb_context->nr_pending);
 
-	io_start = pgstat_prepare_io_time();
+	io_start = pgstat_prepare_io_time(track_io_timing);
 
 	/*
 	 * Coalesce neighbouring writes, but nothing else. For that we iterate

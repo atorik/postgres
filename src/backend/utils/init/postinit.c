@@ -43,21 +43,25 @@
 #include "replication/slot.h"
 #include "replication/slotsync.h"
 #include "replication/walsender.h"
+#include "storage/aio_subsys.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "storage/procnumber.h"
 #include "storage/procsignal.h"
 #include "storage/sinvaladt.h"
 #include "storage/smgr.h"
 #include "storage/sync.h"
+#include "tcop/backend_startup.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/guc_hooks.h"
+#include "utils/injection_point.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/portal.h"
@@ -232,6 +236,9 @@ PerformAuthentication(Port *port)
 	}
 #endif
 
+	/* Capture authentication start time for logging */
+	conn_timing.auth_start = GetCurrentTimestamp();
+
 	/*
 	 * Set up a timeout in case a buggy or malicious client fails to respond
 	 * during authentication.  Since we're inside a transaction and might do
@@ -250,7 +257,10 @@ PerformAuthentication(Port *port)
 	 */
 	disable_timeout(STATEMENT_TIMEOUT, false);
 
-	if (Log_connections)
+	/* Capture authentication end time for logging */
+	conn_timing.auth_end = GetCurrentTimestamp();
+
+	if (log_connections & LOG_CONNECTION_AUTHORIZATION)
 	{
 		StringInfoData logmsg;
 
@@ -585,7 +595,7 @@ InitializeFastPathLocks(void)
 	while (FastPathLockGroupsPerBackend < FP_LOCK_GROUPS_PER_BACKEND_MAX)
 	{
 		/* stop once we exceed max_locks_per_xact */
-		if (FastPathLockGroupsPerBackend * FP_LOCK_SLOTS_PER_GROUP >= max_locks_per_xact)
+		if (FastPathLockSlotsPerBackend() >= max_locks_per_xact)
 			break;
 
 		FastPathLockGroupsPerBackend *= 2;
@@ -625,6 +635,12 @@ BaseInit(void)
 	 * can).
 	 */
 	pgstat_initialize();
+
+	/*
+	 * Initialize AIO before infrastructure that might need to actually
+	 * execute AIO.
+	 */
+	pgaio_init_backend();
 
 	/* Do local initialization of storage and buffer managers */
 	InitSync();
@@ -717,6 +733,20 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	 */
 	InitProcessPhase2();
 
+	/* Initialize status reporting */
+	pgstat_beinit();
+
+	/*
+	 * And initialize an entry in the PgBackendStatus array.  That way, if
+	 * LWLocks or third-party authentication should happen to hang, it is
+	 * possible to retrieve some information about what is going on.
+	 */
+	if (!bootstrap)
+	{
+		pgstat_bestart_initial();
+		INJECTION_POINT("init-pre-auth");
+	}
+
 	/*
 	 * Initialize my entry in the shared-invalidation manager's array of
 	 * per-backend data.
@@ -785,9 +815,6 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	/* Initialize portal manager */
 	EnablePortalManager();
 
-	/* Initialize status reporting */
-	pgstat_beinit();
-
 	/*
 	 * Load relcache entries for the shared system catalogs.  This must create
 	 * at least entries for pg_database and catalogs used for authentication.
@@ -808,8 +835,8 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	/* The autovacuum launcher is done here */
 	if (AmAutoVacuumLauncherProcess())
 	{
-		/* report this backend in the PgBackendStatus array */
-		pgstat_bestart();
+		/* fill in the remainder of this entry in the PgBackendStatus array */
+		pgstat_bestart_final();
 
 		return;
 	}
@@ -883,6 +910,14 @@ InitPostgres(const char *in_dbname, Oid dboid,
 		am_superuser = superuser();
 	}
 
+	/* Report any SSL/GSS details for the session. */
+	if (MyProcPort != NULL)
+	{
+		Assert(!bootstrap);
+
+		pgstat_bestart_security();
+	}
+
 	/*
 	 * Binary upgrades only allowed super-user connections
 	 */
@@ -952,8 +987,8 @@ InitPostgres(const char *in_dbname, Oid dboid,
 		/* initialize client encoding */
 		InitializeClientEncoding();
 
-		/* report this backend in the PgBackendStatus array */
-		pgstat_bestart();
+		/* fill in the remainder of this entry in the PgBackendStatus array */
+		pgstat_bestart_final();
 
 		/* close the transaction we started above */
 		CommitTransactionCommand();
@@ -996,7 +1031,7 @@ InitPostgres(const char *in_dbname, Oid dboid,
 		 */
 		if (!bootstrap)
 		{
-			pgstat_bestart();
+			pgstat_bestart_final();
 			CommitTransactionCommand();
 		}
 		return;
@@ -1196,9 +1231,9 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	if ((flags & INIT_PG_LOAD_SESSION_LIBS) != 0)
 		process_session_preload_libraries();
 
-	/* report this backend in the PgBackendStatus array */
+	/* fill in the remainder of this entry in the PgBackendStatus array */
 	if (!bootstrap)
-		pgstat_bestart();
+		pgstat_bestart_final();
 
 	/* close the transaction we started above */
 	if (!bootstrap)

@@ -950,6 +950,8 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	 * _bt_search/_bt_endpoint below
 	 */
 	pgstat_count_index_scan(rel);
+	if (scan->instrument)
+		scan->instrument->nsearches++;
 
 	/*----------
 	 * Examine the scan keys to discover where we need to start the scan.
@@ -2183,7 +2185,9 @@ _bt_readfirstpage(IndexScanDesc scan, OffsetNumber offnum, ScanDirection dir)
  * scan.  A seized=false caller's blkno can never be assumed to be the page
  * that must be read next during a parallel scan, though.  We must figure that
  * part out for ourselves by seizing the scan (the correct page to read might
- * already be beyond the seized=false caller's blkno during a parallel scan).
+ * already be beyond the seized=false caller's blkno during a parallel scan,
+ * unless blkno/so->currPos.nextPage/so->currPos.prevPage is already P_NONE,
+ * or unless so->currPos.moreRight/so->currPos.moreLeft is already unset).
  *
  * On success exit, so->currPos is updated to contain data from the next
  * interesting page, and we return true.  We hold a pin on the buffer on
@@ -2204,6 +2208,7 @@ _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno,
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 
 	Assert(so->currPos.currPage == lastcurrblkno || seized);
+	Assert(!(blkno == P_NONE && seized));
 	Assert(!BTScanPosIsPinned(so->currPos));
 
 	/*

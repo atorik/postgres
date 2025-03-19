@@ -39,6 +39,7 @@
 #include "catalog/namespace.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/extension.h"
 #include "commands/event_trigger.h"
 #include "commands/tablespace.h"
 #include "commands/trigger.h"
@@ -72,11 +73,14 @@
 #include "replication/slot.h"
 #include "replication/slotsync.h"
 #include "replication/syncrep.h"
+#include "storage/aio.h"
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
+#include "storage/io_worker.h"
 #include "storage/large_object.h"
 #include "storage/pg_shmem.h"
 #include "storage/predicate.h"
+#include "storage/procnumber.h"
 #include "storage/standby.h"
 #include "tcop/backend_startup.h"
 #include "tcop/tcopprot.h"
@@ -1219,15 +1223,6 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"log_connections", PGC_SU_BACKEND, LOGGING_WHAT,
-			gettext_noop("Logs each successful connection."),
-			NULL
-		},
-		&Log_connections,
-		false,
-		NULL, NULL, NULL
-	},
-	{
 		{"trace_connection_negotiation", PGC_POSTMASTER, DEVELOPER_OPTIONS,
 			gettext_noop("Logs details of pre-authentication connection handshake."),
 			NULL,
@@ -1500,6 +1495,15 @@ struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, NULL, NULL
 	},
+	{
+		{"track_wal_io_timing", PGC_SUSET, STATS_CUMULATIVE,
+			gettext_noop("Collects timing statistics for WAL I/O activity."),
+			NULL
+		},
+		&track_wal_io_timing,
+		false,
+		NULL, NULL, NULL
+	},
 
 	{
 		{"update_process_title", PGC_SUSET, PROCESS_TITLE,
@@ -1581,6 +1585,15 @@ struct config_bool ConfigureNamesBool[] =
 			NULL
 		},
 		&log_lock_waits,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"log_lock_failure", PGC_SUSET, LOGGING_WHAT,
+			gettext_noop("Logs lock failures."),
+			NULL
+		},
+		&log_lock_failure,
 		false,
 		NULL, NULL, NULL
 	},
@@ -2105,6 +2118,16 @@ struct config_bool ConfigureNamesBool[] =
 		},
 		&md5_password_warnings,
 		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"query_id_squash_values", PGC_USERSET, STATS_MONITORING,
+			gettext_noop("Allows to merge constants in a list when computing "
+						 "query_id."),
+		},
+		&query_id_squash_values,
+		false,
 		NULL, NULL, NULL
 	},
 
@@ -3231,6 +3254,20 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"io_max_combine_limit",
+			PGC_POSTMASTER,
+			RESOURCES_IO,
+			gettext_noop("Server-wide limit that clamps io_combine_limit."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&io_max_combine_limit,
+		DEFAULT_IO_COMBINE_LIMIT,
+		1, MAX_IO_COMBINE_LIMIT,
+		NULL, assign_io_max_combine_limit, NULL
+	},
+
+	{
 		{"io_combine_limit",
 			PGC_USERSET,
 			RESOURCES_IO,
@@ -3241,6 +3278,30 @@ struct config_int ConfigureNamesInt[] =
 		&io_combine_limit,
 		DEFAULT_IO_COMBINE_LIMIT,
 		1, MAX_IO_COMBINE_LIMIT,
+		NULL, assign_io_combine_limit, NULL
+	},
+
+	{
+		{"io_max_concurrency",
+			PGC_POSTMASTER,
+			RESOURCES_IO,
+			gettext_noop("Max number of IOs that one process can execute simultaneously."),
+			NULL,
+		},
+		&io_max_concurrency,
+		-1, -1, 1024,
+		check_io_max_concurrency, NULL, NULL
+	},
+
+	{
+		{"io_workers",
+			PGC_SIGHUP,
+			RESOURCES_IO,
+			gettext_noop("Number of IO worker processes, for io_method=worker."),
+			NULL,
+		},
+		&io_workers,
+		3, 1, MAX_IO_WORKERS,
 		NULL, NULL, NULL
 	},
 
@@ -4305,6 +4366,18 @@ struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		{"extension_control_path", PGC_SUSET, CLIENT_CONN_OTHER,
+			gettext_noop("Sets the path for extension control files."),
+			gettext_noop("The remaining extension script and secondary control files are then loaded "
+						 "from the same directory where the primary control file was found."),
+			GUC_SUPERUSER_ONLY
+		},
+		&Extension_control_path,
+		"$system",
+		NULL, NULL, NULL
+	},
+
+	{
 		{"krb_server_keyfile", PGC_SIGHUP, CONN_AUTH_AUTH,
 			gettext_noop("Sets the location of the Kerberos server key file."),
 			NULL,
@@ -4745,7 +4818,7 @@ struct config_string ConfigureNamesString[] =
 		},
 		&SSLECDHCurve,
 #ifdef USE_SSL
-		"prime256v1",
+		"X25519:prime256v1",
 #else
 		"none",
 #endif
@@ -4875,6 +4948,18 @@ struct config_string ConfigureNamesString[] =
 		"",
 		NULL, NULL, NULL
 	},
+
+	{
+		{"log_connections", PGC_SU_BACKEND, LOGGING_WHAT,
+			gettext_noop("Logs specified aspects of connection establishment and setup."),
+			NULL,
+			GUC_LIST_INPUT
+		},
+		&log_connections_string,
+		"",
+		check_log_connections, assign_log_connections, NULL
+	},
+
 
 	/* End-of-list marker */
 	{
@@ -5287,6 +5372,16 @@ struct config_enum ConfigureNamesEnum[] =
 		&debug_logical_replication_streaming,
 		DEBUG_LOGICAL_REP_STREAMING_BUFFERED, debug_logical_replication_streaming_options,
 		NULL, NULL, NULL
+	},
+
+	{
+		{"io_method", PGC_POSTMASTER, RESOURCES_IO,
+			gettext_noop("Selects the method for executing asynchronous I/O."),
+			NULL
+		},
+		&io_method,
+		DEFAULT_IO_METHOD, io_method_options,
+		NULL, assign_io_method, NULL
 	},
 
 	/* End-of-list marker */

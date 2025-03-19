@@ -22,9 +22,17 @@
 #ifndef TIDBITMAP_H
 #define TIDBITMAP_H
 
+#include "access/htup_details.h"
 #include "storage/itemptr.h"
 #include "utils/dsa.h"
 
+/*
+ * The maximum number of tuples per page is not large (typically 256 with
+ * 8K pages, or 1024 with 32K pages).  So there's not much point in making
+ * the per-page bitmaps variable size.  We just legislate that the size
+ * is this:
+ */
+#define TBM_MAX_TUPLES_PER_PAGE  MaxHeapTuplesPerPage
 
 /*
  * Actual bitmap representation is private to tidbitmap.c.  Callers can
@@ -53,11 +61,22 @@ typedef struct TBMIterator
 /* Result structure for tbm_iterate */
 typedef struct TBMIterateResult
 {
-	BlockNumber blockno;		/* page number containing tuples */
-	int			ntuples;		/* -1 indicates lossy result */
-	bool		recheck;		/* should the tuples be rechecked? */
-	/* Note: recheck is always true if ntuples < 0 */
-	OffsetNumber offsets[FLEXIBLE_ARRAY_MEMBER];
+	BlockNumber blockno;		/* block number containing tuples */
+
+	bool		lossy;
+
+	/*
+	 * Whether or not the tuples should be rechecked. This is always true if
+	 * the page is lossy but may also be true if the query requires recheck.
+	 */
+	bool		recheck;
+
+	/*
+	 * Pointer to the page containing the bitmap for this block. It is a void *
+	 * to avoid exposing the details of the tidbitmap PagetableEntry to API
+	 * users.
+	 */
+	void	   *internal_page;
 } TBMIterateResult;
 
 /* function prototypes in nodes/tidbitmap.c */
@@ -74,12 +93,16 @@ extern void tbm_add_page(TIDBitmap *tbm, BlockNumber pageno);
 extern void tbm_union(TIDBitmap *a, const TIDBitmap *b);
 extern void tbm_intersect(TIDBitmap *a, const TIDBitmap *b);
 
+extern int	tbm_extract_page_tuple(TBMIterateResult *iteritem,
+								   OffsetNumber *offsets,
+								   uint32 max_offsets);
+
 extern bool tbm_is_empty(const TIDBitmap *tbm);
 
 extern TBMPrivateIterator *tbm_begin_private_iterate(TIDBitmap *tbm);
 extern dsa_pointer tbm_prepare_shared_iterate(TIDBitmap *tbm);
-extern TBMIterateResult *tbm_private_iterate(TBMPrivateIterator *iterator);
-extern TBMIterateResult *tbm_shared_iterate(TBMSharedIterator *iterator);
+extern bool tbm_private_iterate(TBMPrivateIterator *iterator, TBMIterateResult *tbmres);
+extern bool tbm_shared_iterate(TBMSharedIterator *iterator, TBMIterateResult *tbmres);
 extern void tbm_end_private_iterate(TBMPrivateIterator *iterator);
 extern void tbm_end_shared_iterate(TBMSharedIterator *iterator);
 extern TBMSharedIterator *tbm_attach_shared_iterate(dsa_area *dsa,
@@ -90,7 +113,7 @@ extern TBMIterator tbm_begin_iterate(TIDBitmap *tbm,
 									 dsa_area *dsa, dsa_pointer dsp);
 extern void tbm_end_iterate(TBMIterator *iterator);
 
-extern TBMIterateResult *tbm_iterate(TBMIterator *iterator);
+extern bool tbm_iterate(TBMIterator *iterator, TBMIterateResult *tbmres);
 
 static inline bool
 tbm_exhausted(TBMIterator *iterator)

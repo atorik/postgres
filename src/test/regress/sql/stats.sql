@@ -8,6 +8,12 @@
 -- conditio sine qua non
 SHOW track_counts;  -- must be on
 
+-- List of backend types, contexts and objects tracked in pg_stat_io.
+\a
+SELECT backend_type, object, context FROM pg_stat_io
+  ORDER BY backend_type COLLATE "C", object COLLATE "C", context COLLATE "C";
+\a
+
 -- ensure that both seqscan and indexscan plans are allowed
 SET enable_seqscan TO on;
 SET enable_indexscan TO on;
@@ -420,9 +426,13 @@ SELECT sessions > :db_stat_sessions FROM pg_stat_database WHERE datname = (SELEC
 -- Test pg_stat_checkpointer checkpointer-related stats, together with pg_stat_wal
 SELECT num_requested AS rqst_ckpts_before FROM pg_stat_checkpointer \gset
 
--- Test pg_stat_wal (and make a temp table so our temp schema exists)
+-- Test pg_stat_wal
 SELECT wal_bytes AS wal_bytes_before FROM pg_stat_wal \gset
 
+-- Test pg_stat_get_backend_wal()
+SELECT wal_bytes AS backend_wal_bytes_before from pg_stat_get_backend_wal(pg_backend_pid()) \gset
+
+-- Make a temp table so our temp schema exists
 CREATE TEMP TABLE test_stats_temp AS SELECT 17;
 DROP TABLE test_stats_temp;
 
@@ -434,6 +444,9 @@ CHECKPOINT;
 
 SELECT num_requested > :rqst_ckpts_before FROM pg_stat_checkpointer;
 SELECT wal_bytes > :wal_bytes_before FROM pg_stat_wal;
+
+SELECT pg_stat_force_next_flush();
+SELECT wal_bytes > :backend_wal_bytes_before FROM pg_stat_get_backend_wal(pg_backend_pid());
 
 -- Test pg_stat_get_backend_idset() and some allied functions.
 -- In particular, verify that their notion of backend ID matches

@@ -243,6 +243,12 @@ typedef struct IndexAmRoutine
 	bool		amcanorder;
 	/* does AM support ORDER BY result of an operator on indexed column? */
 	bool		amcanorderbyop;
+	/* does AM support hashing using API consistent with the hash AM? */
+	bool		amcanhash;
+	/* do operators within an opfamily have consistent equality semantics? */
+	bool		amconsistentequality;
+	/* do operators within an opfamily have consistent ordering semantics? */
+	bool		amconsistentordering;
 	/* does AM support backward scanning? */
 	bool		amcanbackward;
 	/* does AM support UNIQUE indexes? */

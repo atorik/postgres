@@ -55,6 +55,9 @@ AggStrategy
 AggTransInfo
 Aggref
 AggregateInstrumentation
+AioWorkerControl
+AioWorkerSlot
+AioWorkerSubmissionQueue
 AlenState
 Alias
 AllocBlock
@@ -484,6 +487,7 @@ ConnParams
 ConnStatusType
 ConnType
 ConnectionStateEnum
+ConnectionTiming
 ConsiderSplitContext
 Const
 ConstrCheck
@@ -501,6 +505,7 @@ ConvertRowtypeExpr
 CookedConstraint
 CopyDest
 CopyFormatOptions
+CopyFromRoutine
 CopyFromState
 CopyFromStateData
 CopyHeaderChoice
@@ -512,6 +517,7 @@ CopyMultiInsertInfo
 CopyOnErrorChoice
 CopySource
 CopyStmt
+CopyToRoutine
 CopyToState
 CopyToStateData
 Cost
@@ -1030,11 +1036,14 @@ GinBtreeData
 GinBtreeDataLeafInsertData
 GinBtreeEntryInsertData
 GinBtreeStack
+GinBuffer
+GinBuildShared
 GinBuildState
 GinChkVal
 GinEntries
 GinEntryAccumulator
 GinIndexStat
+GinLeader
 GinMetaPageData
 GinNullCategory
 GinOptions
@@ -1047,9 +1056,11 @@ GinScanEntry
 GinScanKey
 GinScanOpaque
 GinScanOpaqueData
+GinSegmentInfo
 GinState
 GinStatsData
 GinTernaryValue
+GinTuple
 GinTupleCollector
 GinVacuumState
 GistBuildMode
@@ -1231,6 +1242,7 @@ IndexPath
 IndexRuntimeKeyInfo
 IndexScan
 IndexScanDesc
+IndexScanInstrumentation
 IndexScanState
 IndexStateFlagsAction
 IndexStmt
@@ -1270,6 +1282,8 @@ IntoClause
 InvalMessageArray
 InvalidationInfo
 InvalidationMsgsGroup
+IoMethod
+IoMethodOps
 IpcMemoryId
 IpcMemoryKey
 IpcMemoryState
@@ -1548,6 +1562,7 @@ LockTupleMode
 LockViewRecurse_context
 LockWaitPolicy
 LockingClause
+LogConnectionOption
 LogOpts
 LogStmtLevel
 LogicalDecodeBeginCB
@@ -1623,6 +1638,7 @@ Material
 MaterialPath
 MaterialState
 MdfdVec
+MdPathStr
 Memoize
 MemoizeEntry
 MemoizeInstrumentation
@@ -2115,6 +2131,26 @@ Permutation
 PermutationStep
 PermutationStepBlocker
 PermutationStepBlockerType
+PgAioBackend
+PgAioCtl
+PgAioHandle
+PgAioHandleCallbackID
+PgAioHandleCallbackStage
+PgAioHandleCallbackComplete
+PgAioHandleCallbackReport
+PgAioHandleCallbacks
+PgAioHandleCallbacksEntry
+PgAioHandleFlags
+PgAioHandleState
+PgAioOp
+PgAioOpData
+PgAioResult
+PgAioResultStatus
+PgAioReturn
+PgAioTargetData
+PgAioTargetID
+PgAioTargetInfo
+PgAioWaitRef
 PgArchData
 PgBackendGSSStatus
 PgBackendSSLStatus
@@ -2188,6 +2224,7 @@ PgStat_SubXactStatus
 PgStat_TableCounts
 PgStat_TableStatus
 PgStat_TableXactStatus
+PgStat_WalCounters
 PgStat_WalStats
 PgXmlErrorContext
 PgXmlStrictness
@@ -2410,6 +2447,7 @@ RelMapFile
 RelMapping
 RelOptInfo
 RelOptKind
+RelPathStr
 RelStatsInfo
 RelToCheck
 RelToCluster
@@ -2464,6 +2502,7 @@ RepOriginId
 ReparameterizeForeignPathByChild_function
 ReplaceVarsFromTargetList_context
 ReplaceVarsNoMatchOption
+ReplaceWrapOption
 ReplicaIdentityStmt
 ReplicationKind
 ReplicationSlot
@@ -2657,6 +2696,7 @@ SharedExecutorInstrumentation
 SharedFileSet
 SharedHashInfo
 SharedIncrementalSortInfo
+SharedIndexScanInstrumentation
 SharedInvalCatalogMsg
 SharedInvalCatcacheMsg
 SharedInvalRelcacheMsg
@@ -4235,3 +4275,5 @@ yyscan_t
 z_stream
 z_streamp
 zic_t
+ExplainExtensionOption
+ExplainOptionHandler

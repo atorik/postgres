@@ -70,6 +70,11 @@ select explain_filter('explain (analyze, serialize, buffers, format yaml) select
 select explain_filter('explain (buffers, format text) select * from int8_tbl i8');
 select explain_filter('explain (buffers, format json) select * from int8_tbl i8');
 
+-- Check expansion of window definitions
+
+select explain_filter('explain verbose select sum(unique1) over w, sum(unique2) over (w order by hundred), sum(tenthous) over (w order by hundred) from tenk1 window w as (partition by ten)');
+select explain_filter('explain verbose select sum(unique1) over w1, sum(unique2) over (w1 order by hundred), sum(tenthous) over (w1 order by hundred rows 10 preceding) from tenk1 window w1 as (partition by ten)');
+
 -- Check output including I/O timings.  These fields are conditional
 -- but always set in JSON format, so check them only in this case.
 set track_io_timing = on;
@@ -147,9 +152,6 @@ select jsonb_pretty(
   -- Also remove its sort-type fields, as those aren't 100% stable
   #- '{0,Plan,Plans,0,Sort Method}'
   #- '{0,Plan,Plans,0,Sort Space Type}'
-  -- Actual Rows can be 0 or 0.0 depending on whether loops>1
-  #- '{0,Plan,Plans,0,Actual Rows}'
-  #- '{0,Plan,Plans,0,Plans,0,Actual Rows}'
 );
 
 rollback;

@@ -371,14 +371,13 @@ ScanPgRelation(Oid targetRelId, bool indexOK, bool force_non_historic)
 	pg_class_desc = table_open(RelationRelationId, AccessShareLock);
 
 	/*
-	 * The caller might need a tuple that's newer than the one the historic
-	 * snapshot; currently the only case requiring to do so is looking up the
-	 * relfilenumber of non mapped system relations during decoding. That
-	 * snapshot can't change in the midst of a relcache build, so there's no
-	 * need to register the snapshot.
+	 * The caller might need a tuple that's newer than what's visible to the
+	 * historic snapshot; currently the only case requiring to do so is
+	 * looking up the relfilenumber of non mapped system relations during
+	 * decoding.
 	 */
 	if (force_non_historic)
-		snapshot = GetNonHistoricCatalogSnapshot(RelationRelationId);
+		snapshot = RegisterSnapshot(GetNonHistoricCatalogSnapshot(RelationRelationId));
 
 	pg_class_scan = systable_beginscan(pg_class_desc, ClassOidIndexId,
 									   indexOK && criticalRelcachesBuilt,
@@ -395,6 +394,10 @@ ScanPgRelation(Oid targetRelId, bool indexOK, bool force_non_historic)
 
 	/* all done */
 	systable_endscan(pg_class_scan);
+
+	if (snapshot)
+		UnregisterSnapshot(snapshot);
+
 	table_close(pg_class_desc, AccessShareLock);
 
 	return pg_class_tuple;
@@ -1928,6 +1931,7 @@ formrdesc(const char *relationName, Oid relationReltype,
 	relation->rd_rel->relpages = 0;
 	relation->rd_rel->reltuples = -1;
 	relation->rd_rel->relallvisible = 0;
+	relation->rd_rel->relallfrozen = 0;
 	relation->rd_rel->relkind = RELKIND_RELATION;
 	relation->rd_rel->relnatts = (int16) natts;
 
@@ -3885,6 +3889,7 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 			classform->relpages = 0;	/* it's empty until further notice */
 			classform->reltuples = -1;
 			classform->relallvisible = 0;
+			classform->relallfrozen = 0;
 		}
 		classform->relfrozenxid = freezeXid;
 		classform->relminmxid = minmulti;

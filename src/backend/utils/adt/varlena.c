@@ -3398,6 +3398,27 @@ byteaSetBit(PG_FUNCTION_ARGS)
 	PG_RETURN_BYTEA_P(res);
 }
 
+/*
+ * Return reversed bytea
+ */
+Datum
+bytea_reverse(PG_FUNCTION_ARGS)
+{
+	bytea	   *v = PG_GETARG_BYTEA_PP(0);
+	const char *p = VARDATA_ANY(v);
+	int			len = VARSIZE_ANY_EXHDR(v);
+	const char *endp = p + len;
+	bytea	   *result = palloc(len + VARHDRSZ);
+	char	   *dst = (char *) VARDATA(result) + len;
+
+	SET_VARSIZE(result, len + VARHDRSZ);
+
+	while (p < endp)
+		*(--dst) = *p++;
+
+	PG_RETURN_BYTEA_P(result);
+}
+
 
 /* text_name()
  * Converts a text type to a Name type.
@@ -4055,6 +4076,102 @@ bytea_sortsupport(PG_FUNCTION_ARGS)
 	MemoryContextSwitchTo(oldcontext);
 
 	PG_RETURN_VOID();
+}
+
+/* Cast bytea -> int2 */
+Datum
+bytea_int2(PG_FUNCTION_ARGS)
+{
+	bytea	   *v = PG_GETARG_BYTEA_PP(0);
+	int			len = VARSIZE_ANY_EXHDR(v);
+	uint16		result;
+
+	/* Check that the byte array is not too long */
+	if (len > sizeof(result))
+		ereport(ERROR,
+				errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				errmsg("smallint out of range"));
+
+	/* Convert it to an integer; most significant bytes come first */
+	result = 0;
+	for (int i = 0; i < len; i++)
+	{
+		result <<= BITS_PER_BYTE;
+		result |= ((unsigned char *) VARDATA_ANY(v))[i];
+	}
+
+	PG_RETURN_INT16(result);
+}
+
+/* Cast bytea -> int4 */
+Datum
+bytea_int4(PG_FUNCTION_ARGS)
+{
+	bytea	   *v = PG_GETARG_BYTEA_PP(0);
+	int			len = VARSIZE_ANY_EXHDR(v);
+	uint32		result;
+
+	/* Check that the byte array is not too long */
+	if (len > sizeof(result))
+		ereport(ERROR,
+				errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				errmsg("integer out of range"));
+
+	/* Convert it to an integer; most significant bytes come first */
+	result = 0;
+	for (int i = 0; i < len; i++)
+	{
+		result <<= BITS_PER_BYTE;
+		result |= ((unsigned char *) VARDATA_ANY(v))[i];
+	}
+
+	PG_RETURN_INT32(result);
+}
+
+/* Cast bytea -> int8 */
+Datum
+bytea_int8(PG_FUNCTION_ARGS)
+{
+	bytea	   *v = PG_GETARG_BYTEA_PP(0);
+	int			len = VARSIZE_ANY_EXHDR(v);
+	uint64		result;
+
+	/* Check that the byte array is not too long */
+	if (len > sizeof(result))
+		ereport(ERROR,
+				errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				errmsg("bigint out of range"));
+
+	/* Convert it to an integer; most significant bytes come first */
+	result = 0;
+	for (int i = 0; i < len; i++)
+	{
+		result <<= BITS_PER_BYTE;
+		result |= ((unsigned char *) VARDATA_ANY(v))[i];
+	}
+
+	PG_RETURN_INT64(result);
+}
+
+/* Cast int2 -> bytea; can just use int2send() */
+Datum
+int2_bytea(PG_FUNCTION_ARGS)
+{
+	return int2send(fcinfo);
+}
+
+/* Cast int4 -> bytea; can just use int4send() */
+Datum
+int4_bytea(PG_FUNCTION_ARGS)
+{
+	return int4send(fcinfo);
+}
+
+/* Cast int8 -> bytea; can just use int8send() */
+Datum
+int8_bytea(PG_FUNCTION_ARGS)
+{
+	return int8send(fcinfo);
 }
 
 /*

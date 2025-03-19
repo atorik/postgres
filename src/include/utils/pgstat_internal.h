@@ -622,7 +622,8 @@ extern void pgstat_archiver_snapshot_cb(void);
 
 /* flags for pgstat_flush_backend() */
 #define PGSTAT_BACKEND_FLUSH_IO		(1 << 0)	/* Flush I/O statistics */
-#define PGSTAT_BACKEND_FLUSH_ALL	(PGSTAT_BACKEND_FLUSH_IO)
+#define PGSTAT_BACKEND_FLUSH_WAL   (1 << 1) /* Flush WAL statistics */
+#define PGSTAT_BACKEND_FLUSH_ALL   (PGSTAT_BACKEND_FLUSH_IO | PGSTAT_BACKEND_FLUSH_WAL)
 
 extern bool pgstat_flush_backend(bool nowait, bits32 flags);
 extern bool pgstat_backend_flush_cb(bool nowait);
@@ -747,8 +748,6 @@ extern void pgstat_slru_snapshot_cb(void);
 /*
  * Functions in pgstat_wal.c
  */
-
-extern void pgstat_flush_wal(bool nowait);
 
 extern void pgstat_wal_init_backend_cb(void);
 extern bool pgstat_wal_have_pending_cb(void);

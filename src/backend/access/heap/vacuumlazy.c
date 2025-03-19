@@ -534,7 +534,7 @@ heap_vacuum_eager_scan_setup(LVRelState *vacrel, VacuumParams *params)
 	 * Tuples with XIDs older than OldestXmin or MXIDs older than OldestMxact
 	 * are technically freezable, but we won't freeze them unless the criteria
 	 * for opportunistic freezing is met. Only tuples with XIDs/MXIDs older
-	 * than the the FreezeLimit/MultiXactCutoff are frozen in the common case.
+	 * than the FreezeLimit/MultiXactCutoff are frozen in the common case.
 	 *
 	 * So, as a heuristic, we wait until the FreezeLimit has advanced past the
 	 * relfrozenxid or the MultiXactCutoff has advanced past the relminmxid to
@@ -623,7 +623,8 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 				minmulti_updated;
 	BlockNumber orig_rel_pages,
 				new_rel_pages,
-				new_rel_allvisible;
+				new_rel_allvisible,
+				new_rel_allfrozen;
 	PGRUsage	ru0;
 	TimestampTz starttime = 0;
 	PgStat_Counter startreadtime = 0,
@@ -898,9 +899,17 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	 * pg_class.relpages to
 	 */
 	new_rel_pages = vacrel->rel_pages;	/* After possible rel truncation */
-	visibilitymap_count(rel, &new_rel_allvisible, NULL);
+	visibilitymap_count(rel, &new_rel_allvisible, &new_rel_allfrozen);
 	if (new_rel_allvisible > new_rel_pages)
 		new_rel_allvisible = new_rel_pages;
+
+	/*
+	 * An all-frozen block _must_ be all-visible. As such, clamp the count of
+	 * all-frozen blocks to the count of all-visible blocks. This matches the
+	 * clamping of relallvisible above.
+	 */
+	if (new_rel_allfrozen > new_rel_allvisible)
+		new_rel_allfrozen = new_rel_allvisible;
 
 	/*
 	 * Now actually update rel's pg_class entry.
@@ -910,7 +919,8 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	 * scan every page that isn't skipped using the visibility map.
 	 */
 	vac_update_relstats(rel, new_rel_pages, vacrel->new_live_tuples,
-						new_rel_allvisible, vacrel->nindexes > 0,
+						new_rel_allvisible, new_rel_allfrozen,
+						vacrel->nindexes > 0,
 						vacrel->NewRelfrozenXid, vacrel->NewRelminMxid,
 						&frozenxid_updated, &minmulti_updated, false);
 
@@ -1253,9 +1263,12 @@ lazy_scan_heap(LVRelState *vacrel)
 		 * Consider if we definitely have enough space to process TIDs on page
 		 * already.  If we are close to overrunning the available space for
 		 * dead_items TIDs, pause and do a cycle of vacuuming before we tackle
-		 * this page.
+		 * this page. However, let's force at least one page-worth of tuples
+		 * to be stored as to ensure we do at least some work when the memory
+		 * configured is so low that we run out before storing anything.
 		 */
-		if (TidStoreMemoryUsage(vacrel->dead_items) > vacrel->dead_items_info->max_bytes)
+		if (vacrel->dead_items_info->num_items > 0 &&
+			TidStoreMemoryUsage(vacrel->dead_items) > vacrel->dead_items_info->max_bytes)
 		{
 			/*
 			 * Before beginning index vacuuming, we release any pin we may
@@ -3720,7 +3733,7 @@ update_relstats_all_indexes(LVRelState *vacrel)
 		vac_update_relstats(indrel,
 							istat->num_pages,
 							istat->num_index_tuples,
-							0,
+							0, 0,
 							false,
 							InvalidTransactionId,
 							InvalidMultiXactId,

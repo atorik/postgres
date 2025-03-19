@@ -49,6 +49,7 @@
 #include "postmaster/bgwriter.h"
 #include "postmaster/interrupt.h"
 #include "replication/syncrep.h"
+#include "storage/aio_subsys.h"
 #include "storage/bufmgr.h"
 #include "storage/condition_variable.h"
 #include "storage/fd.h"
@@ -157,7 +158,7 @@ static pg_time_t last_xlog_switch_time;
 
 /* Prototypes for private functions */
 
-static void HandleCheckpointerInterrupts(void);
+static void ProcessCheckpointerInterrupts(void);
 static void CheckArchiveTimeout(void);
 static bool IsCheckpointOnSchedule(double progress);
 static bool ImmediateCheckpointRequested(void);
@@ -276,6 +277,7 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 		LWLockReleaseAll();
 		ConditionVariableCancelSleep();
 		pgstat_report_wait_end();
+		pgaio_error_cleanup();
 		UnlockBuffers();
 		ReleaseAuxProcessResources(false);
 		AtEOXact_Buffers(false);
@@ -359,7 +361,7 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 		 */
 		AbsorbSyncRequests();
 
-		HandleCheckpointerInterrupts();
+		ProcessCheckpointerInterrupts();
 		if (ShutdownXLOGPending || ShutdownRequestPending)
 			break;
 
@@ -536,7 +538,7 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 			 * We may have received an interrupt during the checkpoint and the
 			 * latch might have been reset (e.g. in CheckpointWriteDelay).
 			 */
-			HandleCheckpointerInterrupts();
+			ProcessCheckpointerInterrupts();
 			if (ShutdownXLOGPending || ShutdownRequestPending)
 				break;
 		}
@@ -615,7 +617,7 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 		/* Clear any already-pending wakeups */
 		ResetLatch(MyLatch);
 
-		HandleCheckpointerInterrupts();
+		ProcessCheckpointerInterrupts();
 
 		if (ShutdownRequestPending)
 			break;
@@ -634,7 +636,7 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
  * Process any new interrupts.
  */
 static void
-HandleCheckpointerInterrupts(void)
+ProcessCheckpointerInterrupts(void)
 {
 	if (ProcSignalBarrierPending)
 		ProcessProcSignalBarrier();

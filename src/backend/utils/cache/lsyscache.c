@@ -185,6 +185,28 @@ get_opfamily_member(Oid opfamily, Oid lefttype, Oid righttype,
 }
 
 /*
+ * get_opfamily_member_for_cmptype
+ *		Get the OID of the operator that implements the specified comparison
+ *		type with the specified datatypes for the specified opfamily.
+ *
+ * Returns InvalidOid if there is no mapping for the comparison type or no
+ * pg_amop entry for the given keys.
+ */
+Oid
+get_opfamily_member_for_cmptype(Oid opfamily, Oid lefttype, Oid righttype,
+								CompareType cmptype)
+{
+	Oid			opmethod;
+	StrategyNumber strategy;
+
+	opmethod = get_opfamily_method(opfamily);
+	strategy = IndexAmTranslateCompareType(cmptype, opmethod, opfamily, true);
+	if (!strategy)
+		return InvalidOid;
+	return get_opfamily_member(opfamily, lefttype, righttype, strategy);
+}
+
+/*
  * get_ordering_op_properties
  *		Given the OID of an ordering operator (a btree "<" or ">" operator),
  *		determine its opfamily, its declared input datatype, and its
@@ -690,10 +712,11 @@ get_op_btree_interpretation(Oid opno)
  *		semantics.
  *
  * This is trivially true if they are the same operator.  Otherwise,
- * we look to see if they can be found in the same btree or hash opfamily.
- * Either finding allows us to assume that they have compatible notions
- * of equality.  (The reason we need to do these pushups is that one might
- * be a cross-type operator; for instance int24eq vs int4eq.)
+ * Otherwise, we look to see if they both belong to an opfamily that
+ * guarantees compatible semantics for equality.  Either finding allows us to
+ * assume that they have compatible notions of equality.  (The reason we need
+ * to do these pushups is that one might be a cross-type operator; for
+ * instance int24eq vs int4eq.)
  */
 bool
 equality_ops_are_compatible(Oid opno1, Oid opno2)
@@ -717,11 +740,15 @@ equality_ops_are_compatible(Oid opno1, Oid opno2)
 		HeapTuple	op_tuple = &catlist->members[i]->tuple;
 		Form_pg_amop op_form = (Form_pg_amop) GETSTRUCT(op_tuple);
 
-		/* must be btree or hash */
-		if (op_form->amopmethod == BTREE_AM_OID ||
-			op_form->amopmethod == HASH_AM_OID)
+		/*
+		 * op_in_opfamily() is cheaper than GetIndexAmRoutineByAmId(), so
+		 * check it first
+		 */
+		if (op_in_opfamily(opno2, op_form->amopfamily))
 		{
-			if (op_in_opfamily(opno2, op_form->amopfamily))
+			IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(op_form->amopmethod, false);
+
+			if (amroutine->amconsistentequality)
 			{
 				result = true;
 				break;
@@ -739,12 +766,13 @@ equality_ops_are_compatible(Oid opno1, Oid opno2)
  *		Return true if the two given comparison operators have compatible
  *		semantics.
  *
- * This is trivially true if they are the same operator.  Otherwise,
- * we look to see if they can be found in the same btree opfamily.
- * For example, '<' and '>=' ops match if they belong to the same family.
+ * This is trivially true if they are the same operator.  Otherwise, we look
+ * to see if they both belong to an opfamily that guarantees compatible
+ * semantics for ordering.  (For example, for btree, '<' and '>=' ops match if
+ * they belong to the same family.)
  *
- * (This is identical to equality_ops_are_compatible(), except that we
- * don't bother to examine hash opclasses.)
+ * (This is identical to equality_ops_are_compatible(), except that we check
+ * amconsistentordering instead of amconsistentequality.)
  */
 bool
 comparison_ops_are_compatible(Oid opno1, Oid opno2)
@@ -768,9 +796,15 @@ comparison_ops_are_compatible(Oid opno1, Oid opno2)
 		HeapTuple	op_tuple = &catlist->members[i]->tuple;
 		Form_pg_amop op_form = (Form_pg_amop) GETSTRUCT(op_tuple);
 
-		if (op_form->amopmethod == BTREE_AM_OID)
+		/*
+		 * op_in_opfamily() is cheaper than GetIndexAmRoutineByAmId(), so
+		 * check it first
+		 */
+		if (op_in_opfamily(opno2, op_form->amopfamily))
 		{
-			if (op_in_opfamily(opno2, op_form->amopfamily))
+			IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(op_form->amopmethod, false);
+
+			if (amroutine->amconsistentordering)
 			{
 				result = true;
 				break;
@@ -1275,6 +1309,28 @@ get_opclass_method(Oid opclass)
 }
 
 /*				---------- OPFAMILY CACHE ----------					 */
+
+/*
+ * get_opfamily_method
+ *
+ *		Returns the OID of the index access method the opfamily is for.
+ */
+Oid
+get_opfamily_method(Oid opfid)
+{
+	HeapTuple	tp;
+	Form_pg_opfamily opfform;
+	Oid			result;
+
+	tp = SearchSysCache1(OPFAMILYOID, ObjectIdGetDatum(opfid));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for operator family %u", opfid);
+	opfform = (Form_pg_opfamily) GETSTRUCT(tp);
+
+	result = opfform->opfmethod;
+	ReleaseSysCache(tp);
+	return result;
+}
 
 char *
 get_opfamily_name(Oid opfid, bool missing_ok)

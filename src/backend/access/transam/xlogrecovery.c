@@ -849,7 +849,9 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		ereport(FATAL,
 				(errmsg("requested timeline %u is not a child of this server's history",
 						recoveryTargetTLI),
-				 errdetail("Latest checkpoint is at %X/%X on timeline %u, but in the history of the requested timeline, the server forked off from that timeline at %X/%X.",
+		/* translator: %s is a backup_label file or a pg_control file */
+				 errdetail("Latest checkpoint in file \"%s\" is at %X/%X on timeline %u, but in the history of the requested timeline, the server forked off from that timeline at %X/%X.",
+						   haveBackupLabel ? "backup_label" : "pg_control",
 						   LSN_FORMAT_ARGS(CheckPointLoc),
 						   CheckPointTLI,
 						   LSN_FORMAT_ARGS(switchpoint))));
@@ -1772,7 +1774,7 @@ PerformWalRecovery(void)
 #endif
 
 			/* Handle interrupt signals of startup process */
-			HandleStartupProcInterrupts();
+			ProcessStartupProcInterrupts();
 
 			/*
 			 * Pause WAL replay, if requested by a hot-standby session via
@@ -2947,7 +2949,7 @@ recoveryPausesHere(bool endOfRecovery)
 	/* loop until recoveryPauseState is set to RECOVERY_NOT_PAUSED */
 	while (GetRecoveryPauseState() != RECOVERY_NOT_PAUSED)
 	{
-		HandleStartupProcInterrupts();
+		ProcessStartupProcInterrupts();
 		if (CheckForStandbyTrigger())
 			return;
 
@@ -3036,7 +3038,7 @@ recoveryApplyDelay(XLogReaderState *record)
 		ResetLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
 
 		/* This might change recovery_min_apply_delay. */
-		HandleStartupProcInterrupts();
+		ProcessStartupProcInterrupts();
 
 		if (CheckForStandbyTrigger())
 			break;
@@ -3401,7 +3403,7 @@ retry:
 	readOff = targetPageOff;
 
 	/* Measure I/O timing when reading segment */
-	io_start = pgstat_prepare_io_time();
+	io_start = pgstat_prepare_io_time(track_wal_io_timing);
 
 	pgstat_report_wait_start(WAIT_EVENT_WAL_READ);
 	r = pg_pread(readFile, readBuf, XLOG_BLCKSZ, (off_t) readOff);
@@ -3725,7 +3727,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						now = GetCurrentTimestamp();
 
 						/* Handle interrupt signals of startup process */
-						HandleStartupProcInterrupts();
+						ProcessStartupProcInterrupts();
 					}
 					last_fail_time = now;
 					currentSource = XLOG_FROM_ARCHIVE;
@@ -4015,7 +4017,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		 * This possibly-long loop needs to handle interrupts of startup
 		 * process.
 		 */
-		HandleStartupProcInterrupts();
+		ProcessStartupProcInterrupts();
 	}
 
 	return XLREAD_FAIL;			/* not reached */
@@ -4693,7 +4695,7 @@ RecoveryRequiresIntParameter(const char *param_name, int currValue, int minValue
 
 			while (GetRecoveryPauseState() != RECOVERY_NOT_PAUSED)
 			{
-				HandleStartupProcInterrupts();
+				ProcessStartupProcInterrupts();
 
 				if (CheckForStandbyTrigger())
 				{
@@ -4776,8 +4778,7 @@ check_primary_slot_name(char **newval, void **extra, GucSource source)
  * that we have odd behaviors such as unexpected GUC ordering dependencies.
  */
 
-static void
-pg_attribute_noreturn()
+pg_noreturn static void
 error_multiple_recovery_targets(void)
 {
 	ereport(ERROR,

@@ -579,6 +579,14 @@ my %pgdump_runs = (
 			'postgres',
 		],
 	},
+	no_policies => {
+		dump_cmd => [
+			'pg_dump', '--no-sync',
+			'--file' => "$tempdir/no_policies.sql",
+			'--no-policies',
+			'postgres',
+		],
+	},
 	no_privs => {
 		dump_cmd => [
 			'pg_dump', '--no-sync',
@@ -803,6 +811,7 @@ my %full_runs = (
 	no_toast_compression => 1,
 	no_large_objects => 1,
 	no_owner => 1,
+	no_policies => 1,
 	no_privs => 1,
 	no_statistics => 1,
 	no_table_access_method => 1,
@@ -1328,6 +1337,7 @@ my %tests = (
 		unlike => {
 			exclude_dump_test_schema => 1,
 			exclude_test_table => 1,
+			no_policies => 1,
 			only_dump_measurement => 1,
 		},
 	},
@@ -2948,6 +2958,7 @@ my %tests = (
 		unlike => {
 			exclude_dump_test_schema => 1,
 			exclude_test_table => 1,
+			no_policies => 1,
 			only_dump_measurement => 1,
 		},
 	},
@@ -2969,6 +2980,7 @@ my %tests = (
 		unlike => {
 			exclude_dump_test_schema => 1,
 			exclude_test_table => 1,
+			no_policies => 1,
 			only_dump_measurement => 1,
 		},
 	},
@@ -2990,6 +3002,7 @@ my %tests = (
 		unlike => {
 			exclude_dump_test_schema => 1,
 			exclude_test_table => 1,
+			no_policies => 1,
 			only_dump_measurement => 1,
 		},
 	},
@@ -3011,6 +3024,7 @@ my %tests = (
 		unlike => {
 			exclude_dump_test_schema => 1,
 			exclude_test_table => 1,
+			no_policies => 1,
 			only_dump_measurement => 1,
 		},
 	},
@@ -3032,6 +3046,7 @@ my %tests = (
 		unlike => {
 			exclude_dump_test_schema => 1,
 			exclude_test_table => 1,
+			no_policies => 1,
 			only_dump_measurement => 1,
 		},
 	},
@@ -3053,6 +3068,7 @@ my %tests = (
 		unlike => {
 			exclude_dump_test_schema => 1,
 			exclude_test_table => 1,
+			no_policies => 1,
 			only_dump_measurement => 1,
 		},
 	},
@@ -4720,24 +4736,41 @@ my %tests = (
 			CREATE TABLE dump_test.has_stats
 			AS SELECT g.g AS x, g.g / 2 AS y FROM generate_series(1,100) AS g(g);
 			CREATE MATERIALIZED VIEW dump_test.has_stats_mv AS SELECT * FROM dump_test.has_stats;
-			CREATE INDEX dup_test_post_data_ix ON dump_test.has_stats((x - 1));
+			CREATE INDEX dup_test_post_data_ix ON dump_test.has_stats(x, (x - 1));
 			ANALYZE dump_test.has_stats, dump_test.has_stats_mv;',
-		regexp => qr/pg_catalog.pg_restore_attribute_stats/,
+		regexp => qr/^
+			\QSELECT * FROM pg_catalog.pg_restore_relation_stats(\E\s+
+			'version',\s'\d+'::integer,\s+
+			'relation',\s'dump_test.dup_test_post_data_ix'::regclass,\s+
+			'relpages',\s'\d+'::integer,\s+
+			'reltuples',\s'\d+'::real,\s+
+			'relallvisible',\s'\d+'::integer\s+
+			\);\s+
+			\QSELECT * FROM pg_catalog.pg_restore_attribute_stats(\E\s+
+			'version',\s'\d+'::integer,\s+
+			'relation',\s'dump_test.dup_test_post_data_ix'::regclass,\s+
+			'attnum',\s'2'::smallint,\s+
+			'inherited',\s'f'::boolean,\s+
+			'null_frac',\s'0'::real,\s+
+			'avg_width',\s'4'::integer,\s+
+			'n_distinct',\s'-1'::real,\s+
+			'histogram_bounds',\s'\{[0-9,]+\}'::text,\s+
+			'correlation',\s'1'::real\s+
+			\);/xm,
 		like => {
 			%full_runs,
 			%dump_test_schema_runs,
 			no_data_no_schema => 1,
 			no_schema => 1,
-			section_data => 1,
 			section_post_data => 1,
 			statistics_only => 1,
-			},
+		},
 		unlike => {
 			exclude_dump_test_schema => 1,
 			no_statistics => 1,
 			only_dump_measurement => 1,
 			schema_only => 1,
-			},
+		},
 	},
 
 	#
@@ -4759,11 +4792,11 @@ my %tests = (
 			section_data => 1,
 			section_post_data => 1,
 			statistics_only => 1,
-			},
+		},
 		unlike => {
 			no_statistics => 1,
 			schema_only => 1,
-			},
+		},
 	},
 
 	# CREATE TABLE with partitioned table and various AMs.  One
