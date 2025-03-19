@@ -52,6 +52,7 @@
 #include "replication/origin.h"
 #include "replication/snapbuild.h"
 #include "replication/syncrep.h"
+#include "storage/aio_subsys.h"
 #include "storage/condition_variable.h"
 #include "storage/fd.h"
 #include "storage/lmgr.h"
@@ -2412,6 +2413,8 @@ CommitTransaction(void)
 						 RESOURCE_RELEASE_BEFORE_LOCKS,
 						 true, true);
 
+	AtEOXact_Aio(true);
+
 	/* Check we've released all buffer pins */
 	AtEOXact_Buffers(true);
 
@@ -2717,6 +2720,8 @@ PrepareTransaction(void)
 						 RESOURCE_RELEASE_BEFORE_LOCKS,
 						 true, true);
 
+	AtEOXact_Aio(true);
+
 	/* Check we've released all buffer pins */
 	AtEOXact_Buffers(true);
 
@@ -2830,6 +2835,8 @@ AbortTransaction(void)
 	/* Clear wait information and command progress indicator */
 	pgstat_report_wait_end();
 	pgstat_progress_end_command();
+
+	pgaio_error_cleanup();
 
 	/* Clean up buffer content locks, too */
 	UnlockBuffers();
@@ -2964,6 +2971,7 @@ AbortTransaction(void)
 		ResourceOwnerRelease(TopTransactionResourceOwner,
 							 RESOURCE_RELEASE_BEFORE_LOCKS,
 							 false, true);
+		AtEOXact_Aio(false);
 		AtEOXact_Buffers(false);
 		AtEOXact_RelationCache(false);
 		AtEOXact_TypeCache();
@@ -5236,6 +5244,9 @@ AbortSubTransaction(void)
 
 	pgstat_report_wait_end();
 	pgstat_progress_end_command();
+
+	pgaio_error_cleanup();
+
 	UnlockBuffers();
 
 	/* Reset WAL record construction state */
@@ -5333,6 +5344,7 @@ AbortSubTransaction(void)
 							 RESOURCE_RELEASE_BEFORE_LOCKS,
 							 false, false);
 
+		AtEOXact_Aio(false);
 		AtEOSubXact_RelationCache(false, s->subTransactionId,
 								  s->parent->subTransactionId);
 		AtEOSubXact_TypeCache();
