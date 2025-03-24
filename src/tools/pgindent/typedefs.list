@@ -55,6 +55,9 @@ AggStrategy
 AggTransInfo
 Aggref
 AggregateInstrumentation
+AioWorkerControl
+AioWorkerSlot
+AioWorkerSubmissionQueue
 AlenState
 Alias
 AllocBlock
@@ -477,6 +480,7 @@ ConditionVariableMinimallyPadded
 ConditionalStack
 ConfigData
 ConfigVariable
+ConflictTupleInfo
 ConflictType
 ConnCacheEntry
 ConnCacheKey
@@ -1279,6 +1283,8 @@ IntoClause
 InvalMessageArray
 InvalidationInfo
 InvalidationMsgsGroup
+IoMethod
+IoMethodOps
 IpcMemoryId
 IpcMemoryKey
 IpcMemoryState
@@ -2126,6 +2132,26 @@ Permutation
 PermutationStep
 PermutationStepBlocker
 PermutationStepBlockerType
+PgAioBackend
+PgAioCtl
+PgAioHandle
+PgAioHandleCallbackID
+PgAioHandleCallbackStage
+PgAioHandleCallbackComplete
+PgAioHandleCallbackReport
+PgAioHandleCallbacks
+PgAioHandleCallbacksEntry
+PgAioHandleFlags
+PgAioHandleState
+PgAioOp
+PgAioOpData
+PgAioResult
+PgAioResultStatus
+PgAioReturn
+PgAioTargetData
+PgAioTargetID
+PgAioTargetInfo
+PgAioWaitRef
 PgArchData
 PgBackendGSSStatus
 PgBackendSSLStatus
@@ -2477,6 +2503,7 @@ RepOriginId
 ReparameterizeForeignPathByChild_function
 ReplaceVarsFromTargetList_context
 ReplaceVarsNoMatchOption
+ReplaceWrapOption
 ReplicaIdentityStmt
 ReplicationKind
 ReplicationSlot
@@ -4248,3 +4275,5 @@ yyscan_t
 z_stream
 z_streamp
 zic_t
+ExplainExtensionOption
+ExplainOptionHandler

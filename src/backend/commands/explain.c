@@ -17,8 +17,10 @@
 #include "catalog/pg_type.h"
 #include "commands/createas.h"
 #include "commands/defrem.h"
+#include "commands/explain.h"
 #include "commands/explain_dr.h"
 #include "commands/explain_format.h"
+#include "commands/explain_state.h"
 #include "commands/prepare.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
@@ -50,6 +52,9 @@ ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
 /* Hook for plugins to get control in explain_get_index_name() */
 explain_get_index_name_hook_type explain_get_index_name_hook = NULL;
 
+/* per-plan and per-node hooks for plugins to print additional info */
+explain_per_plan_hook_type explain_per_plan_hook = NULL;
+explain_per_node_hook_type explain_per_node_hook = NULL;
 
 /*
  * Various places within need to convert bytes to kilobytes.  Round these up
@@ -176,130 +181,11 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 	JumbleState *jstate = NULL;
 	Query	   *query;
 	List	   *rewritten;
-	ListCell   *lc;
-	bool		timing_set = false;
-	bool		buffers_set = false;
-	bool		summary_set = false;
 
-	/* Parse options list. */
-	foreach(lc, stmt->options)
-	{
-		DefElem    *opt = (DefElem *) lfirst(lc);
+	/* Configure the ExplainState based on the provided options */
+	ParseExplainOptionList(es, stmt->options, pstate);
 
-		if (strcmp(opt->defname, "analyze") == 0)
-			es->analyze = defGetBoolean(opt);
-		else if (strcmp(opt->defname, "verbose") == 0)
-			es->verbose = defGetBoolean(opt);
-		else if (strcmp(opt->defname, "costs") == 0)
-			es->costs = defGetBoolean(opt);
-		else if (strcmp(opt->defname, "buffers") == 0)
-		{
-			buffers_set = true;
-			es->buffers = defGetBoolean(opt);
-		}
-		else if (strcmp(opt->defname, "wal") == 0)
-			es->wal = defGetBoolean(opt);
-		else if (strcmp(opt->defname, "settings") == 0)
-			es->settings = defGetBoolean(opt);
-		else if (strcmp(opt->defname, "generic_plan") == 0)
-			es->generic = defGetBoolean(opt);
-		else if (strcmp(opt->defname, "timing") == 0)
-		{
-			timing_set = true;
-			es->timing = defGetBoolean(opt);
-		}
-		else if (strcmp(opt->defname, "summary") == 0)
-		{
-			summary_set = true;
-			es->summary = defGetBoolean(opt);
-		}
-		else if (strcmp(opt->defname, "memory") == 0)
-			es->memory = defGetBoolean(opt);
-		else if (strcmp(opt->defname, "serialize") == 0)
-		{
-			if (opt->arg)
-			{
-				char	   *p = defGetString(opt);
-
-				if (strcmp(p, "off") == 0 || strcmp(p, "none") == 0)
-					es->serialize = EXPLAIN_SERIALIZE_NONE;
-				else if (strcmp(p, "text") == 0)
-					es->serialize = EXPLAIN_SERIALIZE_TEXT;
-				else if (strcmp(p, "binary") == 0)
-					es->serialize = EXPLAIN_SERIALIZE_BINARY;
-				else
-					ereport(ERROR,
-							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							 errmsg("unrecognized value for EXPLAIN option \"%s\": \"%s\"",
-									opt->defname, p),
-							 parser_errposition(pstate, opt->location)));
-			}
-			else
-			{
-				/* SERIALIZE without an argument is taken as 'text' */
-				es->serialize = EXPLAIN_SERIALIZE_TEXT;
-			}
-		}
-		else if (strcmp(opt->defname, "format") == 0)
-		{
-			char	   *p = defGetString(opt);
-
-			if (strcmp(p, "text") == 0)
-				es->format = EXPLAIN_FORMAT_TEXT;
-			else if (strcmp(p, "xml") == 0)
-				es->format = EXPLAIN_FORMAT_XML;
-			else if (strcmp(p, "json") == 0)
-				es->format = EXPLAIN_FORMAT_JSON;
-			else if (strcmp(p, "yaml") == 0)
-				es->format = EXPLAIN_FORMAT_YAML;
-			else
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("unrecognized value for EXPLAIN option \"%s\": \"%s\"",
-								opt->defname, p),
-						 parser_errposition(pstate, opt->location)));
-		}
-		else
-			ereport(ERROR,
-					(errcode(ERRCODE_SYNTAX_ERROR),
-					 errmsg("unrecognized EXPLAIN option \"%s\"",
-							opt->defname),
-					 parser_errposition(pstate, opt->location)));
-	}
-
-	/* check that WAL is used with EXPLAIN ANALYZE */
-	if (es->wal && !es->analyze)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("EXPLAIN option %s requires ANALYZE", "WAL")));
-
-	/* if the timing was not set explicitly, set default value */
-	es->timing = (timing_set) ? es->timing : es->analyze;
-
-	/* if the buffers was not set explicitly, set default value */
-	es->buffers = (buffers_set) ? es->buffers : es->analyze;
-
-	/* check that timing is used with EXPLAIN ANALYZE */
-	if (es->timing && !es->analyze)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("EXPLAIN option %s requires ANALYZE", "TIMING")));
-
-	/* check that serialize is used with EXPLAIN ANALYZE */
-	if (es->serialize != EXPLAIN_SERIALIZE_NONE && !es->analyze)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("EXPLAIN option %s requires ANALYZE", "SERIALIZE")));
-
-	/* check that GENERIC_PLAN is not used with EXPLAIN ANALYZE */
-	if (es->generic && es->analyze)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("EXPLAIN options ANALYZE and GENERIC_PLAN cannot be used together")));
-
-	/* if the summary was not set explicitly, set default value */
-	es->summary = (summary_set) ? es->summary : es->analyze;
-
+	/* Extract the query and, if enabled, jumble it */
 	query = castNode(Query, stmt->query);
 	if (IsQueryIdEnabled())
 		jstate = JumbleQuery(query);
@@ -358,22 +244,6 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 	end_tup_output(tstate);
 
 	pfree(es->str->data);
-}
-
-/*
- * Create a new ExplainState struct initialized with default options.
- */
-ExplainState *
-NewExplainState(void)
-{
-	ExplainState *es = (ExplainState *) palloc0(sizeof(ExplainState));
-
-	/* Set default options (most fields can be left as zeroes). */
-	es->costs = true;
-	/* Prepare output buffer. */
-	es->str = makeStringInfo();
-
-	return es;
 }
 
 /*
@@ -786,6 +656,11 @@ ExplainOnePlan(PlannedStmt *plannedstmt, CachedPlan *cplan,
 	/* Print info about serialization of output */
 	if (es->serialize != EXPLAIN_SERIALIZE_NONE)
 		ExplainPrintSerialize(es, &serializeMetrics);
+
+	/* Allow plugins to print additional information */
+	if (explain_per_plan_hook)
+		(*explain_per_plan_hook) (plannedstmt, into, es, queryString,
+								  params, queryEnv);
 
 	/*
 	 * Close down the query and free resources.  Include time for this in the
@@ -2451,6 +2326,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		ExplainFlushWorkersState(es);
 	es->workers_state = save_workers_state;
 
+	/* Allow plugins to print additional information */
+	if (explain_per_node_hook)
+		(*explain_per_node_hook) (planstate, ancestors, relationship,
+								  plan_name, es);
+
 	/*
 	 * If partition pruning was done during executor initialization, the
 	 * number of child plans we'll display below will be less than the number
@@ -3745,18 +3625,8 @@ show_memoize_info(MemoizeState *mstate, List *ancestors, ExplainState *es)
 		separator = ", ";
 	}
 
-	if (es->format != EXPLAIN_FORMAT_TEXT)
-	{
-		ExplainPropertyText("Cache Key", keystr.data, es);
-		ExplainPropertyText("Cache Mode", mstate->binary_mode ? "binary" : "logical", es);
-	}
-	else
-	{
-		ExplainIndentText(es);
-		appendStringInfo(es->str, "Cache Key: %s\n", keystr.data);
-		ExplainIndentText(es);
-		appendStringInfo(es->str, "Cache Mode: %s\n", mstate->binary_mode ? "binary" : "logical");
-	}
+	ExplainPropertyText("Cache Key", keystr.data, es);
+	ExplainPropertyText("Cache Mode", mstate->binary_mode ? "binary" : "logical", es);
 
 	pfree(keystr.data);
 
@@ -4695,10 +4565,20 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 			break;
 	}
 
-	/* Should we explicitly label target relations? */
+	/*
+	 * Should we explicitly label target relations?
+	 *
+	 * If there's only one target relation, do not list it if it's the
+	 * relation named in the query, or if it has been pruned.  (Normally
+	 * mtstate->resultRelInfo doesn't include pruned relations, but a single
+	 * pruned target relation may be present, if all other target relations
+	 * have been pruned.  See ExecInitModifyTable().)
+	 */
 	labeltargets = (mtstate->mt_nrels > 1 ||
 					(mtstate->mt_nrels == 1 &&
-					 mtstate->resultRelInfo[0].ri_RangeTableIndex != node->nominalRelation));
+					 mtstate->resultRelInfo[0].ri_RangeTableIndex != node->nominalRelation &&
+					 bms_is_member(mtstate->resultRelInfo[0].ri_RangeTableIndex,
+								   mtstate->ps.state->es_unpruned_relids)));
 
 	if (labeltargets)
 		ExplainOpenGroup("Target Tables", "Target Tables", false, es);
