@@ -1535,8 +1535,11 @@ synchronous_standby_names = 'ANY 2 (s1, s2, s3)'
    <para>
     When the <xref linkend="guc-hot-standby"/> parameter is set to true on a
     standby server, it will begin accepting connections once the recovery has
-    brought the system to a consistent state.  All such connections are
-    strictly read-only; not even temporary tables may be written.
+    brought the system to a consistent state.  However, overflowed
+    subtransactions may also delay snapshot readiness for hot standby. In such
+    case, the issue can be resolved by closing the transaction containing the
+    overflowed subtransactions.  All connections accepted by the hot standby
+    are strictly read-only; not even temporary tables may be written.
    </para>
 
    <para>
