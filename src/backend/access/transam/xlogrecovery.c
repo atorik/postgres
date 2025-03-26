@@ -2248,8 +2248,9 @@ CheckRecoveryConsistency(void)
 		CheckTablespaceDirectory();
 
 		reachedConsistency = true;
+
 		ereport(LOG,
-				(errmsg("consistent recovery state reached at %X/%X",
+				(errmsg("minimum recovery point reached at %X/%X",
 						LSN_FORMAT_ARGS(lastReplayedEndRecPtr))));
 	}
 
@@ -2268,6 +2269,10 @@ CheckRecoveryConsistency(void)
 		SpinLockRelease(&XLogRecoveryCtl->info_lck);
 
 		LocalHotStandbyActive = true;
+
+		ereport(LOG,
+				(errmsg("consistent recovery state reached at %X/%X",
+						LSN_FORMAT_ARGS(lastReplayedEndRecPtr))));
 
 		SendPostmasterSignal(PMSIGNAL_BEGIN_HOT_STANDBY);
 	}

@@ -306,12 +306,13 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 						(errcode(ERRCODE_CANNOT_CONNECT_NOW),
 						 errmsg("the database system is starting up")));
 				break;
-			case CAC_NOTCONSISTENT_OR_OVERFLOWED:
+			case CAC_NOTCONSISTENT:
 				if (EnableHotStandby)
 					ereport(FATAL,
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
 							 errmsg("the database system is not yet accepting connections"),
-							 errdetail("Consistent recovery state has not been yet reached, or snapshot is not ready for hot standby.")));
+							 errdetail("Consistent recovery state has not been yet reached."),
+							 errhint("Minimum recovery point has not been reached yet or a write transaction may have more than %d subtransactions", PGPROC_MAX_CACHED_SUBXIDS)));
 				else
 					ereport(FATAL,
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),

@@ -1535,11 +1535,8 @@ synchronous_standby_names = 'ANY 2 (s1, s2, s3)'
    <para>
     When the <xref linkend="guc-hot-standby"/> parameter is set to true on a
     standby server, it will begin accepting connections once the recovery has
-    brought the system to a consistent state.  However, overflowed
-    subtransactions may also delay snapshot readiness for hot standby. In such
-    case, the issue can be resolved by closing the transaction containing the
-    overflowed subtransactions.  All connections accepted by the hot standby
-    are strictly read-only; not even temporary tables may be written.
+    brought the system to a consistent state.  All such connections are
+    strictly read-only; not even temporary tables may be written.
    </para>
 
    <para>
@@ -1994,6 +1991,7 @@ LOG:  database system is ready to accept read-only connections
        </listitem>
       </itemizedlist>
 
+    The former case can be resolved by closing the transaction.
     If you are running file-based log shipping ("warm standby"), you might need
     to wait until the next WAL file arrives, which could be as long as the
     <varname>archive_timeout</varname> setting on the primary.
