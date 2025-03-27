@@ -1967,6 +1967,10 @@ LOG:  entering standby mode
 
 ... then some time later ...
 
+LOG:  minimum recovery point reached
+
+... It may take some time ...
+
 LOG:  consistent recovery state reached
 LOG:  database system is ready to accept read-only connections
 </programlisting>
@@ -1991,7 +1995,10 @@ LOG:  database system is ready to accept read-only connections
        </listitem>
       </itemizedlist>
 
-    The former case can be resolved by closing the transaction.
+    In this case, only "minimum recovery point reached" is logged, and
+    "consistent recovery state reached" is not logged. This issue can be
+    resolved by closing the transaction.
+    This case can be resolved by closing the transaction.
     If you are running file-based log shipping ("warm standby"), you might need
     to wait until the next WAL file arrives, which could be as long as the
     <varname>archive_timeout</varname> setting on the primary.

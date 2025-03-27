@@ -311,9 +311,7 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 					ereport(FATAL,
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
 							 errmsg("the database system is not yet accepting connections"),
-							 errdetail("Consistent recovery state has not been yet reached."),
-							 errhint("Minimum recovery point has not been yet reached or a write transaction may have more than %d subtransactions.",
-									 PGPROC_MAX_CACHED_SUBXIDS)));
+							 errdetail("Consistent recovery state has not been yet reached.")));
 				else
 					ereport(FATAL,
 							(errcode(ERRCODE_CANNOT_CONNECT_NOW),
