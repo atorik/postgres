@@ -36,7 +36,10 @@
 #include "utils/syscache.h"
 #include "utils/varlena.h"
 
-PG_MODULE_MAGIC;
+PG_MODULE_MAGIC_EXT(
+					.name = "pgoutput",
+					.version = PG_VERSION
+);
 
 static void pgoutput_startup(LogicalDecodingContext *ctx,
 							 OutputPluginOptions *opt, bool is_init);
@@ -2400,7 +2403,7 @@ rel_sync_cache_relation_cb(Datum arg, Oid relid)
 /*
  * Publication relation/schema map syscache invalidation callback
  *
- * Called for invalidations on pg_publication and pg_namespace.
+ * Called for invalidations on pg_namespace.
  */
 static void
 rel_sync_cache_publication_cb(Datum arg, int cacheid, uint32 hashvalue)
