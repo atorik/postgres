@@ -204,7 +204,8 @@
 					# (change requires restart)
 #io_combine_limit = 128kB		# usually 1-128 blocks (depends on OS)
 
-#io_method = worker			# worker, sync (change requires restart)
+#io_method = worker			# worker, io_uring, sync
+					# (change requires restart)
 #io_max_concurrency = -1		# Max number of IOs that one process
 					# can execute simultaneously
 					# -1 sets based on shared_buffers
@@ -389,6 +390,8 @@
 
 # These settings are ignored on a publisher.
 
+#max_active_replication_origins = 10	# max number of active replication origins
+					# (change requires restart)
 #max_logical_replication_workers = 4	# taken from max_worker_processes
 					# (change requires restart)
 #max_sync_workers_per_subscription = 2	# taken from max_logical_replication_workers

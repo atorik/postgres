@@ -480,6 +480,7 @@ ConditionVariableMinimallyPadded
 ConditionalStack
 ConfigData
 ConfigVariable
+ConflictTupleInfo
 ConflictType
 ConnCacheEntry
 ConnCacheKey
@@ -2150,6 +2151,7 @@ PgAioReturn
 PgAioTargetData
 PgAioTargetID
 PgAioTargetInfo
+PgAioUringContext
 PgAioWaitRef
 PgArchData
 PgBackendGSSStatus
@@ -2228,6 +2230,7 @@ PgStat_WalCounters
 PgStat_WalStats
 PgXmlErrorContext
 PgXmlStrictness
+Pg_abi_values
 Pg_finfo_record
 Pg_magic_struct
 PipeProtoChunk
@@ -4276,3 +4279,4 @@ z_streamp
 zic_t
 ExplainExtensionOption
 ExplainOptionHandler
+overexplain_options

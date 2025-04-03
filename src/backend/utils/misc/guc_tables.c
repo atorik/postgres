@@ -2680,7 +2680,7 @@ struct config_int ConfigureNamesInt[] =
 
 	{
 		{"max_files_per_process", PGC_POSTMASTER, RESOURCES_KERNEL,
-			gettext_noop("Sets the maximum number of simultaneously open files for each server process."),
+			gettext_noop("Sets the maximum number of files each server process is allowed to open simultaneously."),
 			NULL
 		},
 		&max_files_per_process,
@@ -3371,6 +3371,18 @@ struct config_int ConfigureNamesInt[] =
 		},
 		&max_parallel_apply_workers_per_subscription,
 		2, 0, MAX_PARALLEL_WORKER_LIMIT,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_active_replication_origins",
+			PGC_POSTMASTER,
+			REPLICATION_SUBSCRIBERS,
+			gettext_noop("Sets the maximum number of active replication origins."),
+			NULL
+		},
+		&max_active_replication_origins,
+		10, 0, MAX_BACKENDS,
 		NULL, NULL, NULL
 	},
 
