@@ -28682,7 +28682,11 @@ acl      | {postgres=arwdDxtm/postgres,foo=r/postgres}
         configuration set (See <xref linkend="runtime-config-logging"/>
         for more information), but will not be sent to the client
         regardless of <xref linkend="guc-client-min-messages"/>.
-        </para></entry>
+       </para>
+       <para>
+        This function is restricted to superusers by default, but other
+        users can be granted EXECUTE to run the function.
+       </para></entry>
       </row>
 
       <row>
