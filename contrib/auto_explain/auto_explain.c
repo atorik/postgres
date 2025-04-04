@@ -15,6 +15,7 @@
 #include <limits.h>
 
 #include "access/parallel.h"
+#include "commands/dynamic_explain.h"
 #include "commands/explain.h"
 #include "commands/explain_format.h"
 #include "commands/explain_state.h"
