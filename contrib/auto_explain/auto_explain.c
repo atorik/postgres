@@ -413,7 +413,7 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 			es->format = auto_explain_log_format;
 			es->settings = auto_explain_log_settings;
 
-			ExplainAssembleLogOutput(es, queryDesc, auto_explain_log_format,
+			ExplainStringAssemble(es, queryDesc, auto_explain_log_format,
 									 auto_explain_log_triggers,
 									 auto_explain_log_parameter_max_length);
 
