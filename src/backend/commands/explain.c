@@ -5115,31 +5115,25 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 	switch (nodeTag(ps->plan))
 	{
 		case T_Append:
-			ereport(DEBUG1, errmsg("wrapping Append"));
 			WrapPlanStatesWithExplain(((AppendState *) ps)->appendplans,
 											  ((AppendState *) ps)->as_nplans);
 			break;
 		case T_MergeAppend:
-			ereport(DEBUG1, errmsg("wrapping MergeAppend"));
 			WrapPlanStatesWithExplain(((MergeAppendState *) ps)->mergeplans,
 											  ((MergeAppendState *) ps)->ms_nplans);
 			break;
 		case T_BitmapAnd:
-			ereport(DEBUG1, errmsg("wrapping BitmapAndState"));
 			WrapPlanStatesWithExplain(((BitmapAndState *) ps)->bitmapplans,
 											  ((BitmapAndState *) ps)->nplans);
 			break;
 		case T_BitmapOr:
-			ereport(DEBUG1, errmsg("wrapping BitmapOrtate"));
 			WrapPlanStatesWithExplain(((BitmapOrState *) ps)->bitmapplans,
 											  ((BitmapOrState *) ps)->nplans);
 			break;
 		case T_SubqueryScan:
-			ereport(DEBUG1, errmsg("wrapping Subquery"));
 			WrapExecProcNodeWithExplain(((SubqueryScanState *) ps)->subplan);
 			break;
 		case T_CustomScan:
-			ereport(DEBUG1, errmsg("wrapping CustomScanState"));
 			WrapCustomPlanChildExecProcNodesWithExplain((CustomScanState *) ps);
 			break;
 		default:
@@ -5196,31 +5190,25 @@ UnwrapExecProcNodeWithExplain(PlanState *ps)
 	switch (nodeTag(ps->plan))
 	{
 		case T_Append:
-			ereport(DEBUG1, errmsg("unwrapping Append"));
 			UnwrapMultiExecProcNodesWithExplain(((AppendState *) ps)->appendplans,
 												((AppendState *) ps)->as_nplans);
 			break;
 		case T_MergeAppend:
-			ereport(DEBUG1, errmsg("unwrapping MergeAppend"));
 			UnwrapMultiExecProcNodesWithExplain(((MergeAppendState *) ps)->mergeplans,
 												((MergeAppendState *) ps)->ms_nplans);
 			break;
 		case T_BitmapAnd:
-			ereport(DEBUG1, errmsg("unwrapping BitmapAndState"));
 			UnwrapMultiExecProcNodesWithExplain(((BitmapAndState *) ps)->bitmapplans,
 												((BitmapAndState *) ps)->nplans);
 			break;
 		case T_BitmapOr:
-			ereport(DEBUG1, errmsg("unwrapping BitmapOrtate"));
 			UnwrapMultiExecProcNodesWithExplain(((BitmapOrState *) ps)->bitmapplans,
 												((BitmapOrState *) ps)->nplans);
 			break;
 		case T_SubqueryScan:
-			ereport(DEBUG1, errmsg("unwrapping Subquery"));
 			UnwrapExecProcNodeWithExplain(((SubqueryScanState *) ps)->subplan);
 			break;
 		case T_CustomScan:
-			ereport(DEBUG1, errmsg("unwrapping CustomScanState"));
 			UnwrapCustomPlanChildExecProcNodesWithExplain((CustomScanState *) ps);
 			break;
 		default:
