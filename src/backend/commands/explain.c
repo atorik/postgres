@@ -5110,6 +5110,16 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 		WrapExecProcNodeWithExplain(ps->lefttree);
 	if (ps->righttree != NULL)
 		WrapExecProcNodeWithExplain(ps->righttree);
+	if (ps->subPlan != NULL)
+	{
+		ListCell   *l;
+
+		foreach(l, ps->subPlan)
+		{
+			SubPlanState *sstate = (SubPlanState *) lfirst(l);
+			WrapExecProcNodeWithExplain(sstate->planstate);
+		}
+	}
 
 	/* special child plans */
 	switch (nodeTag(ps->plan))
@@ -5185,6 +5195,16 @@ UnwrapExecProcNodeWithExplain(PlanState *ps)
 		UnwrapExecProcNodeWithExplain(ps->lefttree);
 	if (ps->righttree != NULL)
 		UnwrapExecProcNodeWithExplain(ps->righttree);
+	if (ps->subPlan != NULL)
+	{
+		ListCell   *l;
+
+		foreach(l, ps->subPlan)
+		{
+			SubPlanState *sstate = (SubPlanState *) lfirst(l);
+			UnwrapExecProcNodeWithExplain(sstate->planstate);
+		}
+	}
 
 	/* special child plans */
 	switch (nodeTag(ps->plan))
