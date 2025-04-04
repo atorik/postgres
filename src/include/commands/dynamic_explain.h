@@ -25,6 +25,7 @@ extern void ExplainAssembleLogOutput(struct ExplainState *es, QueryDesc *queryDe
 
 extern void HandleLogQueryPlanInterrupt(void);
 extern void ResetLogQueryPlanState(void);
+extern void ProcessLogQueryPlanInterrupt(void);
 
 extern Datum pg_log_query_plan(PG_FUNCTION_ARGS);
 

@@ -88,6 +88,4 @@ extern void ExplainQueryText(struct ExplainState *es, QueryDesc *queryDesc);
 extern void ExplainQueryParameters(struct ExplainState *es,
 								   ParamListInfo params, int maxlen);
 
-extern void ProcessLogQueryPlanInterrupt(void);
-
 #endif							/* EXPLAIN_H */
