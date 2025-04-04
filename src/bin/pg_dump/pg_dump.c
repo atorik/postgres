@@ -3002,6 +3002,19 @@ makeTableDataInfo(DumpOptions *dopt, TableInfo *tbinfo)
 
 	tbinfo->dataObj = tdinfo;
 
+	/*
+	 * Materialized view statistics must be restored after the data, because
+	 * REFRESH MATERIALIZED VIEW replaces the storage and resets the stats.
+	 *
+	 * The dependency is added here because the statistics objects are created
+	 * first.
+	 */
+	if (tbinfo->relkind == RELKIND_MATVIEW && tbinfo->stats != NULL)
+	{
+		tbinfo->stats->section = SECTION_POST_DATA;
+		addObjectDependency(&tbinfo->stats->dobj, tdinfo->dobj.dumpId);
+	}
+
 	/* Make sure that we'll collect per-column info for this table. */
 	tbinfo->interesting = true;
 }
@@ -6861,7 +6874,8 @@ getFuncs(Archive *fout)
  */
 static RelStatsInfo *
 getRelationStatistics(Archive *fout, DumpableObject *rel, int32 relpages,
-					  char *reltuples, int32 relallvisible, char relkind,
+					  char *reltuples, int32 relallvisible,
+					  int32 relallfrozen, char relkind,
 					  char **indAttNames, int nindAttNames)
 {
 	if (!fout->dopt->dumpStatistics)
@@ -6890,10 +6904,36 @@ getRelationStatistics(Archive *fout, DumpableObject *rel, int32 relpages,
 		info->relpages = relpages;
 		info->reltuples = pstrdup(reltuples);
 		info->relallvisible = relallvisible;
+		info->relallfrozen = relallfrozen;
 		info->relkind = relkind;
 		info->indAttNames = indAttNames;
 		info->nindAttNames = nindAttNames;
-		info->postponed_def = false;
+
+		/*
+		 * Ordinarily, stats go in SECTION_DATA for tables and
+		 * SECTION_POST_DATA for indexes.
+		 *
+		 * However, the section may be updated later for materialized view
+		 * stats. REFRESH MATERIALIZED VIEW replaces the storage and resets
+		 * the stats, so the stats must be restored after the data. Also, the
+		 * materialized view definition may be postponed to SECTION_POST_DATA
+		 * (see repairMatViewBoundaryMultiLoop()).
+		 */
+		switch (info->relkind)
+		{
+			case RELKIND_RELATION:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_MATVIEW:
+				info->section = SECTION_DATA;
+				break;
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+				info->section = SECTION_POST_DATA;
+				break;
+			default:
+				pg_fatal("cannot dump statistics for relation kind '%c'",
+						 info->relkind);
+		}
 
 		return info;
 	}
@@ -6929,6 +6969,7 @@ getTables(Archive *fout, int *numTables)
 	int			i_relpages;
 	int			i_reltuples;
 	int			i_relallvisible;
+	int			i_relallfrozen;
 	int			i_toastpages;
 	int			i_owning_tab;
 	int			i_owning_col;
@@ -6979,8 +7020,15 @@ getTables(Archive *fout, int *numTables)
 						 "c.relowner, "
 						 "c.relchecks, "
 						 "c.relhasindex, c.relhasrules, c.relpages, "
-						 "c.reltuples, c.relallvisible, c.relhastriggers, "
-						 "c.relpersistence, "
+						 "c.reltuples, c.relallvisible, ");
+
+	if (fout->remoteVersion >= 180000)
+		appendPQExpBufferStr(query, "c.relallfrozen, ");
+	else
+		appendPQExpBufferStr(query, "0 AS relallfrozen, ");
+
+	appendPQExpBufferStr(query,
+						 "c.relhastriggers, c.relpersistence, "
 						 "c.reloftype, "
 						 "c.relacl, "
 						 "acldefault(CASE WHEN c.relkind = " CppAsString2(RELKIND_SEQUENCE)
@@ -7145,6 +7193,7 @@ getTables(Archive *fout, int *numTables)
 	i_relpages = PQfnumber(res, "relpages");
 	i_reltuples = PQfnumber(res, "reltuples");
 	i_relallvisible = PQfnumber(res, "relallvisible");
+	i_relallfrozen = PQfnumber(res, "relallfrozen");
 	i_toastpages = PQfnumber(res, "toastpages");
 	i_owning_tab = PQfnumber(res, "owning_tab");
 	i_owning_col = PQfnumber(res, "owning_col");
@@ -7192,6 +7241,7 @@ getTables(Archive *fout, int *numTables)
 	for (i = 0; i < ntups; i++)
 	{
 		int32		relallvisible = atoi(PQgetvalue(res, i, i_relallvisible));
+		int32		relallfrozen = atoi(PQgetvalue(res, i, i_relallfrozen));
 
 		tblinfo[i].dobj.objType = DO_TABLE;
 		tblinfo[i].dobj.catId.tableoid = atooid(PQgetvalue(res, i, i_reltableoid));
@@ -7292,9 +7342,17 @@ getTables(Archive *fout, int *numTables)
 
 		/* Add statistics */
 		if (tblinfo[i].interesting)
-			getRelationStatistics(fout, &tblinfo[i].dobj, tblinfo[i].relpages,
-								  PQgetvalue(res, i, i_reltuples),
-								  relallvisible, tblinfo[i].relkind, NULL, 0);
+		{
+			RelStatsInfo *stats;
+
+			stats = getRelationStatistics(fout, &tblinfo[i].dobj,
+										  tblinfo[i].relpages,
+										  PQgetvalue(res, i, i_reltuples),
+										  relallvisible, relallfrozen,
+										  tblinfo[i].relkind, NULL, 0);
+			if (tblinfo[i].relkind == RELKIND_MATVIEW)
+				tblinfo[i].stats = stats;
+		}
 
 		/*
 		 * Read-lock target tables to make sure they aren't DROPPED or altered
@@ -7563,6 +7621,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 				i_relpages,
 				i_reltuples,
 				i_relallvisible,
+				i_relallfrozen,
 				i_parentidx,
 				i_indexdef,
 				i_indnkeyatts,
@@ -7617,7 +7676,14 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 	appendPQExpBufferStr(query,
 						 "SELECT t.tableoid, t.oid, i.indrelid, "
 						 "t.relname AS indexname, "
-						 "t.relpages, t.reltuples, t.relallvisible, "
+						 "t.relpages, t.reltuples, t.relallvisible, ");
+
+	if (fout->remoteVersion >= 180000)
+		appendPQExpBufferStr(query, "t.relallfrozen, ");
+	else
+		appendPQExpBufferStr(query, "0 AS relallfrozen, ");
+
+	appendPQExpBufferStr(query,
 						 "pg_catalog.pg_get_indexdef(i.indexrelid) AS indexdef, "
 						 "i.indkey, i.indisclustered, "
 						 "c.contype, c.conname, "
@@ -7733,6 +7799,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 	i_relpages = PQfnumber(res, "relpages");
 	i_reltuples = PQfnumber(res, "reltuples");
 	i_relallvisible = PQfnumber(res, "relallvisible");
+	i_relallfrozen = PQfnumber(res, "relallfrozen");
 	i_parentidx = PQfnumber(res, "parentidx");
 	i_indexdef = PQfnumber(res, "indexdef");
 	i_indnkeyatts = PQfnumber(res, "indnkeyatts");
@@ -7804,6 +7871,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 			RelStatsInfo *relstats;
 			int32		relpages = atoi(PQgetvalue(res, j, i_relpages));
 			int32		relallvisible = atoi(PQgetvalue(res, j, i_relallvisible));
+			int32		relallfrozen = atoi(PQgetvalue(res, j, i_relallfrozen));
 
 			indxinfo[j].dobj.objType = DO_INDEX;
 			indxinfo[j].dobj.catId.tableoid = atooid(PQgetvalue(res, j, i_tableoid));
@@ -7846,7 +7914,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 
 			relstats = getRelationStatistics(fout, &indxinfo[j].dobj, relpages,
 											 PQgetvalue(res, j, i_reltuples),
-											 relallvisible, indexkind,
+											 relallvisible, relallfrozen, indexkind,
 											 indAttNames, nindAttNames);
 
 			contype = *(PQgetvalue(res, j, i_contype));
@@ -8016,13 +8084,7 @@ getConstraints(Archive *fout, TableInfo tblinfo[], int numTables)
 	{
 		TableInfo  *tinfo = &tblinfo[i];
 
-		/*
-		 * For partitioned tables, foreign keys have no triggers so they must
-		 * be included anyway in case some foreign keys are defined.
-		 */
-		if ((!tinfo->hastriggers &&
-			 tinfo->relkind != RELKIND_PARTITIONED_TABLE) ||
-			!(tinfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
+		if (!(tinfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
 			continue;
 
 		/* OK, we need info for this table */
@@ -10492,34 +10554,6 @@ appendNamedArgument(PQExpBuffer out, Archive *fout, const char *argname,
 }
 
 /*
- * Decide which section to use based on the relkind of the parent object.
- *
- * NB: materialized views may be postponed from SECTION_PRE_DATA to
- * SECTION_POST_DATA to resolve some kinds of dependency problems. If so, the
- * matview stats will also be postponed to SECTION_POST_DATA. See
- * repairMatViewBoundaryMultiLoop().
- */
-static teSection
-statisticsDumpSection(const RelStatsInfo *rsinfo)
-{
-	switch (rsinfo->relkind)
-	{
-		case RELKIND_RELATION:
-		case RELKIND_PARTITIONED_TABLE:
-		case RELKIND_MATVIEW:
-			return SECTION_DATA;
-		case RELKIND_INDEX:
-		case RELKIND_PARTITIONED_INDEX:
-			return SECTION_POST_DATA;
-		default:
-			pg_fatal("cannot dump statistics for relation kind '%c'",
-					 rsinfo->relkind);
-	}
-
-	return 0;					/* keep compiler quiet */
-}
-
-/*
  * dumpRelationStats --
  *
  * Dump command to import stats into the relation on the new database.
@@ -10531,8 +10565,6 @@ dumpRelationStats(Archive *fout, const RelStatsInfo *rsinfo)
 	PGresult   *res;
 	PQExpBuffer query;
 	PQExpBuffer out;
-	DumpId	   *deps = NULL;
-	int			ndeps = 0;
 	int			i_attname;
 	int			i_inherited;
 	int			i_null_frac;
@@ -10552,13 +10584,6 @@ dumpRelationStats(Archive *fout, const RelStatsInfo *rsinfo)
 	/* nothing to do if we are not dumping statistics */
 	if (!fout->dopt->dumpStatistics)
 		return;
-
-	/* dependent on the relation definition, if doing schema */
-	if (fout->dopt->dumpSchema)
-	{
-		deps = dobj->dependencies;
-		ndeps = dobj->nDeps;
-	}
 
 	query = createPQExpBuffer();
 	if (!fout->is_prepared[PREPQUERY_GETATTRIBUTESTATS])
@@ -10609,8 +10634,14 @@ dumpRelationStats(Archive *fout, const RelStatsInfo *rsinfo)
 	appendPQExpBufferStr(out, ",\n");
 	appendPQExpBuffer(out, "\t'relpages', '%d'::integer,\n", rsinfo->relpages);
 	appendPQExpBuffer(out, "\t'reltuples', '%s'::real,\n", rsinfo->reltuples);
-	appendPQExpBuffer(out, "\t'relallvisible', '%d'::integer\n);\n",
+	appendPQExpBuffer(out, "\t'relallvisible', '%d'::integer",
 					  rsinfo->relallvisible);
+
+	if (fout->remoteVersion >= 180000)
+		appendPQExpBuffer(out, ",\n\t'relallfrozen', '%d'::integer", rsinfo->relallfrozen);
+
+	appendPQExpBufferStr(out, "\n);\n");
+
 
 	/* fetch attribute stats */
 	appendPQExpBufferStr(query, "EXECUTE getAttributeStats(");
@@ -10737,11 +10768,10 @@ dumpRelationStats(Archive *fout, const RelStatsInfo *rsinfo)
 				 ARCHIVE_OPTS(.tag = dobj->name,
 							  .namespace = dobj->namespace->dobj.name,
 							  .description = "STATISTICS DATA",
-							  .section = rsinfo->postponed_def ?
-							  SECTION_POST_DATA : statisticsDumpSection(rsinfo),
+							  .section = rsinfo->section,
 							  .createStmt = out->data,
-							  .deps = deps,
-							  .nDeps = ndeps));
+							  .deps = dobj->dependencies,
+							  .nDeps = dobj->nDeps));
 
 	destroyPQExpBuffer(out);
 	destroyPQExpBuffer(query);
@@ -16651,11 +16681,6 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 											  tbinfo->attrdefs[j]->adef_expr);
 					}
 
-					print_notnull = (tbinfo->notnull_constrs[j] != NULL &&
-									 (tbinfo->notnull_islocal[j] ||
-									  dopt->binary_upgrade ||
-									  tbinfo->ispartition));
-
 					if (print_notnull)
 					{
 						if (tbinfo->notnull_constrs[j][0] == '\0')
@@ -19429,7 +19454,7 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 				break;
 			case DO_REL_STATS:
 				/* stats section varies by parent object type, DATA or POST */
-				if (statisticsDumpSection((RelStatsInfo *) dobj) == SECTION_DATA)
+				if (((RelStatsInfo *) dobj)->section == SECTION_DATA)
 				{
 					addObjectDependency(dobj, preDataBound->dumpId);
 					addObjectDependency(postDataBound, dobj->dumpId);

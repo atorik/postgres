@@ -7,6 +7,8 @@ pgport_sources = [
   'noblock.c',
   'path.c',
   'pg_bitutils.c',
+  'pg_localeconv_r.c',
+  'pg_popcount_aarch64.c',
   'pg_popcount_avx512.c',
   'pg_strong_random.c',
   'pgcheckdir.c',
@@ -71,6 +73,7 @@ replace_funcs_neg = [
   ['strlcpy'],
   ['strnlen'],
   ['strsep'],
+  ['timingsafe_bcmp'],
 ]
 
 if host_system != 'windows'

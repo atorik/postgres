@@ -1278,9 +1278,9 @@ extern int	fdatasync(int fildes);
  * Similarly, wrappers around labs()/llabs() matching our int64.
  */
 #if SIZEOF_LONG == 8
-#define i64abs(i) labs(i)
+#define i64abs(i) ((int64) labs(i))
 #elif SIZEOF_LONG_LONG == 8
-#define i64abs(i) llabs(i)
+#define i64abs(i) ((int64) llabs(i))
 #else
 #error "cannot find integer type of the same size as int64_t"
 #endif
@@ -1326,19 +1326,19 @@ extern int	fdatasync(int fildes);
 /*
  * When there is no sigsetjmp, its functionality is provided by plain
  * setjmp.  We now support the case only on Windows.  However, it seems
- * that MinGW-64 has some longstanding issues in its setjmp support,
- * so on that toolchain we cheat and use gcc's builtins.
+ * that MinGW-64 has some longstanding issues in its setjmp support when
+ * building with MSVCRT, so on that toolchain we cheat and use gcc's builtins.
  */
 #ifdef WIN32
-#ifdef __MINGW64__
+#if defined(__MINGW64__) && !defined(_UCRT)
 typedef intptr_t sigjmp_buf[5];
 #define sigsetjmp(x,y) __builtin_setjmp(x)
 #define siglongjmp __builtin_longjmp
-#else							/* !__MINGW64__ */
+#else							/* !defined(__MINGW64__) || defined(_UCRT) */
 #define sigjmp_buf jmp_buf
 #define sigsetjmp(x,y) setjmp(x)
 #define siglongjmp longjmp
-#endif							/* __MINGW64__ */
+#endif							/* defined(__MINGW64__) && !defined(_UCRT) */
 #endif							/* WIN32 */
 
 /* /port compatibility functions */

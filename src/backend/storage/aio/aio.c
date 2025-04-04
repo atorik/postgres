@@ -24,6 +24,8 @@
  *
  * - read_stream.c - helper for reading buffered relation data
  *
+ * - README.md - higher-level overview over AIO
+ *
  *
  * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -839,6 +841,8 @@ pgaio_result_status_string(PgAioResultStatus rs)
 			return "UNKNOWN";
 		case PGAIO_RS_OK:
 			return "OK";
+		case PGAIO_RS_WARNING:
+			return "WARNING";
 		case PGAIO_RS_PARTIAL:
 			return "PARTIAL";
 		case PGAIO_RS_ERROR:

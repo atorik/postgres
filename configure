@@ -12931,7 +12931,7 @@ fi
 done
 
   # Function introduced in OpenSSL 1.1.1, not in LibreSSL.
-  for ac_func in X509_get_signature_info SSL_CTX_set_num_tickets
+  for ac_func in X509_get_signature_info SSL_CTX_set_num_tickets SSL_CTX_set_keylog_callback
 do :
   as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
 ac_fn_c_check_func "$LINENO" "$ac_func" "$as_ac_var"
@@ -15401,7 +15401,7 @@ fi
 LIBS_including_readline="$LIBS"
 LIBS=`echo "$LIBS" | sed -e 's/-ledit//g' -e 's/-lreadline//g'`
 
-for ac_func in backtrace_symbols copyfile copy_file_range elf_aux_info getauxval getifaddrs getpeerucred inet_pton kqueue mbstowcs_l memset_s posix_fallocate ppoll pthread_is_threaded_np setproctitle setproctitle_fast strchrnul strsignal syncfs sync_file_range uselocale wcstombs_l
+for ac_func in backtrace_symbols copyfile copy_file_range elf_aux_info getauxval getifaddrs getpeerucred inet_pton kqueue localeconv_l mbstowcs_l memset_s posix_fallocate ppoll pthread_is_threaded_np setproctitle setproctitle_fast strsignal syncfs sync_file_range uselocale wcstombs_l
 do :
   as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
 ac_fn_c_check_func "$LINENO" "$ac_func" "$as_ac_var"
@@ -15927,6 +15927,16 @@ fi
 cat >>confdefs.h <<_ACEOF
 #define HAVE_DECL_STRSEP $ac_have_decl
 _ACEOF
+ac_fn_c_check_decl "$LINENO" "timingsafe_bcmp" "ac_cv_have_decl_timingsafe_bcmp" "$ac_includes_default"
+if test "x$ac_cv_have_decl_timingsafe_bcmp" = xyes; then :
+  ac_have_decl=1
+else
+  ac_have_decl=0
+fi
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE_DECL_TIMINGSAFE_BCMP $ac_have_decl
+_ACEOF
 
 
 # We can't use AC_CHECK_FUNCS to detect these functions, because it
@@ -15953,6 +15963,18 @@ fi
 
 cat >>confdefs.h <<_ACEOF
 #define HAVE_DECL_PWRITEV $ac_have_decl
+_ACEOF
+
+ac_fn_c_check_decl "$LINENO" "strchrnul" "ac_cv_have_decl_strchrnul" "#include <string.h>
+"
+if test "x$ac_cv_have_decl_strchrnul" = xyes; then :
+  ac_have_decl=1
+else
+  ac_have_decl=0
+fi
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE_DECL_STRCHRNUL $ac_have_decl
 _ACEOF
 
 
@@ -16082,6 +16104,19 @@ else
   case " $LIBOBJS " in
   *" strsep.$ac_objext "* ) ;;
   *) LIBOBJS="$LIBOBJS strsep.$ac_objext"
+ ;;
+esac
+
+fi
+
+ac_fn_c_check_func "$LINENO" "timingsafe_bcmp" "ac_cv_func_timingsafe_bcmp"
+if test "x$ac_cv_func_timingsafe_bcmp" = xyes; then :
+  $as_echo "#define HAVE_TIMINGSAFE_BCMP 1" >>confdefs.h
+
+else
+  case " $LIBOBJS " in
+  *" timingsafe_bcmp.$ac_objext "* ) ;;
+  *) LIBOBJS="$LIBOBJS timingsafe_bcmp.$ac_objext"
  ;;
 esac
 
@@ -17513,6 +17548,77 @@ fi
   if test x"$pgac_avx512_popcnt_intrinsics" = x"yes"; then
 
 $as_echo "#define USE_AVX512_POPCNT_WITH_RUNTIME_CHECK 1" >>confdefs.h
+
+  fi
+fi
+
+# Check for SVE popcount intrinsics
+#
+if test x"$host_cpu" = x"aarch64"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for svcnt_x" >&5
+$as_echo_n "checking for svcnt_x... " >&6; }
+if ${pgac_cv_sve_popcnt_intrinsics+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <arm_sve.h>
+
+	char buf[128];
+
+	#if defined(__has_attribute) && __has_attribute (target)
+	__attribute__((target("arch=armv8-a+sve")))
+	#endif
+	static int popcount_test(void)
+	{
+		svbool_t	pred = svptrue_b64();
+		svuint8_t	vec8;
+		svuint64_t	accum1 = svdup_u64(0),
+					accum2 = svdup_u64(0),
+					vec64;
+		char	   *p = buf;
+		uint64_t	popcnt,
+					mask = 0x5555555555555555;
+
+		vec64 = svand_n_u64_x(pred, svld1_u64(pred, (const uint64_t *) p), mask);
+		accum1 = svadd_u64_x(pred, accum1, svcnt_u64_x(pred, vec64));
+		p += svcntb();
+
+		vec64 = svand_n_u64_x(pred, svld1_u64(pred, (const uint64_t *) p), mask);
+		accum2 = svadd_u64_x(pred, accum2, svcnt_u64_x(pred, vec64));
+		p += svcntb();
+
+		popcnt = svaddv_u64(pred, svadd_u64_x(pred, accum1, accum2));
+
+		pred = svwhilelt_b8_s32(0, sizeof(buf));
+		vec8 = svand_n_u8_x(pred, svld1_u8(pred, (const uint8_t *) p), 0x55);
+		return (int) (popcnt + svaddv_u8(pred, svcnt_u8_x(pred, vec8)));
+	}
+int
+main ()
+{
+return popcount_test();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  pgac_cv_sve_popcnt_intrinsics=yes
+else
+  pgac_cv_sve_popcnt_intrinsics=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $pgac_cv_sve_popcnt_intrinsics" >&5
+$as_echo "$pgac_cv_sve_popcnt_intrinsics" >&6; }
+if test x"$pgac_cv_sve_popcnt_intrinsics" = x"yes"; then
+  pgac_sve_popcnt_intrinsics=yes
+fi
+
+  if test x"$pgac_sve_popcnt_intrinsics" = x"yes"; then
+
+$as_echo "#define USE_SVE_POPCNT_WITH_RUNTIME_CHECK 1" >>confdefs.h
 
   fi
 fi

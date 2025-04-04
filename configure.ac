@@ -1382,7 +1382,7 @@ if test "$with_ssl" = openssl ; then
   # Function introduced in OpenSSL 1.0.2, not in LibreSSL.
   AC_CHECK_FUNCS([SSL_CTX_set_cert_cb])
   # Function introduced in OpenSSL 1.1.1, not in LibreSSL.
-  AC_CHECK_FUNCS([X509_get_signature_info SSL_CTX_set_num_tickets])
+  AC_CHECK_FUNCS([X509_get_signature_info SSL_CTX_set_num_tickets SSL_CTX_set_keylog_callback])
   AC_DEFINE([USE_OPENSSL], 1, [Define to 1 to build with OpenSSL support. (--with-ssl=openssl)])
 elif test "$with_ssl" != no ; then
   AC_MSG_ERROR([--with-ssl must specify openssl])
@@ -1764,6 +1764,7 @@ AC_CHECK_FUNCS(m4_normalize([
 	getpeerucred
 	inet_pton
 	kqueue
+	localeconv_l
 	mbstowcs_l
 	memset_s
 	posix_fallocate
@@ -1771,7 +1772,6 @@ AC_CHECK_FUNCS(m4_normalize([
 	pthread_is_threaded_np
 	setproctitle
 	setproctitle_fast
-	strchrnul
 	strsignal
 	syncfs
 	sync_file_range
@@ -1805,12 +1805,13 @@ AC_CHECK_DECLS(posix_fadvise, [], [], [#include <fcntl.h>])
 ]) # fi
 
 AC_CHECK_DECLS(fdatasync, [], [], [#include <unistd.h>])
-AC_CHECK_DECLS([strlcat, strlcpy, strnlen, strsep])
+AC_CHECK_DECLS([strlcat, strlcpy, strnlen, strsep, timingsafe_bcmp])
 
 # We can't use AC_CHECK_FUNCS to detect these functions, because it
 # won't handle deployment target restrictions on macOS
 AC_CHECK_DECLS([preadv], [], [], [#include <sys/uio.h>])
 AC_CHECK_DECLS([pwritev], [], [], [#include <sys/uio.h>])
+AC_CHECK_DECLS([strchrnul], [], [], [#include <string.h>])
 
 # This is probably only present on macOS, but may as well check always
 AC_CHECK_DECLS(F_FULLFSYNC, [], [], [#include <fcntl.h>])
@@ -1825,6 +1826,7 @@ AC_REPLACE_FUNCS(m4_normalize([
 	strlcpy
 	strnlen
 	strsep
+	timingsafe_bcmp
 ]))
 
 AC_REPLACE_FUNCS(pthread_barrier_wait)
@@ -2066,6 +2068,15 @@ if test x"$host_cpu" = x"x86_64"; then
   PGAC_AVX512_POPCNT_INTRINSICS()
   if test x"$pgac_avx512_popcnt_intrinsics" = x"yes"; then
     AC_DEFINE(USE_AVX512_POPCNT_WITH_RUNTIME_CHECK, 1, [Define to 1 to use AVX-512 popcount instructions with a runtime check.])
+  fi
+fi
+
+# Check for SVE popcount intrinsics
+#
+if test x"$host_cpu" = x"aarch64"; then
+  PGAC_SVE_POPCNT_INTRINSICS()
+  if test x"$pgac_sve_popcnt_intrinsics" = x"yes"; then
+    AC_DEFINE(USE_SVE_POPCNT_WITH_RUNTIME_CHECK, 1, [Define to 1 to use SVE popcount instructions with a runtime check.])
   fi
 fi
 

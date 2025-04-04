@@ -640,6 +640,10 @@ get_relation_foreign_keys(PlannerInfo *root, RelOptInfo *rel,
 		/* conrelid should always be that of the table we're considering */
 		Assert(cachedfk->conrelid == RelationGetRelid(relation));
 
+		/* skip constraints currently not enforced */
+		if (!cachedfk->conenforced)
+			continue;
+
 		/* Scan to find other RTEs matching confrelid */
 		rti = 0;
 		foreach(lc2, rtable)
@@ -1299,8 +1303,7 @@ get_relation_constraints(PlannerInfo *root,
 
 			/*
 			 * If this constraint hasn't been fully validated yet, we must
-			 * ignore it here.  Also ignore if NO INHERIT and we weren't told
-			 * that that's safe.
+			 * ignore it here.
 			 */
 			if (!constr->check[i].ccvalid)
 				continue;
@@ -1316,7 +1319,6 @@ get_relation_constraints(PlannerInfo *root,
 			 */
 			if (constr->check[i].ccnoinherit && !include_noinherit)
 				continue;
-
 
 			cexpr = stringToNode(constr->check[i].ccbin);
 

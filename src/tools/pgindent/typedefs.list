@@ -154,6 +154,7 @@ ArrayIOData
 ArrayIterator
 ArrayMapState
 ArrayMetaState
+ArraySortCachedInfo
 ArraySubWorkspace
 ArrayToken
 ArrayType
@@ -194,6 +195,7 @@ BOOLEAN
 BOX
 BTArrayKeyInfo
 BTBuildState
+BTCallbackState
 BTCycleId
 BTDedupInterval
 BTDedupState
@@ -380,6 +382,11 @@ CURLM
 CURLoption
 CV
 CachedExpression
+CachedFunction
+CachedFunctionCompileCallback
+CachedFunctionDeleteCallback
+CachedFunctionHashEntry
+CachedFunctionHashKey
 CachedPlan
 CachedPlanSource
 CallContext
@@ -1052,8 +1059,10 @@ GinPageOpaque
 GinPageOpaqueData
 GinPlaceToPageRC
 GinPostingList
+GinPostingTreeScanItem
 GinQualCounts
 GinScanEntry
+GinScanItem
 GinScanKey
 GinScanOpaque
 GinScanOpaqueData
@@ -1169,6 +1178,7 @@ HeadlineJsonState
 HeadlineParsedText
 HeadlineWordEntry
 HeapCheckContext
+HeapCheckReadStreamData
 HeapPageFreeze
 HeapScanDesc
 HeapTuple
@@ -2262,6 +2272,7 @@ PortalHashEnt
 PortalStatus
 PortalStrategy
 PostParseColumnRefHook
+PostRewriteHook
 PostgresPollingStatusType
 PostingItem
 PreParseColumnRefHook
@@ -2603,6 +2614,8 @@ SPPageDesc
 SQLDropObject
 SQLFunctionCache
 SQLFunctionCachePtr
+SQLFunctionHashEntry
+SQLFunctionLink
 SQLFunctionParseInfo
 SQLFunctionParseInfoPtr
 SQLValueFunction
