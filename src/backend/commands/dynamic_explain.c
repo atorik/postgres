@@ -24,7 +24,7 @@
 bool		ProcessLogQueryPlanInterruptActive = false;
 
 /* Currently executing query's QueryDesc */
-QueryDesc *ActiveQueryDesc = NULL;
+static QueryDesc *ActiveQueryDesc = NULL;
 
 static TupleTableSlot *ExecProcNodeWithExplain(PlanState *ps);
 static void WrapExecProcNodeWithExplain(PlanState *ps);
@@ -344,6 +344,18 @@ ProcessLogQueryPlanInterrupt(void)
 
 	WrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
 	ProcessLogQueryPlanInterruptActive = false;
+}
+
+QueryDesc *
+GetActiveQueryDesc(void)
+{
+	return ActiveQueryDesc;
+}
+
+void
+SetActiveQueryDesc(QueryDesc *queryDesc)
+{
+	ActiveQueryDesc = queryDesc;
 }
 
 /*

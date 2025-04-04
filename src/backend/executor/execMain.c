@@ -44,6 +44,7 @@
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
 #include "commands/explain.h"
+#include "commands/dynamic_explain.h"
 #include "commands/matview.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
@@ -381,7 +382,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	DestReceiver *dest;
 	bool		sendTuples;
 	MemoryContext oldcontext;
-	QueryDesc  *save_ActiveQueryDesc;
+	QueryDesc  *oldActiveQueryDesc;
 
 	/* sanity checks */
 	Assert(queryDesc != NULL);
@@ -396,11 +397,11 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	Assert(GetActiveSnapshot() == estate->es_snapshot);
 
 	/*
-	 * Update ActiveQueryDesc here to enable retrieval of the currently
+	 * Save ActiveQueryDesc here to enable retrieval of the currently
 	 * running queryDesc for nested queries.
 	 */
-	save_ActiveQueryDesc = ActiveQueryDesc;
-	ActiveQueryDesc = queryDesc;
+	oldActiveQueryDesc = GetActiveQueryDesc();
+	SetActiveQueryDesc(queryDesc);
 
 	/*
 	 * Switch into per-query memory context
@@ -464,7 +465,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 		InstrStopNode(queryDesc->totaltime, estate->es_processed);
 
 	MemoryContextSwitchTo(oldcontext);
-	ActiveQueryDesc = save_ActiveQueryDesc;
+	SetActiveQueryDesc(oldActiveQueryDesc);
 }
 
 /* ----------------------------------------------------------------
