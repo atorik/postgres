@@ -290,7 +290,7 @@ ExecProcNodeWithExplain(PlanState *ps)
 	es->verbose = true;
 	es->signaled = true;
 
-	ExplainStringAssemble(es, ActiveQueryDesc, EXPLAIN_FORMAT_TEXT, 0, -1);
+	ExplainStringAssemble(es, ActiveQueryDesc, es->format, 0, -1);
 
 	ereport(LOG_SERVER_ONLY,
 			errmsg("query plan running on backend with PID %d is:\n%s",
