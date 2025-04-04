@@ -28684,6 +28684,14 @@ acl      | {postgres=arwdDxtm/postgres,foo=r/postgres}
         regardless of <xref linkend="guc-client-min-messages"/>.
        </para>
        <para>
+        Note that logging plan may take some time, as it occurs when
+        the plan node is executed. For example, when a query is
+        running <function>pg_sleep</function>, the plan will not be
+        logged until the function execution completes.
+        Additionaly, when a query is running under the extended query
+        protocol, the plan is logged only during the execute step.
+       </para>
+       <para>
         This function is restricted to superusers by default, but other
         users can be granted EXECUTE to run the function.
        </para></entry>

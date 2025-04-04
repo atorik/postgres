@@ -31,12 +31,12 @@ static void WrapExecProcNodeWithExplain(PlanState *ps);
 static void UnwrapExecProcNodeWithExplain(PlanState *ps);
 
 /*
- * ExplainAssembleLogOutput -
+ * ExplainStringAssemble -
  *    Assemble es->str for logging according to specified options and format
  */
 
 void
-ExplainAssembleLogOutput(ExplainState *es, QueryDesc *queryDesc, int logFormat,
+ExplainStringAssemble(ExplainState *es, QueryDesc *queryDesc, int logFormat,
 						 bool logTriggers, int logParameterMaxLength)
 {
 	ExplainBeginOutput(es);
@@ -106,11 +106,11 @@ WrapPlanStatesWithExplain(PlanState **planstates, int nplans)
 }
 
 /*
- * WrapCustomPlanChildExecProcNodesWithExplain -
+ * WrapCustomPlanChildWithExplain -
  *	  Wrap CustomScanstate children's ExecProcNodes with ExecProcNodeWithExplain
  */
 static void
-WrapCustomPlanChildExecProcNodesWithExplain(CustomScanState *css)
+WrapCustomPlanChildWithExplain(CustomScanState *css)
 {
 	ListCell   *cell;
 
@@ -172,7 +172,7 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 			WrapExecProcNodeWithExplain(((SubqueryScanState *) ps)->subplan);
 			break;
 		case T_CustomScan:
-			WrapCustomPlanChildExecProcNodesWithExplain((CustomScanState *) ps);
+			WrapCustomPlanChildWithExplain((CustomScanState *) ps);
 			break;
 		default:
 			break;
@@ -180,11 +180,11 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 }
 
 /*
- * UnwrapMultiExecProcNodesWithExplain -
+ * UnwrapPlanStatesWithExplain -
  *	  Unwrap array of PlanStates ExecProcNodes with ExecProcNodeWithExplain
  */
 static void
-UnwrapMultiExecProcNodesWithExplain(PlanState **planstates, int nplans)
+UnwrapPlanStatesWithExplain(PlanState **planstates, int nplans)
 {
 	int			i;
 
@@ -193,11 +193,11 @@ UnwrapMultiExecProcNodesWithExplain(PlanState **planstates, int nplans)
 }
 
 /*
- * UnwrapCustomPlanChildExecProcNodesWithExplain -
+ * UnwrapCustomPlanChildWithExplain -
  *	  Unwrap CustomScanstate children's ExecProcNodes with ExecProcNodeWithExplain
  */
 static void
-UnwrapCustomPlanChildExecProcNodesWithExplain(CustomScanState *css)
+UnwrapCustomPlanChildWithExplain(CustomScanState *css)
 {
 	ListCell   *cell;
 
@@ -238,26 +238,26 @@ UnwrapExecProcNodeWithExplain(PlanState *ps)
 	switch (nodeTag(ps->plan))
 	{
 		case T_Append:
-			UnwrapMultiExecProcNodesWithExplain(((AppendState *) ps)->appendplans,
+			UnwrapPlanStatesWithExplain(((AppendState *) ps)->appendplans,
 												((AppendState *) ps)->as_nplans);
 			break;
 		case T_MergeAppend:
-			UnwrapMultiExecProcNodesWithExplain(((MergeAppendState *) ps)->mergeplans,
+			UnwrapPlanStatesWithExplain(((MergeAppendState *) ps)->mergeplans,
 												((MergeAppendState *) ps)->ms_nplans);
 			break;
 		case T_BitmapAnd:
-			UnwrapMultiExecProcNodesWithExplain(((BitmapAndState *) ps)->bitmapplans,
+			UnwrapPlanStatesWithExplain(((BitmapAndState *) ps)->bitmapplans,
 												((BitmapAndState *) ps)->nplans);
 			break;
 		case T_BitmapOr:
-			UnwrapMultiExecProcNodesWithExplain(((BitmapOrState *) ps)->bitmapplans,
+			UnwrapPlanStatesWithExplain(((BitmapOrState *) ps)->bitmapplans,
 												((BitmapOrState *) ps)->nplans);
 			break;
 		case T_SubqueryScan:
 			UnwrapExecProcNodeWithExplain(((SubqueryScanState *) ps)->subplan);
 			break;
 		case T_CustomScan:
-			UnwrapCustomPlanChildExecProcNodesWithExplain((CustomScanState *) ps);
+			UnwrapCustomPlanChildWithExplain((CustomScanState *) ps);
 			break;
 		default:
 			break;
@@ -290,7 +290,7 @@ ExecProcNodeWithExplain(PlanState *ps)
 	es->verbose = true;
 	es->signaled = true;
 
-	ExplainAssembleLogOutput(es, ActiveQueryDesc, EXPLAIN_FORMAT_TEXT, 0, -1);
+	ExplainStringAssemble(es, ActiveQueryDesc, EXPLAIN_FORMAT_TEXT, 0, -1);
 
 	ereport(LOG_SERVER_ONLY,
 			errmsg("query plan running on backend with PID %d is:\n%s",

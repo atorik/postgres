@@ -18,7 +18,6 @@
 
 struct ExplainState;			/* defined in explain_state.h */
 
-extern PGDLLIMPORT QueryDesc *ActiveQueryDesc;
 extern PGDLLIMPORT bool ProcessLogQueryPlanInterruptActive;
 
 /* Hook for plugins to get control in ExplainOneQuery() */

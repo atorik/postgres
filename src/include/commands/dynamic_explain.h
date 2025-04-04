@@ -16,17 +16,17 @@
 #include "executor/executor.h"
 #include "commands/explain_state.h"
 
-extern PGDLLIMPORT QueryDesc *ActiveQueryDesc;
 extern PGDLLIMPORT bool ProcessLogQueryPlanInterruptActive;
 
-extern void ExplainAssembleLogOutput(struct ExplainState *es, QueryDesc *queryDesc,
+extern void ExplainStringAssemble(struct ExplainState *es, QueryDesc *queryDesc,
 									 int logFormat, bool logTriggers,
 									 int logParameterMaxLength);
 
 extern void HandleLogQueryPlanInterrupt(void);
 extern void ResetLogQueryPlanState(void);
 extern void ProcessLogQueryPlanInterrupt(void);
-
+extern QueryDesc *GetActiveQueryDesc(void);
+extern void SetActiveQueryDesc(QueryDesc *queryDesc);
 extern Datum pg_log_query_plan(PG_FUNCTION_ARGS);
 
 #endif							/* DYNAMIC_EXPLAIN_H */
