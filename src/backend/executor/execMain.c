@@ -363,21 +363,10 @@ void
 ExecutorRun(QueryDesc *queryDesc,
 			ScanDirection direction, uint64 count)
 {
-	/*
-	 * Update ActiveQueryDesc here to enable retrieval of the currently
-	 * running queryDesc for nested queries.
-	 */
-	QueryDesc  *save_ActiveQueryDesc;
-
-	save_ActiveQueryDesc = ActiveQueryDesc;
-	ActiveQueryDesc = queryDesc;
-
 	if (ExecutorRun_hook)
 		(*ExecutorRun_hook) (queryDesc, direction, count);
 	else
 		standard_ExecutorRun(queryDesc, direction, count);
-
-	ActiveQueryDesc = save_ActiveQueryDesc;
 }
 
 void
@@ -401,6 +390,15 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 
 	/* caller must ensure the query's snapshot is active */
 	Assert(GetActiveSnapshot() == estate->es_snapshot);
+
+	/*
+	 * Update ActiveQueryDesc here to enable retrieval of the currently
+	 * running queryDesc for nested queries.
+	 */
+	QueryDesc  *save_ActiveQueryDesc;
+
+	save_ActiveQueryDesc = ActiveQueryDesc;
+	ActiveQueryDesc = queryDesc;
 
 	/*
 	 * Switch into per-query memory context
@@ -464,6 +462,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 		InstrStopNode(queryDesc->totaltime, estate->es_processed);
 
 	MemoryContextSwitchTo(oldcontext);
+	ActiveQueryDesc = save_ActiveQueryDesc;
 }
 
 /* ----------------------------------------------------------------
