@@ -5065,11 +5065,11 @@ ResetLogQueryPlanState(void)
 }
 
 /*
- * WrapMultiExecProcNodesWithExplain -
+ * WrapPlanStatesWithExplain -
  *	  Wrap array of PlanStates ExecProcNodes with ExecProcNodeWithExplain
  */
 static void
-WrapMultiExecProcNodesWithExplain(PlanState **planstates, int nplans)
+WrapPlanStatesWithExplain(PlanState **planstates, int nplans)
 {
 	int			i;
 
@@ -5116,22 +5116,22 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 	{
 		case T_Append:
 			ereport(DEBUG1, errmsg("wrapping Append"));
-			WrapMultiExecProcNodesWithExplain(((AppendState *) ps)->appendplans,
+			WrapPlanStatesWithExplain(((AppendState *) ps)->appendplans,
 											  ((AppendState *) ps)->as_nplans);
 			break;
 		case T_MergeAppend:
 			ereport(DEBUG1, errmsg("wrapping MergeAppend"));
-			WrapMultiExecProcNodesWithExplain(((MergeAppendState *) ps)->mergeplans,
+			WrapPlanStatesWithExplain(((MergeAppendState *) ps)->mergeplans,
 											  ((MergeAppendState *) ps)->ms_nplans);
 			break;
 		case T_BitmapAnd:
 			ereport(DEBUG1, errmsg("wrapping BitmapAndState"));
-			WrapMultiExecProcNodesWithExplain(((BitmapAndState *) ps)->bitmapplans,
+			WrapPlanStatesWithExplain(((BitmapAndState *) ps)->bitmapplans,
 											  ((BitmapAndState *) ps)->nplans);
 			break;
 		case T_BitmapOr:
 			ereport(DEBUG1, errmsg("wrapping BitmapOrtate"));
-			WrapMultiExecProcNodesWithExplain(((BitmapOrState *) ps)->bitmapplans,
+			WrapPlanStatesWithExplain(((BitmapOrState *) ps)->bitmapplans,
 											  ((BitmapOrState *) ps)->nplans);
 			break;
 		case T_SubqueryScan:
