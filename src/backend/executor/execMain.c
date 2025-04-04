@@ -381,6 +381,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	DestReceiver *dest;
 	bool		sendTuples;
 	MemoryContext oldcontext;
+	QueryDesc  *save_ActiveQueryDesc;
 
 	/* sanity checks */
 	Assert(queryDesc != NULL);
@@ -398,8 +399,6 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	 * Update ActiveQueryDesc here to enable retrieval of the currently
 	 * running queryDesc for nested queries.
 	 */
-	QueryDesc  *save_ActiveQueryDesc;
-
 	save_ActiveQueryDesc = ActiveQueryDesc;
 	ActiveQueryDesc = queryDesc;
 

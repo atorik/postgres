@@ -75,10 +75,6 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, CachedPlan *cplan,
 						   const BufferUsage *bufusage,
 						   const MemoryContextCounters *mem_counters);
 
-extern void ExplainAssembleLogOutput(struct ExplainState *es, QueryDesc *queryDesc,
-									 int logFormat, bool logTriggers,
-									 int logParameterMaxLength);
-
 extern void ExplainPrintPlan(struct ExplainState *es, QueryDesc *queryDesc);
 extern void ExplainPrintTriggers(struct ExplainState *es, QueryDesc *queryDesc);
 extern void ExplainPrintPlan(struct ExplainState *es, QueryDesc *queryDesc);
@@ -92,8 +88,6 @@ extern void ExplainQueryText(struct ExplainState *es, QueryDesc *queryDesc);
 extern void ExplainQueryParameters(struct ExplainState *es,
 								   ParamListInfo params, int maxlen);
 
-extern void HandleLogQueryPlanInterrupt(void);
 extern void ProcessLogQueryPlanInterrupt(void);
-extern void ResetLogQueryPlanState(void);
 
 #endif							/* EXPLAIN_H */

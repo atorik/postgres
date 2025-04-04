@@ -28833,11 +28833,6 @@ LOG:  query plan running on backend with PID 201116 is:
     inside a function), only the innermost query plan is logged.
    </para>
 
-   <para>
-    When a subtransaction is aborted, <function>pg_log_query_plan</function>
-    cannot log the query plan after the abort.
-   </para>
-
   </sect2>
 
   <sect2 id="functions-admin-backup">
