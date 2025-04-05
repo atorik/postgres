@@ -114,6 +114,7 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 		foreach(l, ps->subPlan)
 		{
 			SubPlanState *sstate = (SubPlanState *) lfirst(l);
+
 			WrapExecProcNodeWithExplain(sstate->planstate);
 		}
 	}
@@ -123,19 +124,19 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 	{
 		case T_Append:
 			WrapPlanStatesWithExplain(((AppendState *) ps)->appendplans,
-											  ((AppendState *) ps)->as_nplans);
+									  ((AppendState *) ps)->as_nplans);
 			break;
 		case T_MergeAppend:
 			WrapPlanStatesWithExplain(((MergeAppendState *) ps)->mergeplans,
-											  ((MergeAppendState *) ps)->ms_nplans);
+									  ((MergeAppendState *) ps)->ms_nplans);
 			break;
 		case T_BitmapAnd:
 			WrapPlanStatesWithExplain(((BitmapAndState *) ps)->bitmapplans,
-											  ((BitmapAndState *) ps)->nplans);
+									  ((BitmapAndState *) ps)->nplans);
 			break;
 		case T_BitmapOr:
 			WrapPlanStatesWithExplain(((BitmapOrState *) ps)->bitmapplans,
-											  ((BitmapOrState *) ps)->nplans);
+									  ((BitmapOrState *) ps)->nplans);
 			break;
 		case T_SubqueryScan:
 			WrapExecProcNodeWithExplain(((SubqueryScanState *) ps)->subplan);
@@ -199,6 +200,7 @@ UnwrapExecProcNodeWithExplain(PlanState *ps)
 		foreach(l, ps->subPlan)
 		{
 			SubPlanState *sstate = (SubPlanState *) lfirst(l);
+
 			UnwrapExecProcNodeWithExplain(sstate->planstate);
 		}
 	}
@@ -208,19 +210,19 @@ UnwrapExecProcNodeWithExplain(PlanState *ps)
 	{
 		case T_Append:
 			UnwrapPlanStatesWithExplain(((AppendState *) ps)->appendplans,
-												((AppendState *) ps)->as_nplans);
+										((AppendState *) ps)->as_nplans);
 			break;
 		case T_MergeAppend:
 			UnwrapPlanStatesWithExplain(((MergeAppendState *) ps)->mergeplans,
-												((MergeAppendState *) ps)->ms_nplans);
+										((MergeAppendState *) ps)->ms_nplans);
 			break;
 		case T_BitmapAnd:
 			UnwrapPlanStatesWithExplain(((BitmapAndState *) ps)->bitmapplans,
-												((BitmapAndState *) ps)->nplans);
+										((BitmapAndState *) ps)->nplans);
 			break;
 		case T_BitmapOr:
 			UnwrapPlanStatesWithExplain(((BitmapOrState *) ps)->bitmapplans,
-												((BitmapOrState *) ps)->nplans);
+										((BitmapOrState *) ps)->nplans);
 			break;
 		case T_SubqueryScan:
 			UnwrapExecProcNodeWithExplain(((SubqueryScanState *) ps)->subplan);

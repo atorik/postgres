@@ -396,8 +396,8 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	Assert(GetActiveSnapshot() == estate->es_snapshot);
 
 	/*
-	 * Save ActiveQueryDesc here to enable retrieval of the currently
-	 * running queryDesc for nested queries.
+	 * Save ActiveQueryDesc here to enable retrieval of the currently running
+	 * queryDesc for nested queries.
 	 */
 	oldActiveQueryDesc = GetActiveQueryDesc();
 	SetActiveQueryDesc(queryDesc);

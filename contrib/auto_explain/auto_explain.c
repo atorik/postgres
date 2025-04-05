@@ -414,8 +414,8 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 			es->settings = auto_explain_log_settings;
 
 			ExplainStringAssemble(es, queryDesc, auto_explain_log_format,
-									 auto_explain_log_triggers,
-									 auto_explain_log_parameter_max_length);
+								  auto_explain_log_triggers,
+								  auto_explain_log_parameter_max_length);
 
 			/*
 			 * Note: we rely on the existing logging of context or
