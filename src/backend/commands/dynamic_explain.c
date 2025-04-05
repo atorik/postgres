@@ -63,7 +63,7 @@ ResetLogQueryPlanState(void)
 
 /*
  * WrapPlanStatesWithExplain -
- *	  Wrap array of PlanStates ExecProcNodes with ExecProcNodeWithExplain
+ *	  Wrap array of PlanState ExecProcNodes with ExecProcNodeWithExplain
  */
 static void
 WrapPlanStatesWithExplain(PlanState **planstates, int nplans)
