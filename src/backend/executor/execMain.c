@@ -43,7 +43,6 @@
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
-#include "commands/explain.h"
 #include "commands/dynamic_explain.h"
 #include "commands/matview.h"
 #include "commands/trigger.h"
