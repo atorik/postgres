@@ -16,8 +16,6 @@
 #include "executor/executor.h"
 #include "commands/explain_state.h"
 
-extern PGDLLIMPORT bool ProcessLogQueryPlanInterruptActive;
-
 extern void HandleLogQueryPlanInterrupt(void);
 extern void ResetLogQueryPlanState(void);
 extern void ProcessLogQueryPlanInterrupt(void);

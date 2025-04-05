@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * dynamic_explain.c
- *	  Explain query execution plans
+ *	  Explain query plans during execution
  *
  * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994-5, Regents of the University of California
@@ -21,7 +21,8 @@
 #include "storage/procarray.h"
 #include "utils/backend_status.h"
 
-bool		ProcessLogQueryPlanInterruptActive = false;
+/* Whether this backend is performing logging plan */
+static bool ProcessLogQueryPlanInterruptActive = false;
 
 /* Currently executing query's QueryDesc */
 static QueryDesc *ActiveQueryDesc = NULL;
