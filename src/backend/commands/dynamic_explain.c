@@ -110,6 +110,7 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 		foreach(l, ps->subPlan)
 		{
 			SubPlanState *sstate = (SubPlanState *) lfirst(l);
+
 			WrapExecProcNodeWithExplain(sstate->planstate);
 		}
 	}
