@@ -18,10 +18,6 @@
 
 extern PGDLLIMPORT bool ProcessLogQueryPlanInterruptActive;
 
-extern void ExplainStringAssemble(struct ExplainState *es, QueryDesc *queryDesc,
-									 int logFormat, bool logTriggers,
-									 int logParameterMaxLength);
-
 extern void HandleLogQueryPlanInterrupt(void);
 extern void ResetLogQueryPlanState(void);
 extern void ProcessLogQueryPlanInterrupt(void);
