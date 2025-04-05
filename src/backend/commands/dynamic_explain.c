@@ -32,9 +32,8 @@ static void WrapExecProcNodeWithExplain(PlanState *ps);
 static void UnwrapExecProcNodeWithExplain(PlanState *ps);
 
 /*
- * HandleLogQueryPlanInterrupt -
- *    Handle receipt of an interrupt indicating logging the plan of the currently
- *    running query.
+ * Handle receipt of an interrupt indicating logging the plan of the currently
+ * running query.
  *
  * All the actual work is deferred to ProcessLogQueryPlanInterrupt(),
  * because we cannot safely emit a log message inside the signal handler.
@@ -48,8 +47,7 @@ HandleLogQueryPlanInterrupt(void)
 }
 
 /*
- * ResetLogQueryPlanState -
- *   Clear pg_log_query_plan() related state during (sub)transaction abort
+ * Clear pg_log_query_plan() related state during (sub)transaction abort
  */
 void
 ResetLogQueryPlanState(void)
@@ -63,8 +61,7 @@ ResetLogQueryPlanState(void)
 }
 
 /*
- * WrapPlanStatesWithExplain -
- *	  Wrap array of PlanState ExecProcNodes with ExecProcNodeWithExplain
+ * Wrap array of PlanState ExecProcNodes with ExecProcNodeWithExplain
  */
 static void
 WrapPlanStatesWithExplain(PlanState **planstates, int nplans)
@@ -76,8 +73,7 @@ WrapPlanStatesWithExplain(PlanState **planstates, int nplans)
 }
 
 /*
- * WrapCustomPlanChildWithExplain -
- *	  Wrap CustomScanstate children's ExecProcNodes with ExecProcNodeWithExplain
+ * Wrap CustomScanState children's ExecProcNodes with ExecProcNodeWithExplain
  */
 static void
 WrapCustomPlanChildWithExplain(CustomScanState *css)
@@ -89,8 +85,7 @@ WrapCustomPlanChildWithExplain(CustomScanState *css)
 }
 
 /*
- * WrapExecProcNodeWithExplain -
- *	  Wrap ExecProcNode with ExecProcNodeWithExplain recursively
+ * Wrap ExecProcNode with ExecProcNodeWithExplain recursively
  */
 static void
 WrapExecProcNodeWithExplain(PlanState *ps)
@@ -115,7 +110,6 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 		foreach(l, ps->subPlan)
 		{
 			SubPlanState *sstate = (SubPlanState *) lfirst(l);
-
 			WrapExecProcNodeWithExplain(sstate->planstate);
 		}
 	}
@@ -151,8 +145,7 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 }
 
 /*
- * UnwrapPlanStatesWithExplain -
- *	  Unwrap array of PlanStates ExecProcNodes with ExecProcNodeWithExplain
+ * Unwrap array of PlanStates ExecProcNodes with ExecProcNodeWithExplain
  */
 static void
 UnwrapPlanStatesWithExplain(PlanState **planstates, int nplans)
@@ -164,8 +157,7 @@ UnwrapPlanStatesWithExplain(PlanState **planstates, int nplans)
 }
 
 /*
- * UnwrapCustomPlanChildWithExplain -
- *	  Unwrap CustomScanstate children's ExecProcNodes with ExecProcNodeWithExplain
+ * Unwrap CustomScanState children's ExecProcNodes with ExecProcNodeWithExplain
  */
 static void
 UnwrapCustomPlanChildWithExplain(CustomScanState *css)
@@ -177,8 +169,7 @@ UnwrapCustomPlanChildWithExplain(CustomScanState *css)
 }
 
 /*
- * UnwrapExecProcNodeWithExplain -
- *	  Unwrap ExecProcNode with ExecProcNodeWithExplain recursively
+ * Unwrap ExecProcNode with ExecProcNodeWithExplain recursively
  */
 static void
 UnwrapExecProcNodeWithExplain(PlanState *ps)
@@ -237,8 +228,7 @@ UnwrapExecProcNodeWithExplain(PlanState *ps)
 }
 
 /*
- * ExecProcNodeWithExplain -
- *	  Wrap ExecProcNode with codes which logs currently running plan
+ * Wrap ExecProcNode with codes which logs currently running plan
  */
 static TupleTableSlot *
 ExecProcNodeWithExplain(PlanState *ps)
@@ -283,8 +273,7 @@ ExecProcNodeWithExplain(PlanState *ps)
 }
 
 /*
- * ProcessLogQueryPlanInterrupt
- *	  Add wrapper which logs explain of the plan to ExecProcNodes
+ * Add wrapper which logs explain of the plan to ExecProcNode
  *
  * Since running EXPLAIN codes at any arbitrary CHECK_FOR_INTERRUPTS() is
  * unsafe, this function just wraps every ExecProcNode.
@@ -331,8 +320,7 @@ SetActiveQueryDesc(QueryDesc *queryDesc)
 }
 
 /*
- * pg_log_query_plan
- *    Signal a backend process to log the query plan of the running query.
+ * Signal a backend process to log the query plan of the running query.
  *
  * By default, only superusers are allowed to signal to log the plan because
  * allowing any users to issue this request at an unbounded rate would
