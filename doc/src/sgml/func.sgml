@@ -28835,7 +28835,7 @@ LOG:  query plan running on backend with PID 201116 is:
     the plan node is executed. For example, when a query is
     running <function>pg_sleep</function>, the plan will not be
     logged until the function execution completes.
-    Additionaly, when a query is running under the extended query
+    Similarly, when a query is running under the extended query
     protocol, the plan is logged only during the execute step.
    </para>
 
