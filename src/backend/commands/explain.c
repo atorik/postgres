@@ -32,6 +32,7 @@
 #include "parser/analyze.h"
 #include "parser/parsetree.h"
 #include "rewrite/rewriteHandler.h"
+#include "storage/aio_subsys.h"
 #include "storage/bufmgr.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
@@ -4328,6 +4329,13 @@ peek_storageio_usage(ExplainState *es, const StorageIOUsage *usage)
 	if (usage == NULL)
 		return false;
 
+	/*
+	 * Since showing only the I/O excluding AIO workers underestimates the total
+	 * I/O, treat this case as having nothing to print.
+	 */
+	if (pgaio_workers_enabled())
+		return false;
+
 	if (es->format != EXPLAIN_FORMAT_TEXT)
 		return true;
 
@@ -4340,6 +4348,13 @@ peek_storageio_usage(ExplainState *es, const StorageIOUsage *usage)
 static void
 show_storageio_usage(ExplainState *es, const StorageIOUsage *usage)
 {
+	/*
+	 * Since showing only the I/O excluding AIO workers underestimates the total
+	 * I/O, do not show anything.
+	 */
+	if (pgaio_workers_enabled())
+		return;
+
 	if (es->format == EXPLAIN_FORMAT_TEXT)
 	{
 		/* Show only positive counter values. */

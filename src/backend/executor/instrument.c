@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "executor/instrument.h"
+#include "storage/aio_subsys.h"
 
 BufferUsage pgBufferUsage;
 static BufferUsage save_pgBufferUsage;
@@ -240,6 +241,7 @@ void
 InstrAccumParallelQuery(BufferUsage *bufusage, StorageIOUsage *storageiousage, WalUsage *walusage)
 {
 	BufferUsageAdd(&pgBufferUsage, bufusage);
+
 	if (storageiousage != NULL)
 		StorageIOUsageAdd(&pgStorageIOUsageParallel, storageiousage);
 	WalUsageAdd(&pgWalUsage, walusage);
@@ -318,6 +320,13 @@ void
 GetStorageIOUsage(StorageIOUsage *usage)
 {
 	struct rusage rusage;
+
+	/*
+	 * Since getting the I/O excluding AIO workers underestimates the total I/O,
+	 * don't get the I/O usage statistics when AIO worker is enabled.
+	 */
+	if(pgaio_workers_enabled())
+		return;
 
 	if (getrusage(RUSAGE_SELF, &rusage))
 	{
