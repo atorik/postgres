@@ -712,6 +712,7 @@ const char *const config_group_names[] =
 	[STATS_CUMULATIVE] = gettext_noop("Statistics / Cumulative Query and Index Statistics"),
 	[VACUUM_AUTOVACUUM] = gettext_noop("Vacuuming / Automatic Vacuuming"),
 	[VACUUM_COST_DELAY] = gettext_noop("Vacuuming / Cost-Based Vacuum Delay"),
+	[VACUUM_DEFAULT] = gettext_noop("Vacuuming / Default Behavior"),
 	[VACUUM_FREEZING] = gettext_noop("Vacuuming / Freezing"),
 	[CLIENT_CONN_STATEMENT] = gettext_noop("Client Connection Defaults / Statement Behavior"),
 	[CLIENT_CONN_LOCALE] = gettext_noop("Client Connection Defaults / Locale and Formatting"),
@@ -2122,12 +2123,11 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"query_id_squash_values", PGC_USERSET, STATS_MONITORING,
-			gettext_noop("Allows to merge constants in a list when computing "
-						 "query_id."),
+		{"vacuum_truncate", PGC_USERSET, VACUUM_DEFAULT,
+			gettext_noop("Enables vacuum to truncate empty pages at the end of the table."),
 		},
-		&query_id_squash_values,
-		false,
+		&vacuum_truncate,
+		true,
 		NULL, NULL, NULL
 	},
 
@@ -2670,7 +2670,7 @@ struct config_int ConfigureNamesInt[] =
 
 	{
 		{"max_files_per_process", PGC_POSTMASTER, RESOURCES_KERNEL,
-			gettext_noop("Sets the maximum number of simultaneously open files for each server process."),
+			gettext_noop("Sets the maximum number of files each server process is allowed to open simultaneously."),
 			NULL
 		},
 		&max_files_per_process,
@@ -3235,7 +3235,7 @@ struct config_int ConfigureNamesInt[] =
 		&effective_io_concurrency,
 		DEFAULT_EFFECTIVE_IO_CONCURRENCY,
 		0, MAX_IO_CONCURRENCY,
-		check_effective_io_concurrency, NULL, NULL
+		NULL, NULL, NULL
 	},
 
 	{
@@ -3249,7 +3249,7 @@ struct config_int ConfigureNamesInt[] =
 		&maintenance_io_concurrency,
 		DEFAULT_MAINTENANCE_IO_CONCURRENCY,
 		0, MAX_IO_CONCURRENCY,
-		check_maintenance_io_concurrency, assign_maintenance_io_concurrency,
+		NULL, assign_maintenance_io_concurrency,
 		NULL
 	},
 
@@ -3361,6 +3361,18 @@ struct config_int ConfigureNamesInt[] =
 		},
 		&max_parallel_apply_workers_per_subscription,
 		2, 0, MAX_PARALLEL_WORKER_LIMIT,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_active_replication_origins",
+			PGC_POSTMASTER,
+			REPLICATION_SUBSCRIBERS,
+			gettext_noop("Sets the maximum number of active replication origins."),
+			NULL
+		},
+		&max_active_replication_origins,
+		10, 0, MAX_BACKENDS,
 		NULL, NULL, NULL
 	},
 

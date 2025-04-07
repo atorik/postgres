@@ -274,7 +274,7 @@ max_worker_processes = 8
 # Check some unmet conditions on node S
 $node_s->append_conf(
 	'postgresql.conf', q{
-max_replication_slots = 1
+max_active_replication_origins = 1
 max_logical_replication_workers = 1
 max_worker_processes = 2
 });
@@ -293,7 +293,7 @@ command_fails(
 	'standby contains unmet conditions on node S');
 $node_s->append_conf(
 	'postgresql.conf', q{
-max_replication_slots = 10
+max_active_replication_origins = 10
 max_logical_replication_workers = 4
 max_worker_processes = 8
 });
@@ -329,6 +329,21 @@ $node_p->safe_psql($db1,
 	"CREATE SUBSCRIPTION $dummy_sub CONNECTION 'dbname=dummy' PUBLICATION pub_dummy WITH (connect=false)"
 );
 $node_p->wait_for_replay_catchup($node_s);
+
+# Create user-defined publications, wait for streaming replication to sync them
+# to the standby, then verify that '--remove'
+# removes them.
+$node_p->safe_psql(
+	$db1, qq(
+	CREATE PUBLICATION test_pub1 FOR ALL TABLES;
+	CREATE PUBLICATION test_pub2 FOR ALL TABLES;
+));
+
+$node_p->wait_for_replay_catchup($node_s);
+
+ok($node_s->safe_psql($db1, "SELECT COUNT(*) = 2 FROM pg_publication"),
+	'two pre-existing publications on subscriber');
+
 $node_s->stop;
 
 # dry run mode on node S
@@ -371,9 +386,67 @@ command_ok(
 	],
 	'run pg_createsubscriber without --databases');
 
+# run pg_createsubscriber with '--database' and '--all' without '--dry-run'
+# and verify the failure
+command_fails_like(
+	[
+		'pg_createsubscriber',
+		'--verbose',
+		'--pgdata' => $node_s->data_dir,
+		'--publisher-server' => $node_p->connstr($db1),
+		'--socketdir' => $node_s->host,
+		'--subscriber-port' => $node_s->port,
+		'--database' => $db1,
+		'--all',
+	],
+	qr/--database cannot be used with -a\/--all/,
+	'fail if --database is used with --all');
+
+# run pg_createsubscriber with '--publication' and '--all' and verify
+# the failure
+command_fails_like(
+	[
+		'pg_createsubscriber',
+		'--verbose',
+		'--dry-run',
+		'--pgdata' => $node_s->data_dir,
+		'--publisher-server' => $node_p->connstr($db1),
+		'--socketdir' => $node_s->host,
+		'--subscriber-port' => $node_s->port,
+		'--all',
+		'--publication' => 'pub1',
+	],
+	qr/--publication cannot be used with -a\/--all/,
+	'fail if --publication is used with --all');
+
+# run pg_createsubscriber with '--all' option
+my ($stdout, $stderr) = run_command(
+	[
+		'pg_createsubscriber',
+		'--verbose',
+		'--dry-run',
+		'--recovery-timeout' => $PostgreSQL::Test::Utils::timeout_default,
+		'--pgdata' => $node_s->data_dir,
+		'--publisher-server' => $node_p->connstr,
+		'--socketdir' => $node_s->host,
+		'--subscriber-port' => $node_s->port,
+		'--all',
+	],
+	'run pg_createsubscriber with --all');
+
+# Verify that the required logical replication objects are output.
+# The expected count 3 refers to postgres, $db1 and $db2 databases.
+is(scalar(() = $stderr =~ /creating publication/g),
+	3, "verify publications are created for all databases");
+is(scalar(() = $stderr =~ /creating the replication slot/g),
+	3, "verify replication slots are created for all databases");
+is(scalar(() = $stderr =~ /creating subscription/g),
+	3, "verify subscriptions are created for all databases");
+
 # Run pg_createsubscriber on node S.  --verbose is used twice
 # to show more information.
-# In passing, also test the --enable-two-phase option
+# In passing, also test the --enable-two-phase option and
+# --remove option
 command_ok(
 	[
 		'pg_createsubscriber',
@@ -389,7 +462,8 @@ command_ok(
 		'--replication-slot' => 'replslot2',
 		'--database' => $db1,
 		'--database' => $db2,
-		'--enable-two-phase'
+		'--enable-two-phase',
+		'--remove' => 'publications',
 	],
 	'run pg_createsubscriber on node S');
 
@@ -407,6 +481,10 @@ $node_p->safe_psql($db2, "INSERT INTO tbl2 VALUES('row 1')");
 
 # Start subscriber
 $node_s->start;
+
+# Confirm publications are removed from the subscriber node
+is($node_s->safe_psql($db1, "SELECT COUNT(*) FROM pg_publication;"),
+	'0', 'all publications on subscriber have been removed');
 
 # Verify that all subtwophase states are pending or enabled,
 # e.g. there are no subscriptions where subtwophase is disabled ('d')

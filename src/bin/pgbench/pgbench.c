@@ -2279,14 +2279,9 @@ evalStandardFunc(CState *st,
 {
 	/* evaluate all function arguments */
 	int			nargs = 0;
+	PgBenchValue vargs[MAX_FARGS] = {0};
 	PgBenchExprLink *l = args;
 	bool		has_null = false;
-
-	/*
-	 * This value is double braced to workaround GCC bug 53119, which seems to
-	 * exist at least on gcc (Debian 4.7.2-5) 4.7.2, 32-bit.
-	 */
-	PgBenchValue vargs[MAX_FARGS] = {{0}};
 
 	for (nargs = 0; nargs < MAX_FARGS && l != NULL; nargs++, l = l->next)
 	{
@@ -6639,27 +6634,23 @@ set_random_seed(const char *seed)
 	}
 	else
 	{
-		/* parse unsigned-int seed value */
-		unsigned long ulseed;
 		char		garbage;
 
-		/* Don't try to use UINT64_FORMAT here; it might not work for sscanf */
-		if (sscanf(seed, "%lu%c", &ulseed, &garbage) != 1)
+		if (sscanf(seed, "%" SCNu64 "%c", &iseed, &garbage) != 1)
 		{
 			pg_log_error("unrecognized random seed option \"%s\"", seed);
 			pg_log_error_detail("Expecting an unsigned integer, \"time\" or \"rand\".");
 			return false;
 		}
-		iseed = (uint64) ulseed;
 	}
 
 	if (seed != NULL)
-		pg_log_info("setting random seed to %llu", (unsigned long long) iseed);
+		pg_log_info("setting random seed to %" PRIu64, iseed);
 
 	random_seed = iseed;
 
 	/* Initialize base_random_sequence using seed */
-	pg_prng_seed(&base_random_sequence, (uint64) iseed);
+	pg_prng_seed(&base_random_sequence, iseed);
 
 	return true;
 }

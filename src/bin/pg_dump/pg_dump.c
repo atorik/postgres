@@ -209,6 +209,9 @@ static int	nbinaryUpgradeClassOids = 0;
 static SequenceItem *sequences = NULL;
 static int	nsequences = 0;
 
+/* Maximum number of relations to fetch in a fetchAttributeStats() call. */
+#define MAX_ATTR_STATS_RELS 64
+
 /*
  * The default number of rows per INSERT when
  * --inserts is specified without --rows-per-insert
@@ -433,6 +436,9 @@ main(int argc, char **argv)
 	bool		data_only = false;
 	bool		schema_only = false;
 	bool		statistics_only = false;
+	bool		with_data = false;
+	bool		with_schema = false;
+	bool		with_statistics = false;
 	bool		no_data = false;
 	bool		no_schema = false;
 	bool		no_statistics = false;
@@ -509,6 +515,9 @@ main(int argc, char **argv)
 		{"no-toast-compression", no_argument, &dopt.no_toast_compression, 1},
 		{"no-unlogged-table-data", no_argument, &dopt.no_unlogged_table_data, 1},
 		{"no-sync", no_argument, NULL, 7},
+		{"with-data", no_argument, NULL, 22},
+		{"with-schema", no_argument, NULL, 23},
+		{"with-statistics", no_argument, NULL, 24},
 		{"on-conflict-do-nothing", no_argument, &dopt.do_nothing, 1},
 		{"rows-per-insert", required_argument, NULL, 10},
 		{"include-foreign-data", required_argument, NULL, 11},
@@ -518,6 +527,7 @@ main(int argc, char **argv)
 		{"sync-method", required_argument, NULL, 15},
 		{"filter", required_argument, NULL, 16},
 		{"exclude-extension", required_argument, NULL, 17},
+		{"sequence-data", no_argument, &dopt.sequence_data, 1},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -774,6 +784,18 @@ main(int argc, char **argv)
 				no_statistics = true;
 				break;
 
+			case 22:
+				with_data = true;
+				break;
+
+			case 23:
+				with_schema = true;
+				break;
+
+			case 24:
+				with_statistics = true;
+				break;
+
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -801,14 +823,7 @@ main(int argc, char **argv)
 	if (dopt.column_inserts && dopt.dump_inserts == 0)
 		dopt.dump_inserts = DUMP_DEFAULT_ROWS_PER_INSERT;
 
-	/*
-	 * Binary upgrade mode implies dumping sequence data even in schema-only
-	 * mode.  This is not exposed as a separate option, but kept separate
-	 * internally for clarity.
-	 */
-	if (dopt.binary_upgrade)
-		dopt.sequence_data = 1;
-
+	/* reject conflicting "-only" options */
 	if (data_only && schema_only)
 		pg_fatal("options -s/--schema-only and -a/--data-only cannot be used together");
 	if (schema_only && statistics_only)
@@ -816,12 +831,21 @@ main(int argc, char **argv)
 	if (data_only && statistics_only)
 		pg_fatal("options -a/--data-only and --statistics-only cannot be used together");
 
+	/* reject conflicting "-only" and "no-" options */
 	if (data_only && no_data)
 		pg_fatal("options -a/--data-only and --no-data cannot be used together");
 	if (schema_only && no_schema)
 		pg_fatal("options -s/--schema-only and --no-schema cannot be used together");
 	if (statistics_only && no_statistics)
 		pg_fatal("options --statistics-only and --no-statistics cannot be used together");
+
+	/* reject conflicting "with-" and "no-" options */
+	if (with_data && no_data)
+		pg_fatal("options --with-data and --no-data cannot be used together");
+	if (with_schema && no_schema)
+		pg_fatal("options --with-schema and --no-schema cannot be used together");
+	if (with_statistics && no_statistics)
+		pg_fatal("options --with-statistics and --no-statistics cannot be used together");
 
 	if (schema_only && foreign_servers_include_patterns.head != NULL)
 		pg_fatal("options -s/--schema-only and --include-foreign-data cannot be used together");
@@ -835,10 +859,20 @@ main(int argc, char **argv)
 	if (dopt.if_exists && !dopt.outputClean)
 		pg_fatal("option --if-exists requires option -c/--clean");
 
-	/* set derivative flags */
-	dopt.dumpData = data_only || (!schema_only && !statistics_only && !no_data);
-	dopt.dumpSchema = schema_only || (!data_only && !statistics_only && !no_schema);
-	dopt.dumpStatistics = statistics_only || (!data_only && !schema_only && !no_statistics);
+	/*
+	 * Set derivative flags. An "-only" option may be overridden by an
+	 * explicit "with-" option; e.g. "--schema-only --with-statistics" will
+	 * include schema and statistics. Other ambiguous or nonsensical
+	 * combinations, e.g. "--schema-only --no-schema", will have already
+	 * caused an error in one of the checks above.
+	 */
+	dopt.dumpData = ((dopt.dumpData && !schema_only && !statistics_only) ||
+					 (data_only || with_data)) && !no_data;
+	dopt.dumpSchema = ((dopt.dumpSchema && !data_only && !statistics_only) ||
+					   (schema_only || with_schema)) && !no_schema;
+	dopt.dumpStatistics = ((dopt.dumpStatistics && !schema_only && !data_only) ||
+						   (statistics_only || with_statistics)) && !no_statistics;
+
 
 	/*
 	 * --inserts are already implied above if --column-inserts or
@@ -935,7 +969,7 @@ main(int argc, char **argv)
 	 * Open the database using the Archiver, so it knows about it. Errors mean
 	 * death.
 	 */
-	ConnectDatabase(fout, &dopt.cparams, false);
+	ConnectDatabaseAhx(fout, &dopt.cparams, false);
 	setup_connection(fout, dumpencoding, dumpsnapshot, use_role);
 
 	/*
@@ -1188,7 +1222,7 @@ main(int argc, char **argv)
 	 * right now.
 	 */
 	if (plainText)
-		RestoreArchive(fout);
+		RestoreArchive(fout, false);
 
 	CloseArchive(fout);
 
@@ -1275,6 +1309,7 @@ help(const char *progname)
 	printf(_("  --quote-all-identifiers      quote all identifiers, even if not key words\n"));
 	printf(_("  --rows-per-insert=NROWS      number of rows per INSERT; implies --inserts\n"));
 	printf(_("  --section=SECTION            dump named section (pre-data, data, or post-data)\n"));
+	printf(_("  --sequence-data              include sequence data in dump\n"));
 	printf(_("  --serializable-deferrable    wait until the dump can run without anomalies\n"));
 	printf(_("  --snapshot=SNAPSHOT          use given snapshot for the dump\n"));
 	printf(_("  --statistics-only            dump only the statistics, not schema or data\n"));
@@ -1285,6 +1320,9 @@ help(const char *progname)
 	printf(_("  --use-set-session-authorization\n"
 			 "                               use SET SESSION AUTHORIZATION commands instead of\n"
 			 "                               ALTER OWNER commands to set ownership\n"));
+	printf(_("  --with-data                  dump the data\n"));
+	printf(_("  --with-schema                dump the schema\n"));
+	printf(_("  --with-statistics            dump the statistics\n"));
 
 	printf(_("\nConnection options:\n"));
 	printf(_("  -d, --dbname=DBNAME      database to dump\n"));
@@ -2966,6 +3004,19 @@ makeTableDataInfo(DumpOptions *dopt, TableInfo *tbinfo)
 	tdinfo->dobj.components |= DUMP_COMPONENT_DATA;
 
 	tbinfo->dataObj = tdinfo;
+
+	/*
+	 * Materialized view statistics must be restored after the data, because
+	 * REFRESH MATERIALIZED VIEW replaces the storage and resets the stats.
+	 *
+	 * The dependency is added here because the statistics objects are created
+	 * first.
+	 */
+	if (tbinfo->relkind == RELKIND_MATVIEW && tbinfo->stats != NULL)
+	{
+		tbinfo->stats->section = SECTION_POST_DATA;
+		addObjectDependency(&tbinfo->stats->dobj, tdinfo->dobj.dumpId);
+	}
 
 	/* Make sure that we'll collect per-column info for this table. */
 	tbinfo->interesting = true;
@@ -6826,7 +6877,8 @@ getFuncs(Archive *fout)
  */
 static RelStatsInfo *
 getRelationStatistics(Archive *fout, DumpableObject *rel, int32 relpages,
-					  char *reltuples, int32 relallvisible, char relkind,
+					  char *reltuples, int32 relallvisible,
+					  int32 relallfrozen, char relkind,
 					  char **indAttNames, int nindAttNames)
 {
 	if (!fout->dopt->dumpStatistics)
@@ -6855,10 +6907,36 @@ getRelationStatistics(Archive *fout, DumpableObject *rel, int32 relpages,
 		info->relpages = relpages;
 		info->reltuples = pstrdup(reltuples);
 		info->relallvisible = relallvisible;
+		info->relallfrozen = relallfrozen;
 		info->relkind = relkind;
 		info->indAttNames = indAttNames;
 		info->nindAttNames = nindAttNames;
-		info->postponed_def = false;
+
+		/*
+		 * Ordinarily, stats go in SECTION_DATA for tables and
+		 * SECTION_POST_DATA for indexes.
+		 *
+		 * However, the section may be updated later for materialized view
+		 * stats. REFRESH MATERIALIZED VIEW replaces the storage and resets
+		 * the stats, so the stats must be restored after the data. Also, the
+		 * materialized view definition may be postponed to SECTION_POST_DATA
+		 * (see repairMatViewBoundaryMultiLoop()).
+		 */
+		switch (info->relkind)
+		{
+			case RELKIND_RELATION:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_MATVIEW:
+				info->section = SECTION_DATA;
+				break;
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+				info->section = SECTION_POST_DATA;
+				break;
+			default:
+				pg_fatal("cannot dump statistics for relation kind '%c'",
+						 info->relkind);
+		}
 
 		return info;
 	}
@@ -6894,6 +6972,7 @@ getTables(Archive *fout, int *numTables)
 	int			i_relpages;
 	int			i_reltuples;
 	int			i_relallvisible;
+	int			i_relallfrozen;
 	int			i_toastpages;
 	int			i_owning_tab;
 	int			i_owning_col;
@@ -6944,8 +7023,15 @@ getTables(Archive *fout, int *numTables)
 						 "c.relowner, "
 						 "c.relchecks, "
 						 "c.relhasindex, c.relhasrules, c.relpages, "
-						 "c.reltuples, c.relallvisible, c.relhastriggers, "
-						 "c.relpersistence, "
+						 "c.reltuples, c.relallvisible, ");
+
+	if (fout->remoteVersion >= 180000)
+		appendPQExpBufferStr(query, "c.relallfrozen, ");
+	else
+		appendPQExpBufferStr(query, "0 AS relallfrozen, ");
+
+	appendPQExpBufferStr(query,
+						 "c.relhastriggers, c.relpersistence, "
 						 "c.reloftype, "
 						 "c.relacl, "
 						 "acldefault(CASE WHEN c.relkind = " CppAsString2(RELKIND_SEQUENCE)
@@ -7110,6 +7196,7 @@ getTables(Archive *fout, int *numTables)
 	i_relpages = PQfnumber(res, "relpages");
 	i_reltuples = PQfnumber(res, "reltuples");
 	i_relallvisible = PQfnumber(res, "relallvisible");
+	i_relallfrozen = PQfnumber(res, "relallfrozen");
 	i_toastpages = PQfnumber(res, "toastpages");
 	i_owning_tab = PQfnumber(res, "owning_tab");
 	i_owning_col = PQfnumber(res, "owning_col");
@@ -7157,6 +7244,7 @@ getTables(Archive *fout, int *numTables)
 	for (i = 0; i < ntups; i++)
 	{
 		int32		relallvisible = atoi(PQgetvalue(res, i, i_relallvisible));
+		int32		relallfrozen = atoi(PQgetvalue(res, i, i_relallfrozen));
 
 		tblinfo[i].dobj.objType = DO_TABLE;
 		tblinfo[i].dobj.catId.tableoid = atooid(PQgetvalue(res, i, i_reltableoid));
@@ -7257,9 +7345,17 @@ getTables(Archive *fout, int *numTables)
 
 		/* Add statistics */
 		if (tblinfo[i].interesting)
-			getRelationStatistics(fout, &tblinfo[i].dobj, tblinfo[i].relpages,
-								  PQgetvalue(res, i, i_reltuples),
-								  relallvisible, tblinfo[i].relkind, NULL, 0);
+		{
+			RelStatsInfo *stats;
+
+			stats = getRelationStatistics(fout, &tblinfo[i].dobj,
+										  tblinfo[i].relpages,
+										  PQgetvalue(res, i, i_reltuples),
+										  relallvisible, relallfrozen,
+										  tblinfo[i].relkind, NULL, 0);
+			if (tblinfo[i].relkind == RELKIND_MATVIEW)
+				tblinfo[i].stats = stats;
+		}
 
 		/*
 		 * Read-lock target tables to make sure they aren't DROPPED or altered
@@ -7528,6 +7624,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 				i_relpages,
 				i_reltuples,
 				i_relallvisible,
+				i_relallfrozen,
 				i_parentidx,
 				i_indexdef,
 				i_indnkeyatts,
@@ -7582,7 +7679,14 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 	appendPQExpBufferStr(query,
 						 "SELECT t.tableoid, t.oid, i.indrelid, "
 						 "t.relname AS indexname, "
-						 "t.relpages, t.reltuples, t.relallvisible, "
+						 "t.relpages, t.reltuples, t.relallvisible, ");
+
+	if (fout->remoteVersion >= 180000)
+		appendPQExpBufferStr(query, "t.relallfrozen, ");
+	else
+		appendPQExpBufferStr(query, "0 AS relallfrozen, ");
+
+	appendPQExpBufferStr(query,
 						 "pg_catalog.pg_get_indexdef(i.indexrelid) AS indexdef, "
 						 "i.indkey, i.indisclustered, "
 						 "c.contype, c.conname, "
@@ -7698,6 +7802,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 	i_relpages = PQfnumber(res, "relpages");
 	i_reltuples = PQfnumber(res, "reltuples");
 	i_relallvisible = PQfnumber(res, "relallvisible");
+	i_relallfrozen = PQfnumber(res, "relallfrozen");
 	i_parentidx = PQfnumber(res, "parentidx");
 	i_indexdef = PQfnumber(res, "indexdef");
 	i_indnkeyatts = PQfnumber(res, "indnkeyatts");
@@ -7769,6 +7874,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 			RelStatsInfo *relstats;
 			int32		relpages = atoi(PQgetvalue(res, j, i_relpages));
 			int32		relallvisible = atoi(PQgetvalue(res, j, i_relallvisible));
+			int32		relallfrozen = atoi(PQgetvalue(res, j, i_relallfrozen));
 
 			indxinfo[j].dobj.objType = DO_INDEX;
 			indxinfo[j].dobj.catId.tableoid = atooid(PQgetvalue(res, j, i_tableoid));
@@ -7811,7 +7917,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 
 			relstats = getRelationStatistics(fout, &indxinfo[j].dobj, relpages,
 											 PQgetvalue(res, j, i_reltuples),
-											 relallvisible, indexkind,
+											 relallvisible, relallfrozen, indexkind,
 											 indAttNames, nindAttNames);
 
 			contype = *(PQgetvalue(res, j, i_contype));
@@ -7981,13 +8087,7 @@ getConstraints(Archive *fout, TableInfo tblinfo[], int numTables)
 	{
 		TableInfo  *tinfo = &tblinfo[i];
 
-		/*
-		 * For partitioned tables, foreign keys have no triggers so they must
-		 * be included anyway in case some foreign keys are defined.
-		 */
-		if ((!tinfo->hastriggers &&
-			 tinfo->relkind != RELKIND_PARTITIONED_TABLE) ||
-			!(tinfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
+		if (!(tinfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
 			continue;
 
 		/* OK, we need info for this table */
@@ -10457,48 +10557,104 @@ appendNamedArgument(PQExpBuffer out, Archive *fout, const char *argname,
 }
 
 /*
- * Decide which section to use based on the relkind of the parent object.
+ * fetchAttributeStats --
  *
- * NB: materialized views may be postponed from SECTION_PRE_DATA to
- * SECTION_POST_DATA to resolve some kinds of dependency problems. If so, the
- * matview stats will also be postponed to SECTION_POST_DATA. See
- * repairMatViewBoundaryMultiLoop().
+ * Fetch next batch of attribute statistics for dumpRelationStats_dumper().
  */
-static teSection
-statisticsDumpSection(const RelStatsInfo *rsinfo)
+static PGresult *
+fetchAttributeStats(Archive *fout)
 {
-	switch (rsinfo->relkind)
+	ArchiveHandle *AH = (ArchiveHandle *) fout;
+	PQExpBuffer nspnames = createPQExpBuffer();
+	PQExpBuffer relnames = createPQExpBuffer();
+	int			count = 0;
+	PGresult   *res = NULL;
+	static TocEntry *te;
+	static bool restarted;
+	int			max_rels = MAX_ATTR_STATS_RELS;
+
+	/*
+	 * Our query for retrieving statistics for multiple relations uses WITH
+	 * ORDINALITY and multi-argument UNNEST(), both of which were introduced
+	 * in v9.4.  For older versions, we resort to gathering statistics for a
+	 * single relation at a time.
+	 */
+	if (fout->remoteVersion < 90400)
+		max_rels = 1;
+
+	/* If we're just starting, set our TOC pointer. */
+	if (!te)
+		te = AH->toc->next;
+
+	/*
+	 * We can't easily avoid a second TOC scan for the tar format because it
+	 * writes restore.sql separately, which means we must execute the queries
+	 * twice.  This feels risky, but there is no known reason it should
+	 * generate different output than the first pass.  Even if it does, the
+	 * worst-case scenario is that restore.sql might have different statistics
+	 * data than the archive.
+	 */
+	if (!restarted && te == AH->toc && AH->format == archTar)
 	{
-		case RELKIND_RELATION:
-		case RELKIND_PARTITIONED_TABLE:
-		case RELKIND_MATVIEW:
-			return SECTION_DATA;
-		case RELKIND_INDEX:
-		case RELKIND_PARTITIONED_INDEX:
-			return SECTION_POST_DATA;
-		default:
-			pg_fatal("cannot dump statistics for relation kind '%c'",
-					 rsinfo->relkind);
+		te = AH->toc->next;
+		restarted = true;
 	}
 
-	return 0;					/* keep compiler quiet */
+	/*
+	 * Scan the TOC for the next set of relevant stats entries.  We assume
+	 * that statistics are dumped in the order they are listed in the TOC.
+	 * This is perhaps not the sturdiest assumption, so we verify it matches
+	 * reality in dumpRelationStats_dumper().
+	 */
+	for (; te != AH->toc && count < max_rels; te = te->next)
+	{
+		if ((te->reqs & REQ_STATS) != 0 &&
+			strcmp(te->desc, "STATISTICS DATA") == 0)
+		{
+			appendPQExpBuffer(nspnames, "%s%s", count ? "," : "",
+							  fmtId(te->namespace));
+			appendPQExpBuffer(relnames, "%s%s", count ? "," : "",
+							  fmtId(te->tag));
+			count++;
+		}
+	}
+
+	/* Execute the query for the next batch of relations. */
+	if (count > 0)
+	{
+		PQExpBuffer query = createPQExpBuffer();
+
+		appendPQExpBuffer(query, "EXECUTE getAttributeStats("
+						  "'{%s}'::pg_catalog.name[],"
+						  "'{%s}'::pg_catalog.name[])",
+						  nspnames->data, relnames->data);
+		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+		destroyPQExpBuffer(query);
+	}
+
+	destroyPQExpBuffer(nspnames);
+	destroyPQExpBuffer(relnames);
+	return res;
 }
 
 /*
- * dumpRelationStats --
+ * dumpRelationStats_dumper --
  *
- * Dump command to import stats into the relation on the new database.
+ * Generate command to import stats into the relation on the new database.
+ * This routine is called by the Archiver when it wants the statistics to be
+ * dumped.
  */
-static void
-dumpRelationStats(Archive *fout, const RelStatsInfo *rsinfo)
+static char *
+dumpRelationStats_dumper(Archive *fout, const void *userArg, const TocEntry *te)
 {
-	const DumpableObject *dobj = &rsinfo->dobj;
-	PGresult   *res;
+	const RelStatsInfo *rsinfo = (RelStatsInfo *) userArg;
+	static PGresult *res;
+	static int	rownum;
 	PQExpBuffer query;
-	PQExpBuffer out;
-	DumpId	   *deps = NULL;
-	int			ndeps = 0;
-	char	   *qualified_name;
+	PQExpBufferData out_data;
+	PQExpBuffer out = &out_data;
+	int			i_schemaname;
+	int			i_tablename;
 	int			i_attname;
 	int			i_inherited;
 	int			i_null_frac;
@@ -10514,24 +10670,31 @@ dumpRelationStats(Archive *fout, const RelStatsInfo *rsinfo)
 	int			i_range_length_histogram;
 	int			i_range_empty_frac;
 	int			i_range_bounds_histogram;
+	static TocEntry *expected_te;
 
-	/* nothing to do if we are not dumping statistics */
-	if (!fout->dopt->dumpStatistics)
-		return;
+	/*
+	 * fetchAttributeStats() assumes that the statistics are dumped in the
+	 * order they are listed in the TOC.  We verify that here for safety.
+	 */
+	if (!expected_te)
+		expected_te = ((ArchiveHandle *) fout)->toc;
 
-	/* dependent on the relation definition, if doing schema */
-	if (fout->dopt->dumpSchema)
-	{
-		deps = dobj->dependencies;
-		ndeps = dobj->nDeps;
-	}
+	expected_te = expected_te->next;
+	while ((expected_te->reqs & REQ_STATS) == 0 ||
+		   strcmp(expected_te->desc, "STATISTICS DATA") != 0)
+		expected_te = expected_te->next;
+
+	if (te != expected_te)
+		pg_fatal("stats dumped out of order (current: %d %s %s) (expected: %d %s %s)",
+				 te->dumpId, te->desc, te->tag,
+				 expected_te->dumpId, expected_te->desc, expected_te->tag);
 
 	query = createPQExpBuffer();
 	if (!fout->is_prepared[PREPQUERY_GETATTRIBUTESTATS])
 	{
 		appendPQExpBufferStr(query,
-							 "PREPARE getAttributeStats(pg_catalog.name, pg_catalog.name) AS\n"
-							 "SELECT s.attname, s.inherited, "
+							 "PREPARE getAttributeStats(pg_catalog.name[], pg_catalog.name[]) AS\n"
+							 "SELECT s.schemaname, s.tablename, s.attname, s.inherited, "
 							 "s.null_frac, s.avg_width, s.n_distinct, "
 							 "s.most_common_vals, s.most_common_freqs, "
 							 "s.histogram_bounds, s.correlation, "
@@ -10549,11 +10712,33 @@ dumpRelationStats(Archive *fout, const RelStatsInfo *rsinfo)
 								 "NULL AS range_empty_frac,"
 								 "NULL AS range_bounds_histogram ");
 
-		appendPQExpBufferStr(query,
-							 "FROM pg_catalog.pg_stats s "
-							 "WHERE s.schemaname = $1 "
-							 "AND s.tablename = $2 "
-							 "ORDER BY s.attname, s.inherited");
+		/*
+		 * The results must be in the order of the relations supplied in the
+		 * parameters to ensure we remain in sync as we walk through the TOC.
+		 * The redundant filter clause on s.tablename = ANY(...) seems
+		 * sufficient to convince the planner to use
+		 * pg_class_relname_nsp_index, which avoids a full scan of pg_stats.
+		 * This may not work for all versions.
+		 *
+		 * Our query for retrieving statistics for multiple relations uses
+		 * WITH ORDINALITY and multi-argument UNNEST(), both of which were
+		 * introduced in v9.4.  For older versions, we resort to gathering
+		 * statistics for a single relation at a time.
+		 */
+		if (fout->remoteVersion >= 90400)
+			appendPQExpBufferStr(query,
+								 "FROM pg_catalog.pg_stats s "
+								 "JOIN unnest($1, $2) WITH ORDINALITY AS u (schemaname, tablename, ord) "
+								 "ON s.schemaname = u.schemaname "
+								 "AND s.tablename = u.tablename "
+								 "WHERE s.tablename = ANY($2) "
+								 "ORDER BY u.ord, s.attname, s.inherited");
+		else
+			appendPQExpBufferStr(query,
+								 "FROM pg_catalog.pg_stats s "
+								 "WHERE s.schemaname = $1[1] "
+								 "AND s.tablename = $2[1] "
+								 "ORDER BY s.attname, s.inherited");
 
 		ExecuteSqlStatement(fout, query->data);
 
@@ -10561,31 +10746,38 @@ dumpRelationStats(Archive *fout, const RelStatsInfo *rsinfo)
 		resetPQExpBuffer(query);
 	}
 
-	out = createPQExpBuffer();
-
-	qualified_name = pg_strdup(fmtQualifiedDumpable(rsinfo));
+	initPQExpBuffer(out);
 
 	/* restore relation stats */
 	appendPQExpBufferStr(out, "SELECT * FROM pg_catalog.pg_restore_relation_stats(\n");
 	appendPQExpBuffer(out, "\t'version', '%u'::integer,\n",
 					  fout->remoteVersion);
-	appendPQExpBufferStr(out, "\t'relation', ");
-	appendStringLiteralAH(out, qualified_name, fout);
-	appendPQExpBufferStr(out, "::regclass,\n");
+	appendPQExpBufferStr(out, "\t'schemaname', ");
+	appendStringLiteralAH(out, rsinfo->dobj.namespace->dobj.name, fout);
+	appendPQExpBufferStr(out, ",\n");
+	appendPQExpBufferStr(out, "\t'relname', ");
+	appendStringLiteralAH(out, rsinfo->dobj.name, fout);
+	appendPQExpBufferStr(out, ",\n");
 	appendPQExpBuffer(out, "\t'relpages', '%d'::integer,\n", rsinfo->relpages);
 	appendPQExpBuffer(out, "\t'reltuples', '%s'::real,\n", rsinfo->reltuples);
-	appendPQExpBuffer(out, "\t'relallvisible', '%d'::integer\n);\n",
+	appendPQExpBuffer(out, "\t'relallvisible', '%d'::integer",
 					  rsinfo->relallvisible);
 
-	/* fetch attribute stats */
-	appendPQExpBufferStr(query, "EXECUTE getAttributeStats(");
-	appendStringLiteralAH(query, dobj->namespace->dobj.name, fout);
-	appendPQExpBufferStr(query, ", ");
-	appendStringLiteralAH(query, dobj->name, fout);
-	appendPQExpBufferStr(query, ");");
+	if (fout->remoteVersion >= 180000)
+		appendPQExpBuffer(out, ",\n\t'relallfrozen', '%d'::integer", rsinfo->relallfrozen);
 
-	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+	appendPQExpBufferStr(out, "\n);\n");
 
+	/* Fetch the next batch of attribute statistics if needed. */
+	if (rownum >= PQntuples(res))
+	{
+		PQclear(res);
+		res = fetchAttributeStats(fout);
+		rownum = 0;
+	}
+
+	i_schemaname = PQfnumber(res, "schemaname");
+	i_tablename = PQfnumber(res, "tablename");
 	i_attname = PQfnumber(res, "attname");
 	i_inherited = PQfnumber(res, "inherited");
 	i_null_frac = PQfnumber(res, "null_frac");
@@ -10603,16 +10795,22 @@ dumpRelationStats(Archive *fout, const RelStatsInfo *rsinfo)
 	i_range_bounds_histogram = PQfnumber(res, "range_bounds_histogram");
 
 	/* restore attribute stats */
-	for (int rownum = 0; rownum < PQntuples(res); rownum++)
+	for (; rownum < PQntuples(res); rownum++)
 	{
 		const char *attname;
+
+		/* Stop if the next stat row in our cache isn't for this relation. */
+		if (strcmp(te->tag, PQgetvalue(res, rownum, i_tablename)) != 0 ||
+			strcmp(te->namespace, PQgetvalue(res, rownum, i_schemaname)) != 0)
+			break;
 
 		appendPQExpBufferStr(out, "SELECT * FROM pg_catalog.pg_restore_attribute_stats(\n");
 		appendPQExpBuffer(out, "\t'version', '%u'::integer,\n",
 						  fout->remoteVersion);
-		appendPQExpBufferStr(out, "\t'relation', ");
-		appendStringLiteralAH(out, qualified_name, fout);
-		appendPQExpBufferStr(out, "::regclass");
+		appendPQExpBufferStr(out, "\t'schemaname', ");
+		appendStringLiteralAH(out, rsinfo->dobj.namespace->dobj.name, fout);
+		appendPQExpBufferStr(out, ",\n\t'relname', ");
+		appendStringLiteralAH(out, rsinfo->dobj.name, fout);
 
 		if (PQgetisnull(res, rownum, i_attname))
 			pg_fatal("attname cannot be NULL");
@@ -10624,7 +10822,10 @@ dumpRelationStats(Archive *fout, const RelStatsInfo *rsinfo)
 		 * their attnames are not necessarily stable across dump/reload.
 		 */
 		if (rsinfo->nindAttNames == 0)
-			appendNamedArgument(out, fout, "attname", "name", attname);
+		{
+			appendPQExpBuffer(out, ",\n\t'attname', ");
+			appendStringLiteralAH(out, attname, fout);
+		}
 		else
 		{
 			bool		found = false;
@@ -10692,21 +10893,35 @@ dumpRelationStats(Archive *fout, const RelStatsInfo *rsinfo)
 		appendPQExpBufferStr(out, "\n);\n");
 	}
 
-	PQclear(res);
+	destroyPQExpBuffer(query);
+	return out->data;
+}
+
+/*
+ * dumpRelationStats --
+ *
+ * Make an ArchiveEntry for the relation statistics.  The Archiver will take
+ * care of gathering the statistics and generating the restore commands when
+ * they are needed.
+ */
+static void
+dumpRelationStats(Archive *fout, const RelStatsInfo *rsinfo)
+{
+	const DumpableObject *dobj = &rsinfo->dobj;
+
+	/* nothing to do if we are not dumping statistics */
+	if (!fout->dopt->dumpStatistics)
+		return;
 
 	ArchiveEntry(fout, nilCatalogId, createDumpId(),
 				 ARCHIVE_OPTS(.tag = dobj->name,
 							  .namespace = dobj->namespace->dobj.name,
 							  .description = "STATISTICS DATA",
-							  .section = rsinfo->postponed_def ?
-							  SECTION_POST_DATA : statisticsDumpSection(rsinfo),
-							  .createStmt = out->data,
-							  .deps = deps,
-							  .nDeps = ndeps));
-
-	free(qualified_name);
-	destroyPQExpBuffer(out);
-	destroyPQExpBuffer(query);
+							  .section = rsinfo->section,
+							  .defnFn = dumpRelationStats_dumper,
+							  .defnArg = rsinfo,
+							  .deps = dobj->dependencies,
+							  .nDeps = dobj->nDeps));
 }
 
 /*
@@ -15611,6 +15826,9 @@ dumpDefaultACL(Archive *fout, const DefaultACLInfo *daclinfo)
 		case DEFACLOBJ_NAMESPACE:
 			type = "SCHEMAS";
 			break;
+		case DEFACLOBJ_LARGEOBJECT:
+			type = "LARGE OBJECTS";
+			break;
 		default:
 			/* shouldn't get here */
 			pg_fatal("unrecognized object type in default privileges: %d",
@@ -16612,11 +16830,6 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 							appendPQExpBuffer(q, " DEFAULT %s",
 											  tbinfo->attrdefs[j]->adef_expr);
 					}
-
-					print_notnull = (tbinfo->notnull_constrs[j] != NULL &&
-									 (tbinfo->notnull_islocal[j] ||
-									  dopt->binary_upgrade ||
-									  tbinfo->ispartition));
 
 					if (print_notnull)
 					{
@@ -19391,7 +19604,7 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 				break;
 			case DO_REL_STATS:
 				/* stats section varies by parent object type, DATA or POST */
-				if (statisticsDumpSection((RelStatsInfo *) dobj) == SECTION_DATA)
+				if (((RelStatsInfo *) dobj)->section == SECTION_DATA)
 				{
 					addObjectDependency(dobj, preDataBound->dumpId);
 					addObjectDependency(postDataBound, dobj->dumpId);

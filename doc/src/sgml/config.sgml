@@ -2378,8 +2378,12 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        Sets the maximum number of simultaneously open files allowed to each
-        server subprocess. The default is one thousand files. If the kernel is enforcing
+        Sets the maximum number of open files each server subprocess is
+        allowed to open simultaneously, in addition to the files already open
+        in postmaster. The default is one thousand files.
+       </para>
+       <para>
+        If the kernel is enforcing
         a safe per-process limit, you don't need to worry about this setting.
         But on some platforms (notably, most BSD systems), the kernel will
         allow individual processes to open many more files than the system
@@ -2581,8 +2585,7 @@ include_dir 'conf.d'
          session attempts to initiate in parallel.  The allowed range is
          <literal>1</literal> to <literal>1000</literal>, or
          <literal>0</literal> to disable issuance of asynchronous I/O requests.
-         The default is <literal>16</literal> on supported systems, otherwise
-         <literal>0</literal>.
+         The default is <literal>16</literal>.
         </para>
 
         <para>
@@ -2593,8 +2596,9 @@ include_dir 'conf.d'
         </para>
 
         <para>
-         On systems without prefetch advice support, attempting to configure
-         any value other than <literal>0</literal> will error out.
+         On systems with prefetch advice support,
+         <varname>effective_io_concurrency</varname> also controls the
+         prefetch distance.
         </para>
 
         <para>
@@ -2617,10 +2621,10 @@ include_dir 'conf.d'
          for maintenance work that is done on behalf of many client sessions.
         </para>
         <para>
-         The default is <literal>16</literal> on supported systems, otherwise
-         <literal>0</literal>.  This value can be overridden for tables in a
-         particular tablespace by setting the tablespace parameter of the same
-         name (see <xref linkend="sql-altertablespace"/>).
+         The default is <literal>16</literal>.  This value can be overridden
+         for tables in a particular tablespace by setting the tablespace
+         parameter of the same name (see <xref
+         linkend="sql-altertablespace"/>).
         </para>
        </listitem>
       </varlistentry>
@@ -2704,6 +2708,14 @@ include_dir 'conf.d'
           <listitem>
            <para>
             <literal>worker</literal> (execute asynchronous I/O using worker processes)
+           </para>
+          </listitem>
+          <listitem>
+           <para>
+            <literal>io_uring</literal> (execute asynchronous I/O using
+            io_uring, requires a build with
+            <link linkend="configure-option-with-liburing"><option>--with-liburing</option></link> /
+            <link linkend="configure-with-liburing-meson"><option>-Dliburing</option></link>)
            </para>
           </listitem>
           <listitem>
@@ -4476,13 +4488,6 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
          to <literal>replica</literal> or higher to allow replication slots to
          be used.
         </para>
-
-        <para>
-         Note that this parameter also applies on the subscriber side, but with
-         a different meaning. See <xref linkend="guc-max-replication-slots-subscriber"/>
-         in <xref linkend="runtime-config-replication-subscriber"/> for more
-         details.
-        </para>
        </listitem>
       </varlistentry>
 
@@ -5063,6 +5068,13 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
         until it eventually reaches the primary.  Standbys make no other use
         of feedback they receive other than to pass upstream.
        </para>
+       <para>
+        Note that if the clock on standby is moved ahead or backward, the
+        feedback message might not be sent at the required interval.  In
+        extreme cases, this can lead to a prolonged risk of not removing dead
+        rows on the primary for extended periods, as the feedback mechanism is
+        based on timestamps.
+       </para>
       </listitem>
      </varlistentry>
 
@@ -5228,10 +5240,10 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
 
      <variablelist>
 
-     <varlistentry id="guc-max-replication-slots-subscriber" xreflabel="max_replication_slots">
-      <term><varname>max_replication_slots</varname> (<type>integer</type>)
+     <varlistentry id="guc-max-active-replication-origins" xreflabel="max_active_replication_origins">
+      <term><varname>max_active_replication_origins</varname> (<type>integer</type>)
        <indexterm>
-        <primary><varname>max_replication_slots</varname> configuration parameter</primary>
+        <primary><varname>max_active_replication_origins</varname> configuration parameter</primary>
         <secondary>in a subscriber</secondary>
        </indexterm>
       </term>
@@ -5243,17 +5255,12 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
         be created on the server. Setting it to a lower value than the current
         number of tracked replication origins (reflected in
         <link linkend="view-pg-replication-origin-status">pg_replication_origin_status</link>)
-        will prevent the server from starting.
-        <literal>max_replication_slots</literal> must be set to at least the
+        will prevent the server from starting. It defaults to 10. This parameter
+        can only be set at server start.
+
+        <literal>max_active_replication_origins</literal> must be set to at least the
         number of subscriptions that will be added to the subscriber, plus some
         reserve for table synchronization.
-       </para>
-
-       <para>
-        Note that this parameter also applies on a sending server, but with
-        a different meaning. See <xref linkend="guc-max-replication-slots"/>
-        in <xref linkend="runtime-config-replication-sender"/> for more
-        details.
        </para>
       </listitem>
      </varlistentry>
@@ -8568,7 +8575,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </term>
       <listitem>
        <para>
-        Enables timing of database I/O calls.  This parameter is off by
+        Enables timing of database I/O waits.  This parameter is off by
         default, as it will repeatedly query the operating system for
         the current time, which may cause significant overhead on some
         platforms.  You can use the <xref linkend="pgtesttiming"/> tool to
@@ -8602,7 +8609,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </term>
       <listitem>
        <para>
-        Enables timing of WAL I/O calls. This parameter is off by default,
+        Enables timing of WAL I/O waits. This parameter is off by default,
         as it will repeatedly query the operating system for the current time,
         which may cause significant overhead on some platforms.
         You can use the <application>pg_test_timing</application> tool to
@@ -8723,36 +8730,6 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
          throw an error if a query identifier has already been computed.
         </para>
        </note>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry id="guc-query-id-squash-values" xreflabel="query_id_squash_values">
-      <term><varname>query_id_squash_values</varname> (<type>bool</type>)
-      <indexterm>
-       <primary><varname>query_id_squash_values</varname> configuration parameter</primary>
-      </indexterm>
-      </term>
-      <listitem>
-       <para>
-        Specifies how a list of constants (e.g., for an <literal>IN</literal>
-        clause) contributes to the query identifier computation.
-        Normally, every element of such a list contributes to the query
-        identifier separately, which means that two queries that only differ
-        in the number of elements in such a list would get different query
-        identifiers.
-        If this parameter is on, a list of constants will not contribute
-        to the query identifier. This means that two queries whose only
-        difference is the number of constants in such a list are going to get the
-        same query identifier.
-       </para>
-       <para>
-        Only constants are affected; bind parameters do not benefit from this
-        functionality. The default value is <literal>off</literal>.
-       </para>
-       <para>
-        This parameter also affects how <xref linkend="pgstatstatements"/>
-        generates normalized query texts.
-       </para>
       </listitem>
      </varlistentry>
 
@@ -9309,6 +9286,35 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
        <varname>vacuum_cost_delay</varname> * 4.
       </para>
      </note>
+    </sect2>
+
+    <sect2 id="runtime-config-vacuum-default">
+     <title>Default Behavior</title>
+
+     <variablelist>
+      <varlistentry id="guc-vacuum-truncate" xreflabel="vacuum_truncate">
+       <term><varname>vacuum_truncate</varname> (<type>boolean</type>)
+       <indexterm>
+        <primary><varname>vacuum_truncate</varname> configuration parameter</primary>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Enables or disables vacuum to try to truncate off any empty pages at
+         the end of the table.  The default value is <literal>true</literal>.
+         If <literal>true</literal>, <command>VACUUM</command> and autovacuum
+         do the truncation and the disk space for the truncated pages is
+         returned to the operating system.  Note that the truncation requires
+         an <literal>ACCESS EXCLUSIVE</literal> lock on the table.  The
+         <literal>TRUNCATE</literal> parameter of
+         <link linkend="sql-vacuum"><command>VACUUM</command></link>, if
+         specified, overrides the value of this parameter.  The setting can
+         also be overridden for individual tables by changing table storage
+         parameters.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
     </sect2>
 
     <sect2 id="runtime-config-vacuum-freezing">

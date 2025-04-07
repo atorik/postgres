@@ -361,11 +361,7 @@ static relopt_int intRelOpts[] =
 			RELOPT_KIND_TABLESPACE,
 			ShareUpdateExclusiveLock
 		},
-#ifdef USE_PREFETCH
 		-1, 0, MAX_IO_CONCURRENCY
-#else
-		0, 0, 0
-#endif
 	},
 	{
 		{
@@ -374,11 +370,7 @@ static relopt_int intRelOpts[] =
 			RELOPT_KIND_TABLESPACE,
 			ShareUpdateExclusiveLock
 		},
-#ifdef USE_PREFETCH
 		-1, 0, MAX_IO_CONCURRENCY
-#else
-		0, 0, 0
-#endif
 	},
 	{
 		{
@@ -1779,6 +1771,17 @@ fillRelOptions(void *rdopts, Size basesize,
 				char	   *itempos = ((char *) rdopts) + elems[j].offset;
 				char	   *string_val;
 
+				/*
+				 * If isset_offset is provided, store whether the reloption is
+				 * set there.
+				 */
+				if (elems[j].isset_offset > 0)
+				{
+					char	   *setpos = ((char *) rdopts) + elems[j].isset_offset;
+
+					*(bool *) setpos = options[i].isset;
+				}
+
 				switch (options[i].gen->type)
 				{
 					case RELOPT_TYPE_BOOL:
@@ -1901,7 +1904,7 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"vacuum_index_cleanup", RELOPT_TYPE_ENUM,
 		offsetof(StdRdOptions, vacuum_index_cleanup)},
 		{"vacuum_truncate", RELOPT_TYPE_BOOL,
-		offsetof(StdRdOptions, vacuum_truncate)},
+		offsetof(StdRdOptions, vacuum_truncate), offsetof(StdRdOptions, vacuum_truncate_set)},
 		{"vacuum_max_eager_freeze_failure_rate", RELOPT_TYPE_REAL,
 		offsetof(StdRdOptions, vacuum_max_eager_freeze_failure_rate)}
 	};
@@ -1981,6 +1984,7 @@ build_local_reloptions(local_relopts *relopts, Datum options, bool validate)
 		elems[i].optname = opt->option->name;
 		elems[i].opttype = opt->option->type;
 		elems[i].offset = opt->offset;
+		elems[i].isset_offset = 0;	/* not supported for local relopts yet */
 
 		i++;
 	}

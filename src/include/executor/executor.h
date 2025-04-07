@@ -158,6 +158,43 @@ extern TupleHashEntry FindTupleHashEntry(TupleHashTable hashtable,
 										 ExprState *hashexpr);
 extern void ResetTupleHashTable(TupleHashTable hashtable);
 
+#ifndef FRONTEND
+/*
+ * Return size of the hash bucket. Useful for estimating memory usage.
+ */
+static inline size_t
+TupleHashEntrySize(void)
+{
+	return sizeof(TupleHashEntryData);
+}
+
+/*
+ * Return tuple from hash entry.
+ */
+static inline MinimalTuple
+TupleHashEntryGetTuple(TupleHashEntry entry)
+{
+	return entry->firstTuple;
+}
+
+/*
+ * Get a pointer into the additional space allocated for this entry. The
+ * memory will be maxaligned and zeroed.
+ *
+ * The amount of space available is the additionalsize requested in the call
+ * to BuildTupleHashTable(). If additionalsize was specified as zero, return
+ * NULL.
+ */
+static inline void *
+TupleHashEntryGetAdditional(TupleHashTable hashtable, TupleHashEntry entry)
+{
+	if (hashtable->additionalsize > 0)
+		return (char *) entry->firstTuple - hashtable->additionalsize;
+	else
+		return NULL;
+}
+#endif
+
 /*
  * prototypes from functions in execJunk.c
  */
@@ -220,6 +257,10 @@ extern ResultRelInfo *ExecGetTriggerResultRel(EState *estate, Oid relid,
 extern List *ExecGetAncestorResultRels(EState *estate, ResultRelInfo *resultRelInfo);
 extern void ExecConstraints(ResultRelInfo *resultRelInfo,
 							TupleTableSlot *slot, EState *estate);
+extern AttrNumber ExecRelGenVirtualNotNull(ResultRelInfo *resultRelInfo,
+										   TupleTableSlot *slot,
+										   EState *estate,
+										   List *notnull_virtual_attrs);
 extern bool ExecPartitionCheck(ResultRelInfo *resultRelInfo,
 							   TupleTableSlot *slot, EState *estate, bool emitError);
 extern void ExecPartitionCheckEmitError(ResultRelInfo *resultRelInfo,

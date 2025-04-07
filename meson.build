@@ -945,6 +945,18 @@ endif
 
 
 ###############################################################
+# Library: liburing
+###############################################################
+
+liburingopt = get_option('liburing')
+liburing = dependency('liburing', required: liburingopt)
+if liburing.found()
+  cdata.set('USE_LIBURING', 1)
+endif
+
+
+
+###############################################################
 # Library: libxml
 ###############################################################
 
@@ -1086,6 +1098,7 @@ endif
 
 perlopt = get_option('plperl')
 perl_dep = not_found_dep
+perlversion = ''
 if not perlopt.disabled()
   perl_may_work = true
 
@@ -1103,7 +1116,7 @@ if not perlopt.disabled()
   # Then inquire perl about its configuration
   if perl_may_work
     perl_conf_cmd = [perl, '-MConfig', '-e', 'print $Config{$ARGV[0]}']
-    perlversion = run_command(perl_conf_cmd, 'api_versionstring', check: true).stdout()
+    perlversion = run_command(perl_conf_cmd, 'version', check: true).stdout()
     archlibexp = run_command(perl_conf_cmd, 'archlibexp', check: true).stdout()
     privlibexp = run_command(perl_conf_cmd, 'privlibexp', check: true).stdout()
     useshrplib = run_command(perl_conf_cmd, 'useshrplib', check: true).stdout()
@@ -1466,6 +1479,7 @@ if sslopt in ['auto', 'openssl']
       # Function introduced in OpenSSL 1.1.1, not in LibreSSL.
       ['X509_get_signature_info'],
       ['SSL_CTX_set_num_tickets'],
+      ['SSL_CTX_set_keylog_callback'],
     ]
 
     are_openssl_funcs_complete = true
@@ -2259,17 +2273,17 @@ if host_cpu == 'x86_64'
   prog = '''
 #include <immintrin.h>
 #include <stdint.h>
+char buf[sizeof(__m512i)];
 
 #if defined(__has_attribute) && __has_attribute (target)
 __attribute__((target("avx512vpopcntdq,avx512bw")))
 #endif
 int main(void)
 {
-    const char buf[sizeof(__m512i)];
     int64_t popcnt = 0;
     __m512i accum = _mm512_setzero_si512();
-    const __m512i val = _mm512_maskz_loadu_epi8((__mmask64) 0xf0f0f0f0f0f0f0f0, (const __m512i *) buf);
-    const __m512i cnt = _mm512_popcnt_epi64(val);
+    __m512i val = _mm512_maskz_loadu_epi8((__mmask64) 0xf0f0f0f0f0f0f0f0, (const __m512i *) buf);
+    __m512i cnt = _mm512_popcnt_epi64(val);
     accum = _mm512_add_epi64(accum, cnt);
     popcnt = _mm512_reduce_add_epi64(accum);
     /* return computed value, to prevent the above being optimized away */
@@ -2285,19 +2299,71 @@ endif
 
 
 ###############################################################
+# Check for the availability of SVE popcount intrinsics.
+###############################################################
+
+if host_cpu == 'aarch64'
+
+  prog = '''
+#include <arm_sve.h>
+
+char buf[128];
+
+#if defined(__has_attribute) && __has_attribute (target)
+__attribute__((target("arch=armv8-a+sve")))
+#endif
+int main(void)
+{
+	svbool_t	pred = svptrue_b64();
+	svuint8_t	vec8;
+	svuint64_t	accum1 = svdup_u64(0),
+				accum2 = svdup_u64(0),
+				vec64;
+	char	   *p = buf;
+	uint64_t	popcnt,
+				mask = 0x5555555555555555;
+
+	vec64 = svand_n_u64_x(pred, svld1_u64(pred, (const uint64_t *) p), mask);
+	accum1 = svadd_u64_x(pred, accum1, svcnt_u64_x(pred, vec64));
+	p += svcntb();
+
+	vec64 = svand_n_u64_x(pred, svld1_u64(pred, (const uint64_t *) p), mask);
+	accum2 = svadd_u64_x(pred, accum2, svcnt_u64_x(pred, vec64));
+	p += svcntb();
+
+	popcnt = svaddv_u64(pred, svadd_u64_x(pred, accum1, accum2));
+
+	pred = svwhilelt_b8_s32(0, sizeof(buf));
+	vec8 = svand_n_u8_x(pred, svld1_u8(pred, (const uint8_t *) p), 0x55);
+	return (int) (popcnt + svaddv_u8(pred, svcnt_u8_x(pred, vec8)));
+}
+'''
+
+  if cc.links(prog, name: 'SVE popcount', args: test_c_args)
+    cdata.set('USE_SVE_POPCNT_WITH_RUNTIME_CHECK', 1)
+  endif
+
+endif
+
+
+###############################################################
 # Select CRC-32C implementation.
 #
-# If we are targeting a processor that has Intel SSE 4.2 instructions, we can
-# use the special CRC instructions for calculating CRC-32C. If we're not
-# targeting such a processor, but we can nevertheless produce code that uses
-# the SSE intrinsics, compile both implementations and select which one to use
-# at runtime, depending on whether SSE 4.2 is supported by the processor we're
-# running on.
+# There are three methods of calculating CRC, in order of increasing
+# performance:
 #
-# Similarly, if we are targeting an ARM processor that has the CRC
-# instructions that are part of the ARMv8 CRC Extension, use them. And if
-# we're not targeting such a processor, but can nevertheless produce code that
-# uses the CRC instructions, compile both, and select at runtime.
+# 1. The fallback using a lookup table, called slicing-by-8
+# 2. CRC-32C instructions (found in e.g. Intel SSE 4.2 and ARMv8 CRC Extension)
+# 3. Algorithms using carryless multiplication instructions
+#    (e.g. Intel PCLMUL and Arm PMULL)
+#
+# If we can produce code (via function attributes or additional compiler
+# flags) that uses #2 (and possibly #3), we compile all implementations
+# and select which one to use at runtime, depending on what is supported
+# by the processor we're running on.
+#
+# If we are targeting a processor that has #2, we can use that without
+# runtime selection.
 #
 # Note that we do not use __attribute__((target("..."))) for the ARM CRC
 # instructions because until clang 16, using the ARM intrinsics still requires
@@ -2317,13 +2383,13 @@ if host_cpu == 'x86' or host_cpu == 'x86_64'
 
     prog = '''
 #include <nmmintrin.h>
+unsigned int crc;
 
 #if defined(__has_attribute) && __has_attribute (target)
 __attribute__((target("sse4.2")))
 #endif
 int main(void)
 {
-    unsigned int crc = 0;
     crc = _mm_crc32_u8(crc, 0);
     crc = _mm_crc32_u32(crc, 0);
     /* return computed value, to prevent the above being optimized away */
@@ -2331,7 +2397,7 @@ int main(void)
 }
 '''
 
-    if not cc.links(prog, name: '_mm_crc32_u8 and _mm_crc32_u32',
+    if not cc.links(prog, name: 'SSE 4.2 CRC32C',
           args: test_c_args)
       # Do not use Intel SSE 4.2
     elif (cc.get_define('__SSE4_2__') != '')
@@ -2346,16 +2412,48 @@ int main(void)
       have_optimized_crc = true
     endif
 
+    # Check if the compiler supports AVX-512 carryless multiplication
+    # and three-way exclusive-or instructions used for computing CRC.
+    # AVX-512F is assumed to be supported if the above are.
+    prog = '''
+#include <immintrin.h>
+__m512i x;
+__m512i y;
+
+#if defined(__has_attribute) && __has_attribute (target)
+__attribute__((target("vpclmulqdq,avx512vl")))
+#endif
+int main(void)
+{
+     __m128i z;
+
+    y = _mm512_clmulepi64_epi128(x, y, 0);
+    z = _mm_ternarylogic_epi64(
+            _mm512_castsi512_si128(y),
+            _mm512_extracti32x4_epi32(y, 1),
+            _mm512_extracti32x4_epi32(y, 2),
+            0x96);
+    /* return computed value, to prevent the above being optimized away */
+    return _mm_crc32_u64(0, _mm_extract_epi64(z, 0));
+}
+'''
+
+    if cc.links(prog,
+        name: 'AVX-512 CRC32C',
+        args: test_c_args)
+      cdata.set('USE_AVX512_CRC32C_WITH_RUNTIME_CHECK', 1)
+    endif
+
   endif
 
 elif host_cpu == 'arm' or host_cpu == 'aarch64'
 
   prog = '''
 #include <arm_acle.h>
+unsigned int crc;
 
 int main(void)
 {
-    unsigned int crc = 0;
     crc = __crc32cb(crc, 0);
     crc = __crc32ch(crc, 0);
     crc = __crc32cw(crc, 0);
@@ -2390,9 +2488,10 @@ int main(void)
 elif host_cpu == 'loongarch64'
 
   prog = '''
+unsigned int crc;
+
 int main(void)
 {
-    unsigned int crc = 0;
     crc = __builtin_loongarch_crcc_w_b_w(0, crc);
     crc = __builtin_loongarch_crcc_w_h_w(0, crc);
     crc = __builtin_loongarch_crcc_w_w_w(0, crc);
@@ -2507,6 +2606,7 @@ decl_checks = [
   ['strlcpy', 'string.h'],
   ['strnlen', 'string.h'],
   ['strsep',  'string.h'],
+  ['timingsafe_bcmp',  'string.h'],
 ]
 
 # Need to check for function declarations for these functions, because
@@ -2515,6 +2615,7 @@ decl_checks = [
 decl_checks += [
   ['preadv', 'sys/uio.h'],
   ['pwritev', 'sys/uio.h'],
+  ['strchrnul', 'string.h'],
 ]
 
 # Check presence of some optional LLVM functions.
@@ -2531,8 +2632,23 @@ foreach c : decl_checks
   args = c.get(2, {})
   varname = 'HAVE_DECL_' + func.underscorify().to_upper()
 
-  found = cc.has_header_symbol(header, func,
-    args: test_c_args, include_directories: postgres_inc,
+  found = cc.compiles('''
+#include <@0@>
+
+int main()
+{
+#ifndef @1@
+    (void) @1@;
+#endif
+
+return 0;
+}
+'''.format(header, func),
+    name: 'test whether @0@ is declared'.format(func),
+    # need to add cflags_warn to get at least
+    # -Werror=unguarded-availability-new if applicable
+    args: test_c_args + cflags_warn,
+    include_directories: postgres_inc,
     kwargs: args)
   cdata.set10(varname, found, description:
 '''Define to 1 if you have the declaration of `@0@', and to 0 if you
@@ -2724,6 +2840,7 @@ func_checks = [
   ['inet_aton'],
   ['inet_pton'],
   ['kqueue'],
+  ['localeconv_l'],
   ['mbstowcs_l'],
   ['memset_s'],
   ['mkdtemp'],
@@ -2739,7 +2856,6 @@ func_checks = [
   ['shm_unlink', {'dependencies': [rt_dep], 'define': false}],
   ['shmget', {'dependencies': [cygipc_dep], 'define': false}],
   ['socket', {'dependencies': [socket_dep], 'define': false}],
-  ['strchrnul'],
   ['strerror_r', {'dependencies': [thread_dep]}],
   ['strlcat'],
   ['strlcpy'],
@@ -2748,6 +2864,7 @@ func_checks = [
   ['strsignal'],
   ['sync_file_range'],
   ['syncfs'],
+  ['timingsafe_bcmp'],
   ['uselocale'],
   ['wcstombs_l'],
 ]
@@ -3162,6 +3279,7 @@ backend_both_deps += [
   icu_i18n,
   ldap,
   libintl,
+  liburing,
   libxml,
   lz4,
   pam,
@@ -3817,6 +3935,7 @@ if meson.version().version_compare('>=0.57')
       'icu': icu,
       'ldap': ldap,
       'libcurl': libcurl,
+      'liburing': liburing,
       'libxml': libxml,
       'libxslt': libxslt,
       'llvm': llvm,
@@ -3824,7 +3943,7 @@ if meson.version().version_compare('>=0.57')
       'nls': libintl,
       'openssl': ssl,
       'pam': pam,
-      'plperl': perl_dep,
+      'plperl': [perl_dep, perlversion],
       'plpython': python3_dep,
       'pltcl': tcl_dep,
       'readline': readline,
@@ -3835,6 +3954,7 @@ if meson.version().version_compare('>=0.57')
       'zstd': zstd,
     },
     section: 'External libraries',
+    list_sep: ' ',
   )
 
 endif

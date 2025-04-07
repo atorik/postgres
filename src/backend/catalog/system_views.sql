@@ -1025,6 +1025,7 @@ CREATE VIEW pg_replication_slots AS
             L.wal_status,
             L.safe_wal_size,
             L.two_phase,
+            L.two_phase_at,
             L.inactive_since,
             L.conflicting,
             L.invalidation_reason,
@@ -1384,9 +1385,17 @@ CREATE VIEW pg_stat_subscription_stats AS
         ss.confl_update_missing,
         ss.confl_delete_origin_differs,
         ss.confl_delete_missing,
+        ss.confl_multiple_unique_conflicts,
         ss.stats_reset
     FROM pg_subscription as s,
          pg_stat_get_subscription_stats(s.oid) as ss;
 
 CREATE VIEW pg_wait_events AS
     SELECT * FROM pg_get_wait_events();
+
+CREATE VIEW pg_aios AS
+    SELECT * FROM pg_get_aios();
+REVOKE ALL ON pg_aios FROM PUBLIC;
+GRANT SELECT ON pg_aios TO pg_read_all_stats;
+REVOKE EXECUTE ON FUNCTION pg_get_aios() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION pg_get_aios() TO pg_read_all_stats;

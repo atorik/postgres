@@ -1107,6 +1107,7 @@ exec_simple_query(const char *query_string)
 		size_t		cmdtaglen;
 
 		pgstat_report_query_id(0, true);
+		pgstat_report_plan_id(0, true);
 
 		/*
 		 * Get the command name for use in status display (it also becomes the
@@ -2030,6 +2031,18 @@ exec_bind_message(StringInfo input_message)
 					  cplan,
 					  psrc);
 
+	/* Portal is defined, set the plan ID based on its contents. */
+	foreach(lc, portal->stmts)
+	{
+		PlannedStmt *plan = lfirst_node(PlannedStmt, lc);
+
+		if (plan->planId != UINT64CONST(0))
+		{
+			pgstat_report_plan_id(plan->planId, false);
+			break;
+		}
+	}
+
 	/* Done with the snapshot used for parameter I/O and parsing/planning */
 	if (snapshot_set)
 		PopActiveSnapshot();
@@ -2166,6 +2179,17 @@ exec_execute_message(const char *portal_name, long max_rows)
 		if (stmt->queryId != UINT64CONST(0))
 		{
 			pgstat_report_query_id(stmt->queryId, false);
+			break;
+		}
+	}
+
+	foreach(lc, portal->stmts)
+	{
+		PlannedStmt *stmt = lfirst_node(PlannedStmt, lc);
+
+		if (stmt->planId != UINT64CONST(0))
+		{
+			pgstat_report_plan_id(stmt->planId, false);
 			break;
 		}
 	}
@@ -3311,6 +3335,10 @@ ProcessInterrupts(void)
 			 */
 			proc_exit(1);
 		}
+		else if (AmWalReceiverProcess())
+			ereport(FATAL,
+					(errcode(ERRCODE_ADMIN_SHUTDOWN),
+					 errmsg("terminating walreceiver process due to administrator command")));
 		else if (AmBackgroundWorkerProcess())
 			ereport(FATAL,
 					(errcode(ERRCODE_ADMIN_SHUTDOWN),
@@ -3624,7 +3652,9 @@ check_restrict_nonsystem_relation_kind(char **newval, void **extra, GucSource so
 	list_free(elemlist);
 
 	/* Save the flags in *extra, for use by the assign function */
-	*extra = guc_malloc(ERROR, sizeof(int));
+	*extra = guc_malloc(LOG, sizeof(int));
+	if (!*extra)
+		return false;
 	*((int *) *extra) = flags;
 
 	return true;
@@ -4233,16 +4263,20 @@ PostgresMain(const char *dbname, const char *username)
 	 * Generate a random cancel key, if this is a backend serving a
 	 * connection. InitPostgres() will advertise it in shared memory.
 	 */
-	Assert(!MyCancelKeyValid);
+	Assert(MyCancelKeyLength == 0);
 	if (whereToSendOutput == DestRemote)
 	{
-		if (!pg_strong_random(&MyCancelKey, sizeof(int32)))
+		int			len;
+
+		len = (MyProcPort == NULL || MyProcPort->proto >= PG_PROTOCOL(3, 2))
+			? MAX_CANCEL_KEY_LENGTH : 4;
+		if (!pg_strong_random(&MyCancelKey, len))
 		{
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
 					 errmsg("could not generate random cancel key")));
 		}
-		MyCancelKeyValid = true;
+		MyCancelKeyLength = len;
 	}
 
 	/*
@@ -4297,10 +4331,11 @@ PostgresMain(const char *dbname, const char *username)
 	{
 		StringInfoData buf;
 
-		Assert(MyCancelKeyValid);
+		Assert(MyCancelKeyLength > 0);
 		pq_beginmessage(&buf, PqMsg_BackendKeyData);
 		pq_sendint32(&buf, (int32) MyProcPid);
-		pq_sendint32(&buf, (int32) MyCancelKey);
+
+		pq_sendbytes(&buf, MyCancelKey, MyCancelKeyLength);
 		pq_endmessage(&buf);
 		/* Need not flush since ReadyForQuery will do it. */
 	}

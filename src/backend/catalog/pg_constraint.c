@@ -100,8 +100,9 @@ CreateConstraintEntry(const char *constraintName,
 	ObjectAddresses *addrs_auto;
 	ObjectAddresses *addrs_normal;
 
-	/* Only CHECK constraint can be not enforced */
-	Assert(isEnforced || constraintType == CONSTRAINT_CHECK);
+	/* Only CHECK or FOREIGN KEY constraint can be not enforced */
+	Assert(isEnforced || constraintType == CONSTRAINT_CHECK ||
+		   constraintType == CONSTRAINT_FOREIGN);
 	/* NOT ENFORCED constraint must be NOT VALID */
 	Assert(isEnforced || !isValidated);
 
@@ -128,8 +129,9 @@ CreateConstraintEntry(const char *constraintName,
 	if (foreignNKeys > 0)
 	{
 		Datum	   *fkdatums;
+		int			nkeys = Max(foreignNKeys, numFkDeleteSetCols);
 
-		fkdatums = (Datum *) palloc(foreignNKeys * sizeof(Datum));
+		fkdatums = (Datum *) palloc(nkeys * sizeof(Datum));
 		for (i = 0; i < foreignNKeys; i++)
 			fkdatums[i] = Int16GetDatum(foreignKey[i]);
 		confkeyArray = construct_array_builtin(fkdatums, foreignNKeys, INT2OID);

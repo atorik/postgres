@@ -30,6 +30,8 @@
 #include "storage/indexfsm.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
+#include "storage/read_stream.h"
+#include "utils/datum.h"
 #include "utils/fmgrprotos.h"
 #include "utils/index_selfuncs.h"
 #include "utils/memutils.h"
@@ -75,18 +77,30 @@ typedef struct BTParallelScanDescData
 
 	/*
 	 * btps_arrElems is used when scans need to schedule another primitive
-	 * index scan.  Holds BTArrayKeyInfo.cur_elem offsets for scan keys.
+	 * index scan with one or more SAOP arrays.  Holds BTArrayKeyInfo.cur_elem
+	 * offsets for each = scan key associated with a ScalarArrayOp array.
 	 */
 	int			btps_arrElems[FLEXIBLE_ARRAY_MEMBER];
+
+	/*
+	 * Additional space (at the end of the struct) is used when scans need to
+	 * schedule another primitive index scan with one or more skip arrays.
+	 * Holds a flattened datum representation for each = scan key associated
+	 * with a skip array.
+	 */
 }			BTParallelScanDescData;
 
 typedef struct BTParallelScanDescData *BTParallelScanDesc;
 
 
+static void _bt_parallel_serialize_arrays(Relation rel, BTParallelScanDesc btscan,
+										  BTScanOpaque so);
+static void _bt_parallel_restore_arrays(Relation rel, BTParallelScanDesc btscan,
+										BTScanOpaque so);
 static void btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 						 IndexBulkDeleteCallback callback, void *callback_state,
 						 BTCycleId cycleid);
-static void btvacuumpage(BTVacState *vstate, BlockNumber scanblkno);
+static BlockNumber btvacuumpage(BTVacState *vstate, Buffer buf);
 static BTVacuumPosting btreevacuumposting(BTVacState *vstate,
 										  IndexTuple posting,
 										  OffsetNumber updatedoffset,
@@ -335,6 +349,7 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 	else
 		so->keyData = NULL;
 
+	so->skipScan = false;
 	so->needPrimScan = false;
 	so->scanBehind = false;
 	so->oppositeDirCheck = false;
@@ -540,10 +555,167 @@ btrestrpos(IndexScanDesc scan)
  * btestimateparallelscan -- estimate storage for BTParallelScanDescData
  */
 Size
-btestimateparallelscan(int nkeys, int norderbys)
+btestimateparallelscan(Relation rel, int nkeys, int norderbys)
 {
-	/* Pessimistically assume all input scankeys will be output with arrays */
-	return offsetof(BTParallelScanDescData, btps_arrElems) + sizeof(int) * nkeys;
+	int16		nkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
+	Size		estnbtreeshared,
+				genericattrspace;
+
+	/*
+	 * Pessimistically assume that every input scan key will be output with
+	 * its own SAOP array
+	 */
+	estnbtreeshared = offsetof(BTParallelScanDescData, btps_arrElems) +
+		sizeof(int) * nkeys;
+
+	/* Single column indexes cannot possibly use a skip array */
+	if (nkeyatts == 1)
+		return estnbtreeshared;
+
+	/*
+	 * Pessimistically assume that all attributes prior to the least
+	 * significant attribute require a skip array (and an associated key)
+	 */
+	genericattrspace = datumEstimateSpace((Datum) 0, false, true,
+										  sizeof(Datum));
+	for (int attnum = 1; attnum < nkeyatts; attnum++)
+	{
+		CompactAttribute *attr;
+
+		/*
+		 * We make the conservative assumption that every index column will
+		 * also require a skip array.
+		 *
+		 * Every skip array must have space to store its scan key's sk_flags.
+		 */
+		estnbtreeshared = add_size(estnbtreeshared, sizeof(int));
+
+		/* Consider space required to store a datum of opclass input type */
+		attr = TupleDescCompactAttr(rel->rd_att, attnum - 1);
+		if (attr->attbyval)
+		{
+			/* This index attribute stores pass-by-value datums */
+			Size		estfixed = datumEstimateSpace((Datum) 0, false,
+													  true, attr->attlen);
+
+			estnbtreeshared = add_size(estnbtreeshared, estfixed);
+			continue;
+		}
+
+		/*
+		 * This index attribute stores pass-by-reference datums.
+		 *
+		 * Assume that serializing this array will use just as much space as a
+		 * pass-by-value datum, in addition to space for the largest possible
+		 * whole index tuple (this is not just a per-datum portion of the
+		 * largest possible tuple because that'd be almost as large anyway).
+		 *
+		 * This is quite conservative, but it's not clear how we could do much
+		 * better.  The executor requires an up-front storage request size
+		 * that reliably covers the scan's high watermark memory usage.  We
+		 * can't be sure of the real high watermark until the scan is over.
+		 */
+		estnbtreeshared = add_size(estnbtreeshared, genericattrspace);
+		estnbtreeshared = add_size(estnbtreeshared, BTMaxItemSize);
+	}
+
+	return estnbtreeshared;
+}
+
+/*
+ * _bt_parallel_serialize_arrays() -- Serialize parallel array state.
+ *
+ * Caller must have exclusively locked btscan->btps_lock when called.
+ */
+static void
+_bt_parallel_serialize_arrays(Relation rel, BTParallelScanDesc btscan,
+							  BTScanOpaque so)
+{
+	char	   *datumshared;
+
+	/* Space for serialized datums begins immediately after btps_arrElems[] */
+	datumshared = ((char *) &btscan->btps_arrElems[so->numArrayKeys]);
+	for (int i = 0; i < so->numArrayKeys; i++)
+	{
+		BTArrayKeyInfo *array = &so->arrayKeys[i];
+		ScanKey		skey = &so->keyData[array->scan_key];
+
+		if (array->num_elems != -1)
+		{
+			/* Save SAOP array's cur_elem (no need to copy key/datum) */
+			Assert(!(skey->sk_flags & SK_BT_SKIP));
+			btscan->btps_arrElems[i] = array->cur_elem;
+			continue;
+		}
+
+		/* Save all mutable state associated with skip array's key */
+		Assert(skey->sk_flags & SK_BT_SKIP);
+		memcpy(datumshared, &skey->sk_flags, sizeof(int));
+		datumshared += sizeof(int);
+
+		if (skey->sk_flags & (SK_BT_MINVAL | SK_BT_MAXVAL))
+		{
+			/* No sk_argument datum to serialize */
+			Assert(skey->sk_argument == 0);
+			continue;
+		}
+
+		datumSerialize(skey->sk_argument, (skey->sk_flags & SK_ISNULL) != 0,
+					   array->attbyval, array->attlen, &datumshared);
+	}
+}
+
+/*
+ * _bt_parallel_restore_arrays() -- Restore serialized parallel array state.
+ *
+ * Caller must have exclusively locked btscan->btps_lock when called.
+ */
+static void
+_bt_parallel_restore_arrays(Relation rel, BTParallelScanDesc btscan,
+							BTScanOpaque so)
+{
+	char	   *datumshared;
+
+	/* Space for serialized datums begins immediately after btps_arrElems[] */
+	datumshared = ((char *) &btscan->btps_arrElems[so->numArrayKeys]);
+	for (int i = 0; i < so->numArrayKeys; i++)
+	{
+		BTArrayKeyInfo *array = &so->arrayKeys[i];
+		ScanKey		skey = &so->keyData[array->scan_key];
+		bool		isnull;
+
+		if (array->num_elems != -1)
+		{
+			/* Restore SAOP array using its saved cur_elem */
+			Assert(!(skey->sk_flags & SK_BT_SKIP));
+			array->cur_elem = btscan->btps_arrElems[i];
+			skey->sk_argument = array->elem_values[array->cur_elem];
+			continue;
+		}
+
+		/* Restore skip array by restoring its key directly */
+		if (!array->attbyval && skey->sk_argument)
+			pfree(DatumGetPointer(skey->sk_argument));
+		skey->sk_argument = (Datum) 0;
+		memcpy(&skey->sk_flags, datumshared, sizeof(int));
+		datumshared += sizeof(int);
+
+		Assert(skey->sk_flags & SK_BT_SKIP);
+
+		if (skey->sk_flags & (SK_BT_MINVAL | SK_BT_MAXVAL))
+		{
+			/* No sk_argument datum to restore */
+			continue;
+		}
+
+		skey->sk_argument = datumRestore(&datumshared, &isnull);
+		if (isnull)
+		{
+			Assert(skey->sk_argument == 0);
+			Assert(skey->sk_flags & SK_SEARCHNULL);
+			Assert(skey->sk_flags & SK_ISNULL);
+		}
+	}
 }
 
 /*
@@ -612,6 +784,7 @@ bool
 _bt_parallel_seize(IndexScanDesc scan, BlockNumber *next_scan_page,
 				   BlockNumber *last_curr_page, bool first)
 {
+	Relation	rel = scan->indexRelation;
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	bool		exit_loop = false,
 				status = true,
@@ -678,14 +851,9 @@ _bt_parallel_seize(IndexScanDesc scan, BlockNumber *next_scan_page,
 			{
 				/* Can start scheduled primitive scan right away, so do so */
 				btscan->btps_pageStatus = BTPARALLEL_ADVANCING;
-				for (int i = 0; i < so->numArrayKeys; i++)
-				{
-					BTArrayKeyInfo *array = &so->arrayKeys[i];
-					ScanKey		skey = &so->keyData[array->scan_key];
 
-					array->cur_elem = btscan->btps_arrElems[i];
-					skey->sk_argument = array->elem_values[array->cur_elem];
-				}
+				/* Restore scan's array keys from serialized values */
+				_bt_parallel_restore_arrays(rel, btscan, so);
 				exit_loop = true;
 			}
 			else
@@ -830,6 +998,7 @@ _bt_parallel_done(IndexScanDesc scan)
 void
 _bt_parallel_primscan_schedule(IndexScanDesc scan, BlockNumber curr_page)
 {
+	Relation	rel = scan->indexRelation;
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	ParallelIndexScanDesc parallel_scan = scan->parallel_scan;
 	BTParallelScanDesc btscan;
@@ -848,12 +1017,7 @@ _bt_parallel_primscan_schedule(IndexScanDesc scan, BlockNumber curr_page)
 		btscan->btps_pageStatus = BTPARALLEL_NEED_PRIMSCAN;
 
 		/* Serialize scan's current array keys */
-		for (int i = 0; i < so->numArrayKeys; i++)
-		{
-			BTArrayKeyInfo *array = &so->arrayKeys[i];
-
-			btscan->btps_arrElems[i] = array->cur_elem;
-		}
+		_bt_parallel_serialize_arrays(rel, btscan, so);
 	}
 	LWLockRelease(&btscan->btps_lock);
 }
@@ -991,8 +1155,9 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	Relation	rel = info->index;
 	BTVacState	vstate;
 	BlockNumber num_pages;
-	BlockNumber scanblkno;
 	bool		needLock;
+	BlockRangeReadStreamPrivate p;
+	ReadStream *stream = NULL;
 
 	/*
 	 * Reset fields that track information about the entire index now.  This
@@ -1061,7 +1226,20 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	 */
 	needLock = !RELATION_IS_LOCAL(rel);
 
-	scanblkno = BTREE_METAPAGE + 1;
+	p.current_blocknum = BTREE_METAPAGE + 1;
+
+	/*
+	 * It is safe to use batchmode as block_range_read_stream_cb takes no
+	 * locks.
+	 */
+	stream = read_stream_begin_relation(READ_STREAM_FULL |
+										READ_STREAM_USE_BATCHING,
+										info->strategy,
+										rel,
+										MAIN_FORKNUM,
+										block_range_read_stream_cb,
+										&p,
+										0);
 	for (;;)
 	{
 		/* Get the current relation length */
@@ -1076,17 +1254,41 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 										 num_pages);
 
 		/* Quit if we've scanned the whole relation */
-		if (scanblkno >= num_pages)
+		if (p.current_blocknum >= num_pages)
 			break;
-		/* Iterate over pages, then loop back to recheck length */
-		for (; scanblkno < num_pages; scanblkno++)
+
+		p.last_exclusive = num_pages;
+
+		/* Iterate over pages, then loop back to recheck relation length */
+		while (true)
 		{
-			btvacuumpage(&vstate, scanblkno);
+			BlockNumber current_block;
+			Buffer		buf;
+
+			/* call vacuum_delay_point while not holding any buffer lock */
+			vacuum_delay_point(false);
+
+			buf = read_stream_next_buffer(stream, NULL);
+
+			if (!BufferIsValid(buf))
+				break;
+
+			current_block = btvacuumpage(&vstate, buf);
+
 			if (info->report_progress)
 				pgstat_progress_update_param(PROGRESS_SCAN_BLOCKS_DONE,
-											 scanblkno);
+											 current_block);
 		}
+
+		/*
+		 * We have to reset the read stream to use it again. After returning
+		 * InvalidBuffer, the read stream API won't invoke our callback again
+		 * until the stream has been reset.
+		 */
+		read_stream_reset(stream);
 	}
+
+	read_stream_end(stream);
 
 	/* Set statistics num_pages field to final size of index */
 	stats->num_pages = num_pages;
@@ -1111,14 +1313,16 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
  * btvacuumpage --- VACUUM one page
  *
  * This processes a single page for btvacuumscan().  In some cases we must
- * backtrack to re-examine and VACUUM pages that were the scanblkno during
+ * backtrack to re-examine and VACUUM pages that were on buf's page during
  * a previous call here.  This is how we handle page splits (that happened
  * after our cycleid was acquired) whose right half page happened to reuse
  * a block that we might have processed at some point before it was
  * recycled (i.e. before the page split).
+ *
+ * Returns BlockNumber of a scanned page (not backtracked).
  */
-static void
-btvacuumpage(BTVacState *vstate, BlockNumber scanblkno)
+static BlockNumber
+btvacuumpage(BTVacState *vstate, Buffer buf)
 {
 	IndexVacuumInfo *info = vstate->info;
 	IndexBulkDeleteResult *stats = vstate->stats;
@@ -1129,7 +1333,7 @@ btvacuumpage(BTVacState *vstate, BlockNumber scanblkno)
 	bool		attempt_pagedel;
 	BlockNumber blkno,
 				backtrack_to;
-	Buffer		buf;
+	BlockNumber scanblkno = BufferGetBlockNumber(buf);
 	Page		page;
 	BTPageOpaque opaque;
 
@@ -1140,17 +1344,6 @@ backtrack:
 	attempt_pagedel = false;
 	backtrack_to = P_NONE;
 
-	/* call vacuum_delay_point while not holding any buffer lock */
-	vacuum_delay_point(false);
-
-	/*
-	 * We can't use _bt_getbuf() here because it always applies
-	 * _bt_checkpage(), which will barf on an all-zero page. We want to
-	 * recycle all-zero pages, not fail.  Also, we want to use a nondefault
-	 * buffer access strategy.
-	 */
-	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
-							 info->strategy);
 	_bt_lockbuf(rel, buf, BT_READ);
 	page = BufferGetPage(buf);
 	opaque = NULL;
@@ -1186,7 +1379,7 @@ backtrack:
 					 errmsg_internal("right sibling %u of scanblkno %u unexpectedly in an inconsistent state in index \"%s\"",
 									 blkno, scanblkno, RelationGetRelationName(rel))));
 			_bt_relbuf(rel, buf);
-			return;
+			return scanblkno;
 		}
 
 		/*
@@ -1206,7 +1399,7 @@ backtrack:
 		{
 			/* Done with current scanblkno (and all lower split pages) */
 			_bt_relbuf(rel, buf);
-			return;
+			return scanblkno;
 		}
 	}
 
@@ -1437,8 +1630,22 @@ backtrack:
 	if (backtrack_to != P_NONE)
 	{
 		blkno = backtrack_to;
+
+		/* check for vacuum delay while not holding any buffer lock */
+		vacuum_delay_point(false);
+
+		/*
+		 * We can't use _bt_getbuf() here because it always applies
+		 * _bt_checkpage(), which will barf on an all-zero page. We want to
+		 * recycle all-zero pages, not fail.  Also, we want to use a
+		 * nondefault buffer access strategy.
+		 */
+		buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
+								 info->strategy);
 		goto backtrack;
 	}
+
+	return scanblkno;
 }
 
 /*

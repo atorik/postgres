@@ -49,7 +49,10 @@
 #include "utils/sampling.h"
 #include "utils/selfuncs.h"
 
-PG_MODULE_MAGIC;
+PG_MODULE_MAGIC_EXT(
+					.name = "postgres_fdw",
+					.version = PG_VERSION
+);
 
 /* Default CPU cost to start up a foreign query. */
 #define DEFAULT_FDW_STARTUP_COST	100.0
@@ -996,7 +999,7 @@ get_useful_pathkeys_for_relation(PlannerInfo *root, RelOptInfo *rel)
 		/* Looks like we can generate a pathkey, so let's do it. */
 		pathkey = make_canonical_pathkey(root, cur_ec,
 										 linitial_oid(cur_ec->ec_opfamilies),
-										 BTLessStrategyNumber,
+										 COMPARE_LT,
 										 false);
 		useful_pathkeys_list = lappend(useful_pathkeys_list,
 									   list_make1(pathkey));
@@ -3333,7 +3336,7 @@ estimate_path_cost_size(PlannerInfo *root,
 		{
 			RelOptInfo *outerrel = fpinfo->outerrel;
 			PgFdwRelationInfo *ofpinfo;
-			AggClauseCosts aggcosts;
+			AggClauseCosts aggcosts = {0};
 			double		input_rows;
 			int			numGroupCols;
 			double		numGroups = 1;
@@ -3357,7 +3360,6 @@ estimate_path_cost_size(PlannerInfo *root,
 			input_rows = ofpinfo->rows;
 
 			/* Collect statistics about aggregates for estimating costs. */
-			MemSet(&aggcosts, 0, sizeof(AggClauseCosts));
 			if (root->parse->hasAggs)
 			{
 				get_agg_clause_costs(root, AGGSPLIT_SIMPLE, &aggcosts);
@@ -5769,8 +5771,7 @@ semijoin_target_ok(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *outerrel,
 		if (!IsA(var, Var))
 			continue;
 
-		if (bms_is_member(var->varno, innerrel->relids) &&
-			!bms_is_member(var->varno, outerrel->relids))
+		if (bms_is_member(var->varno, innerrel->relids))
 		{
 			/*
 			 * The planner can create semi-join, which refers to inner rel
@@ -5778,6 +5779,7 @@ semijoin_target_ok(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *outerrel,
 			 * exists() subquery, so can't handle references to inner rel in
 			 * the target list.
 			 */
+			Assert(!bms_is_member(var->varno, outerrel->relids));
 			ok = false;
 			break;
 		}
@@ -5964,17 +5966,33 @@ foreign_join_ok(PlannerInfo *root, RelOptInfo *joinrel, JoinType jointype,
 			break;
 
 		case JOIN_LEFT:
-			fpinfo->joinclauses = list_concat(fpinfo->joinclauses,
-											  fpinfo_i->remote_conds);
-			fpinfo->remote_conds = list_concat(fpinfo->remote_conds,
-											   fpinfo_o->remote_conds);
+
+			/*
+			 * When semi-join is involved in the inner or outer part of the
+			 * left join, it's deparsed as a subquery, and we can't refer to
+			 * its vars on the upper level.
+			 */
+			if (bms_is_empty(fpinfo_i->hidden_subquery_rels))
+				fpinfo->joinclauses = list_concat(fpinfo->joinclauses,
+												  fpinfo_i->remote_conds);
+			if (bms_is_empty(fpinfo_o->hidden_subquery_rels))
+				fpinfo->remote_conds = list_concat(fpinfo->remote_conds,
+												   fpinfo_o->remote_conds);
 			break;
 
 		case JOIN_RIGHT:
-			fpinfo->joinclauses = list_concat(fpinfo->joinclauses,
-											  fpinfo_o->remote_conds);
-			fpinfo->remote_conds = list_concat(fpinfo->remote_conds,
-											   fpinfo_i->remote_conds);
+
+			/*
+			 * When semi-join is involved in the inner or outer part of the
+			 * right join, it's deparsed as a subquery, and we can't refer to
+			 * its vars on the upper level.
+			 */
+			if (bms_is_empty(fpinfo_o->hidden_subquery_rels))
+				fpinfo->joinclauses = list_concat(fpinfo->joinclauses,
+												  fpinfo_o->remote_conds);
+			if (bms_is_empty(fpinfo_i->hidden_subquery_rels))
+				fpinfo->remote_conds = list_concat(fpinfo->remote_conds,
+												   fpinfo_i->remote_conds);
 			break;
 
 		case JOIN_SEMI:

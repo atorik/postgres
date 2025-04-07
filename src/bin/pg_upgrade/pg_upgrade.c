@@ -170,12 +170,14 @@ main(int argc, char **argv)
 
 	/*
 	 * Most failures happen in create_new_objects(), which has completed at
-	 * this point.  We do this here because it is just before linking, which
-	 * will link the old and new cluster data files, preventing the old
-	 * cluster from being safely started once the new cluster is started.
+	 * this point.  We do this here because it is just before file transfer,
+	 * which for --link will make it unsafe to start the old cluster once the
+	 * new cluster is started, and for --swap will make it unsafe to start the
+	 * old cluster at all.
 	 */
-	if (user_opts.transfer_mode == TRANSFER_MODE_LINK)
-		disable_old_cluster();
+	if (user_opts.transfer_mode == TRANSFER_MODE_LINK ||
+		user_opts.transfer_mode == TRANSFER_MODE_SWAP)
+		disable_old_cluster(user_opts.transfer_mode);
 
 	transfer_all_new_tablespaces(&old_cluster.dbarr, &new_cluster.dbarr,
 								 old_cluster.pgdata, new_cluster.pgdata);
@@ -212,8 +214,10 @@ main(int argc, char **argv)
 	{
 		prep_status("Sync data directory to disk");
 		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
-				  "\"%s/initdb\" --sync-only \"%s\" --sync-method %s",
+				  "\"%s/initdb\" --sync-only %s \"%s\" --sync-method %s",
 				  new_cluster.bindir,
+				  (user_opts.transfer_mode == TRANSFER_MODE_SWAP) ?
+				  "--no-sync-data-files" : "",
 				  new_cluster.pgdata,
 				  user_opts.sync_method);
 		check_ok();
@@ -437,7 +441,6 @@ set_locale_and_encoding(void)
 	char	   *datcollate_literal;
 	char	   *datctype_literal;
 	char	   *datlocale_literal = NULL;
-	char	   *datlocale_src;
 	DbLocaleInfo *locale = old_cluster.template0;
 
 	prep_status("Setting locale and encoding for new cluster");
@@ -451,10 +454,13 @@ set_locale_and_encoding(void)
 	datctype_literal = PQescapeLiteral(conn_new_template1,
 									   locale->db_ctype,
 									   strlen(locale->db_ctype));
-	datlocale_src = locale->db_locale ? locale->db_locale : "NULL";
-	datlocale_literal = PQescapeLiteral(conn_new_template1,
-										datlocale_src,
-										strlen(datlocale_src));
+
+	if (locale->db_locale)
+		datlocale_literal = PQescapeLiteral(conn_new_template1,
+											locale->db_locale,
+											strlen(locale->db_locale));
+	else
+		datlocale_literal = "NULL";
 
 	/* update template0 in new cluster */
 	if (GET_MAJOR_VERSION(new_cluster.major_version) >= 1700)
@@ -498,7 +504,8 @@ set_locale_and_encoding(void)
 
 	PQfreemem(datcollate_literal);
 	PQfreemem(datctype_literal);
-	PQfreemem(datlocale_literal);
+	if (locale->db_locale)
+		PQfreemem(datlocale_literal);
 
 	PQfinish(conn_new_template1);
 

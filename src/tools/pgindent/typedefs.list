@@ -154,6 +154,7 @@ ArrayIOData
 ArrayIterator
 ArrayMapState
 ArrayMetaState
+ArraySortCachedInfo
 ArraySubWorkspace
 ArrayToken
 ArrayType
@@ -174,6 +175,7 @@ AttributeOpts
 AuthRequest
 AuthToken
 AutoPrewarmSharedState
+AutoPrewarmReadStreamData
 AutoVacOpts
 AutoVacuumShmemStruct
 AutoVacuumWorkItem
@@ -194,6 +196,7 @@ BOOLEAN
 BOX
 BTArrayKeyInfo
 BTBuildState
+BTCallbackState
 BTCycleId
 BTDedupInterval
 BTDedupState
@@ -380,6 +383,11 @@ CURLM
 CURLoption
 CV
 CachedExpression
+CachedFunction
+CachedFunctionCompileCallback
+CachedFunctionDeleteCallback
+CachedFunctionHashEntry
+CachedFunctionHashKey
 CachedPlan
 CachedPlanSource
 CallContext
@@ -480,6 +488,7 @@ ConditionVariableMinimallyPadded
 ConditionalStack
 ConfigData
 ConfigVariable
+ConflictTupleInfo
 ConflictType
 ConnCacheEntry
 ConnCacheKey
@@ -665,6 +674,8 @@ DumpableObjectWithAcl
 DynamicFileList
 DynamicZoneAbbrev
 EC_KEY
+ECDerivesKey
+ECDerivesEntry
 EDGE
 ENGINE
 EOM_flatten_into_method
@@ -1051,8 +1062,10 @@ GinPageOpaque
 GinPageOpaqueData
 GinPlaceToPageRC
 GinPostingList
+GinPostingTreeScanItem
 GinQualCounts
 GinScanEntry
+GinScanItem
 GinScanKey
 GinScanOpaque
 GinScanOpaqueData
@@ -1168,6 +1181,7 @@ HeadlineJsonState
 HeadlineParsedText
 HeadlineWordEntry
 HeapCheckContext
+HeapCheckReadStreamData
 HeapPageFreeze
 HeapScanDesc
 HeapTuple
@@ -1780,11 +1794,11 @@ OnConflictAction
 OnConflictClause
 OnConflictExpr
 OnConflictSetState
-OpBtreeInterpretation
 OpClassCacheEnt
 OpExpr
 OpFamilyMember
 OpFamilyOpFuncGroup
+OpIndexInterpretation
 OpclassInfo
 Operator
 OperatorElement
@@ -2150,6 +2164,7 @@ PgAioReturn
 PgAioTargetData
 PgAioTargetID
 PgAioTargetInfo
+PgAioUringContext
 PgAioWaitRef
 PgArchData
 PgBackendGSSStatus
@@ -2228,6 +2243,7 @@ PgStat_WalCounters
 PgStat_WalStats
 PgXmlErrorContext
 PgXmlStrictness
+Pg_abi_values
 Pg_finfo_record
 Pg_magic_struct
 PipeProtoChunk
@@ -2259,6 +2275,7 @@ PortalHashEnt
 PortalStatus
 PortalStrategy
 PostParseColumnRefHook
+PostRewriteHook
 PostgresPollingStatusType
 PostingItem
 PreParseColumnRefHook
@@ -2600,6 +2617,8 @@ SPPageDesc
 SQLDropObject
 SQLFunctionCache
 SQLFunctionCachePtr
+SQLFunctionHashEntry
+SQLFunctionLink
 SQLFunctionParseInfo
 SQLFunctionParseInfoPtr
 SQLValueFunction
@@ -2729,6 +2748,8 @@ SimpleActionListCell
 SimpleEcontextStackEntry
 SimpleOidList
 SimpleOidListCell
+SimpleOidStringList
+SimpleOidListStringCell
 SimplePtrList
 SimplePtrListCell
 SimpleStats
@@ -2737,6 +2758,8 @@ SimpleStringListCell
 SingleBoundSortItem
 Size
 SkipPages
+SkipSupport
+SkipSupportData
 SlabBlock
 SlabContext
 SlabSlot
@@ -4277,3 +4300,4 @@ z_streamp
 zic_t
 ExplainExtensionOption
 ExplainOptionHandler
+overexplain_options

@@ -2690,13 +2690,12 @@ cost_agg(Path *path, PlannerInfo *root,
 	double		output_tuples;
 	Cost		startup_cost;
 	Cost		total_cost;
-	AggClauseCosts dummy_aggcosts;
+	const AggClauseCosts dummy_aggcosts = {0};
 
 	/* Use all-zero per-aggregate costs if NULL is passed */
 	if (aggcosts == NULL)
 	{
 		Assert(aggstrategy == AGG_HASHED);
-		MemSet(&dummy_aggcosts, 0, sizeof(AggClauseCosts));
 		aggcosts = &dummy_aggcosts;
 	}
 
@@ -3609,7 +3608,7 @@ initial_cost_mergejoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 		/* debugging check */
 		if (opathkey->pk_opfamily != ipathkey->pk_opfamily ||
 			opathkey->pk_eclass->ec_collation != ipathkey->pk_eclass->ec_collation ||
-			opathkey->pk_strategy != ipathkey->pk_strategy ||
+			opathkey->pk_cmptype != ipathkey->pk_cmptype ||
 			opathkey->pk_nulls_first != ipathkey->pk_nulls_first)
 			elog(ERROR, "left and right pathkeys do not match in mergejoin");
 
@@ -4094,7 +4093,7 @@ cached_scansel(PlannerInfo *root, RestrictInfo *rinfo, PathKey *pathkey)
 		cache = (MergeScanSelCache *) lfirst(lc);
 		if (cache->opfamily == pathkey->pk_opfamily &&
 			cache->collation == pathkey->pk_eclass->ec_collation &&
-			cache->strategy == pathkey->pk_strategy &&
+			cache->cmptype == pathkey->pk_cmptype &&
 			cache->nulls_first == pathkey->pk_nulls_first)
 			return cache;
 	}
@@ -4103,7 +4102,7 @@ cached_scansel(PlannerInfo *root, RestrictInfo *rinfo, PathKey *pathkey)
 	mergejoinscansel(root,
 					 (Node *) rinfo->clause,
 					 pathkey->pk_opfamily,
-					 pathkey->pk_strategy,
+					 pathkey->pk_cmptype,
 					 pathkey->pk_nulls_first,
 					 &leftstartsel,
 					 &leftendsel,
@@ -4116,7 +4115,7 @@ cached_scansel(PlannerInfo *root, RestrictInfo *rinfo, PathKey *pathkey)
 	cache = (MergeScanSelCache *) palloc(sizeof(MergeScanSelCache));
 	cache->opfamily = pathkey->pk_opfamily;
 	cache->collation = pathkey->pk_eclass->ec_collation;
-	cache->strategy = pathkey->pk_strategy;
+	cache->cmptype = pathkey->pk_cmptype;
 	cache->nulls_first = pathkey->pk_nulls_first;
 	cache->leftstartsel = leftstartsel;
 	cache->leftendsel = leftendsel;
@@ -5849,7 +5848,8 @@ get_foreign_key_join_selectivity(PlannerInfo *root,
 				if (ec && ec->ec_has_const)
 				{
 					EquivalenceMember *em = fkinfo->fk_eclass_member[i];
-					RestrictInfo *rinfo = find_derived_clause_for_ec_member(ec,
+					RestrictInfo *rinfo = find_derived_clause_for_ec_member(root,
+																			ec,
 																			em);
 
 					if (rinfo)
