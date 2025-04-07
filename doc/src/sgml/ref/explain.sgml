@@ -208,7 +208,7 @@ ROLLBACK;
       on platforms where <function>getrusage()</function> is supported, if the
       kernel is built without the necessary options to track storage read and
       write operations, no output will be shown.  Also, When
-      <varname>io_method</varname> is set to <literal>worker<literal>, no output
+      <varname>io_method</varname> is set to <literal>worker</literal>, no output
       will be shown, as I/O handled by asynchronous workers cannot be measured
       accurately.
       The timing and unit of measurement for read and write operations may vary
