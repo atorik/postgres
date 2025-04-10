@@ -39,6 +39,7 @@ volatile sig_atomic_t TransactionTimeoutPending = false;
 volatile sig_atomic_t IdleSessionTimeoutPending = false;
 volatile sig_atomic_t ProcSignalBarrierPending = false;
 volatile sig_atomic_t LogMemoryContextPending = false;
+volatile sig_atomic_t PublishMemoryContextPending = false;
 volatile sig_atomic_t IdleStatsUpdateTimeoutPending = false;
 volatile uint32 InterruptHoldoffCount = 0;
 volatile uint32 QueryCancelHoldoffCount = 0;
@@ -50,7 +51,7 @@ TimestampTz MyStartTimestamp;
 struct ClientSocket *MyClientSocket;
 struct Port *MyProcPort;
 char		MyCancelKey[MAX_CANCEL_KEY_LENGTH];
-uint8		MyCancelKeyLength = 0;
+int			MyCancelKeyLength = 0;
 int			MyPMChildSlot;
 
 /*
