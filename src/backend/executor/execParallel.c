@@ -1528,7 +1528,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	/* Shut down the executor */
 	ExecutorFinish(queryDesc);
 
-	/* Report buffer, WAL, and storageIO usage during parallel execution. */
+	/* Report buffer, WAL, and storage I/O usage during parallel execution. */
 	buffer_usage = shm_toc_lookup(toc, PARALLEL_KEY_BUFFER_USAGE, false);
 	storageio_usage = shm_toc_lookup(toc, PARALLEL_KEY_STORAGEIO_USAGE, false);
 	wal_usage = shm_toc_lookup(toc, PARALLEL_KEY_WAL_USAGE, false);

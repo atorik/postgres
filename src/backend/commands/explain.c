@@ -369,7 +369,7 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 		MemoryContextMemConsumed(planner_ctx, &mem_counters);
 	}
 
-	/* calc differences of buffer and storage i/O counters. */
+	/* calc differences of buffer and storage I/O counters. */
 	if (es->buffers)
 	{
 		memset(&bufusage, 0, sizeof(BufferUsage));
@@ -715,6 +715,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, CachedPlan *cplan,
 
 		GetStorageIOUsage(&storageio);
 		StorageIOUsageDiff(&storageio, &storageio_start);
+		StorageIOUsageAdd(&storageio, &pgStorageIOUsageParallel);
+
 		if (peek_storageio_usage(es, &storageio))
 		{
 			ExplainOpenGroup("Execution", "Execution", true, es);
@@ -4324,7 +4326,6 @@ peek_storageio_usage(ExplainState *es, const StorageIOUsage *usage)
 {
 	if (usage == NULL)
 		return false;
-
 	/*
 	 * Since showing only the I/O excluding AIO workers underestimates the total
 	 * I/O, treat this case as having nothing to print.
