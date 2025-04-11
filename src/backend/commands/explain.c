@@ -4326,9 +4326,10 @@ peek_storageio_usage(ExplainState *es, const StorageIOUsage *usage)
 {
 	if (usage == NULL)
 		return false;
+
 	/*
-	 * Since showing only the I/O excluding AIO workers underestimates the total
-	 * I/O, treat this case as having nothing to print.
+	 * Since showing only the I/O excluding AIO workers underestimates the
+	 * total I/O, treat this case as having nothing to print.
 	 */
 	if (pgaio_workers_enabled())
 		return false;
@@ -4346,8 +4347,8 @@ static void
 show_storageio_usage(ExplainState *es, const StorageIOUsage *usage)
 {
 	/*
-	 * Since showing only the I/O excluding AIO workers underestimates the total
-	 * I/O, do not show anything.
+	 * Since showing only the I/O excluding AIO workers underestimates the
+	 * total I/O, do not show anything.
 	 */
 	if (pgaio_workers_enabled())
 		return;

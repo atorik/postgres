@@ -22,7 +22,8 @@
 BufferUsage pgBufferUsage;
 static BufferUsage save_pgBufferUsage;
 
-StorageIOUsage pgStorageIOUsageParallel; /* only count parallel workers' usage */
+StorageIOUsage pgStorageIOUsageParallel;	/* only count parallel workers'
+											 * usage */
 WalUsage	pgWalUsage;
 static WalUsage save_pgWalUsage;
 
@@ -329,10 +330,10 @@ GetStorageIOUsage(StorageIOUsage *usage)
 	struct rusage rusage;
 
 	/*
-	 * Since getting the I/O excluding AIO workers underestimates the total I/O,
-	 * don't get the I/O usage statistics when AIO worker is enabled.
+	 * Since getting the I/O excluding AIO workers underestimates the total
+	 * I/O, don't get the I/O usage statistics when AIO worker is enabled.
 	 */
-	if(pgaio_workers_enabled())
+	if (pgaio_workers_enabled())
 		return;
 
 	if (getrusage(RUSAGE_SELF, &rusage))
