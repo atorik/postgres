@@ -315,6 +315,14 @@ StorageIOUsageAccumDiff(StorageIOUsage *dst, const StorageIOUsage *add, const St
 	dst->outblock += add->outblock - sub->outblock;
 }
 
+/* dst -= sub */
+void
+StorageIOUsageDiff(StorageIOUsage *dst, const StorageIOUsage *sub)
+{
+	dst->inblock -= sub->inblock;
+	dst->outblock -= sub->outblock;
+}
+
 /* Captures the current storage I/O usage statistics */
 void
 GetStorageIOUsage(StorageIOUsage *usage)

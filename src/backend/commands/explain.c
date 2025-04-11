@@ -369,22 +369,21 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 		MemoryContextMemConsumed(planner_ctx, &mem_counters);
 	}
 
-	/* calc differences of buffer counters. */
+	/* calc differences of buffer and storage i/O counters. */
 	if (es->buffers)
 	{
 		memset(&bufusage, 0, sizeof(BufferUsage));
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
 
 		GetStorageIOUsage(&storageio);
-		storageio.inblock -= storageio_start.inblock;
-		storageio.outblock -= storageio_start.outblock;
+		StorageIOUsageDiff(&storageio, &storageio_start);
 	}
 
 	/* run it (if needed) and produce output */
 	ExplainOnePlan(plan, NULL, NULL, -1, into, es, queryString, params,
 				   queryEnv,
 				   &planduration, (es->buffers ? &bufusage : NULL),
-				   (es->buffers ? &storageio : NULL),
+				   es->buffers ? &storageio : NULL,
 				   es->memory ? &mem_counters : NULL);
 }
 
@@ -712,13 +711,10 @@ ExplainOnePlan(PlannedStmt *plannedstmt, CachedPlan *cplan,
 	/* Show storage I/O usage in execution */
 	if (es->buffers)
 	{
-		StorageIOUsage storageio = {0};
-		StorageIOUsage storageio_end;
+		StorageIOUsage storageio;
 
-		GetStorageIOUsage(&storageio_end);
-		StorageIOUsageAccumDiff(&storageio, &storageio_end, &storageio_start);
-		StorageIOUsageAdd(&storageio, &pgStorageIOUsageParallel);
-
+		GetStorageIOUsage(&storageio);
+		StorageIOUsageDiff(&storageio, &storageio_start);
 		if (peek_storageio_usage(es, &storageio))
 		{
 			ExplainOpenGroup("Execution", "Execution", true, es);

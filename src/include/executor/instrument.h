@@ -126,6 +126,7 @@ extern void BufferUsageAccumDiff(BufferUsage *dst,
 								 const BufferUsage *add, const BufferUsage *sub);
 extern void StorageIOUsageAccumDiff(StorageIOUsage *dst,
 									const StorageIOUsage *add, const StorageIOUsage *sub);
+extern void StorageIOUsageDiff(StorageIOUsage *dst, const StorageIOUsage *sub);
 extern void StorageIOUsageAdd(StorageIOUsage *dst, const StorageIOUsage *add);
 extern void GetStorageIOUsage(StorageIOUsage *usage);
 extern void WalUsageAccumDiff(WalUsage *dst, const WalUsage *add,
