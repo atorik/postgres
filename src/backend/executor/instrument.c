@@ -22,8 +22,7 @@
 BufferUsage pgBufferUsage;
 static BufferUsage save_pgBufferUsage;
 
-/* Only count parallel workers' usage */
-StorageIOUsage pgStorageIOUsageParallel;
+StorageIOUsage pgStorageIOUsageParallel; /* only count parallel workers' usage */
 WalUsage	pgWalUsage;
 static WalUsage save_pgWalUsage;
 
