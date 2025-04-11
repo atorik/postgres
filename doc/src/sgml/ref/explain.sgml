@@ -198,7 +198,10 @@ ROLLBACK;
       previously unmodified blocks that were changed by this query; while the
       number of blocks <emphasis>written</emphasis> indicates the number of
       previously-dirtied blocks evicted from cache by this backend during
-      query processing. In text format, only non-zero values are printed.
+      query processing.
+      The number of blocks shown for an
+      upper-level node includes those used by all its child nodes.  In text
+      format, only non-zero values are printed.
       If possible, this option also displays the number of read and write
       operations performed on storage during the planning and execution phases,
       shown at the end of the plan. These values are obtained from the
