@@ -1453,7 +1453,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	FixedParallelExecutorState *fpes;
 	BufferUsage *buffer_usage;
 	StorageIOUsage *storageio_usage;
-	StorageIOUsage storageio_usage_start = {0};
+	StorageIOUsage storageio_usage_start;
 	WalUsage   *wal_usage;
 	DestReceiver *receiver;
 	QueryDesc  *queryDesc;

@@ -669,7 +669,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 			ExplainOnePlan(pstmt, cplan, entry->plansource, query_index,
 						   into, es, query_string, paramLI, pstate->p_queryEnv,
 						   &planduration, (es->buffers ? &bufusage : NULL),
-						   (es->buffers ? &storageio : NULL),
+						   es->buffers ? &storageio : NULL,
 						   es->memory ? &mem_counters : NULL);
 		else
 			ExplainOneUtility(pstmt->utilityStmt, into, es, pstate, paramLI);
