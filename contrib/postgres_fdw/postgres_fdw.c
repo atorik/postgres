@@ -999,7 +999,7 @@ get_useful_pathkeys_for_relation(PlannerInfo *root, RelOptInfo *rel)
 		/* Looks like we can generate a pathkey, so let's do it. */
 		pathkey = make_canonical_pathkey(root, cur_ec,
 										 linitial_oid(cur_ec->ec_opfamilies),
-										 BTLessStrategyNumber,
+										 COMPARE_LT,
 										 false);
 		useful_pathkeys_list = lappend(useful_pathkeys_list,
 									   list_make1(pathkey));
@@ -7847,14 +7847,13 @@ conversion_error_callback(void *arg)
 EquivalenceMember *
 find_em_for_rel(PlannerInfo *root, EquivalenceClass *ec, RelOptInfo *rel)
 {
-	ListCell   *lc;
-
 	PgFdwRelationInfo *fpinfo = (PgFdwRelationInfo *) rel->fdw_private;
+	EquivalenceMemberIterator it;
+	EquivalenceMember *em;
 
-	foreach(lc, ec->ec_members)
+	setup_eclass_member_iterator(&it, ec, rel->relids);
+	while ((em = eclass_member_iterator_next(&it)) != NULL)
 	{
-		EquivalenceMember *em = (EquivalenceMember *) lfirst(lc);
-
 		/*
 		 * Note we require !bms_is_empty, else we'd accept constant
 		 * expressions which are not suitable for the purpose.
@@ -7908,7 +7907,10 @@ find_em_for_rel_target(PlannerInfo *root, EquivalenceClass *ec,
 		while (expr && IsA(expr, RelabelType))
 			expr = ((RelabelType *) expr)->arg;
 
-		/* Locate an EquivalenceClass member matching this expr, if any */
+		/*
+		 * Locate an EquivalenceClass member matching this expr, if any.
+		 * Ignore child members.
+		 */
 		foreach(lc2, ec->ec_members)
 		{
 			EquivalenceMember *em = (EquivalenceMember *) lfirst(lc2);
@@ -7918,9 +7920,8 @@ find_em_for_rel_target(PlannerInfo *root, EquivalenceClass *ec,
 			if (em->em_is_const)
 				continue;
 
-			/* Ignore child members */
-			if (em->em_is_child)
-				continue;
+			/* Child members should not exist in ec_members */
+			Assert(!em->em_is_child);
 
 			/* Match if same expression (after stripping relabel) */
 			em_expr = em->em_expr;

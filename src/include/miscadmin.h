@@ -96,6 +96,7 @@ extern PGDLLIMPORT volatile sig_atomic_t IdleSessionTimeoutPending;
 extern PGDLLIMPORT volatile sig_atomic_t ProcSignalBarrierPending;
 extern PGDLLIMPORT volatile sig_atomic_t LogMemoryContextPending;
 extern PGDLLIMPORT volatile sig_atomic_t IdleStatsUpdateTimeoutPending;
+extern PGDLLIMPORT volatile sig_atomic_t PublishMemoryContextPending;
 extern PGDLLIMPORT volatile sig_atomic_t LogQueryPlanPending;
 
 extern PGDLLIMPORT volatile sig_atomic_t CheckClientConnectionPending;
@@ -193,7 +194,7 @@ extern PGDLLIMPORT TimestampTz MyStartTimestamp;
 extern PGDLLIMPORT struct Port *MyProcPort;
 extern PGDLLIMPORT struct Latch *MyLatch;
 extern PGDLLIMPORT char MyCancelKey[];
-extern PGDLLIMPORT uint8 MyCancelKeyLength;
+extern PGDLLIMPORT int MyCancelKeyLength;
 extern PGDLLIMPORT int MyPMChildSlot;
 
 extern PGDLLIMPORT char OutputFileName[];

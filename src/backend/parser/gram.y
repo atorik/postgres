@@ -752,7 +752,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	NOT NOTHING NOTIFY NOTNULL NOWAIT NULL_P NULLIF
 	NULLS_P NUMERIC
 
-	OBJECT_P OF OFF OFFSET OIDS OLD OMIT ON ONLY OPERATOR OPTION OPTIONS OR
+	OBJECT_P OBJECTS_P OF OFF OFFSET OIDS OLD OMIT ON ONLY OPERATOR OPTION OPTIONS OR
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
@@ -4217,11 +4217,10 @@ ConstraintElem:
 					n->contype = CONSTR_NOTNULL;
 					n->location = @1;
 					n->keys = list_make1(makeString($3));
-					/* no NOT VALID support yet */
 					processCASbits($4, @4, "NOT NULL",
-								   NULL, NULL, NULL, NULL,
+								   NULL, NULL, NULL, &n->skip_validation,
 								   &n->is_no_inherit, yyscanner);
-					n->initially_valid = true;
+					n->initially_valid = !n->skip_validation;
 					$$ = (Node *) n;
 				}
 			| UNIQUE opt_unique_null_treatment '(' columnList opt_without_overlaps ')' opt_c_include opt_definition OptConsTableSpace
@@ -8177,6 +8176,7 @@ defacl_privilege_target:
 			| SEQUENCES		{ $$ = OBJECT_SEQUENCE; }
 			| TYPES_P		{ $$ = OBJECT_TYPE; }
 			| SCHEMAS		{ $$ = OBJECT_SCHEMA; }
+			| LARGE_P OBJECTS_P	{ $$ = OBJECT_LARGEOBJECT; }
 		;
 
 
@@ -17882,6 +17882,7 @@ unreserved_keyword:
 			| NOWAIT
 			| NULLS_P
 			| OBJECT_P
+			| OBJECTS_P
 			| OF
 			| OFF
 			| OIDS
@@ -18504,6 +18505,7 @@ bare_label_keyword:
 			| NULLS_P
 			| NUMERIC
 			| OBJECT_P
+			| OBJECTS_P
 			| OF
 			| OFF
 			| OIDS

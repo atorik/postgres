@@ -1222,7 +1222,9 @@ listDefaultACLs(const char *pattern)
 	printfPQExpBuffer(&buf,
 					  "SELECT pg_catalog.pg_get_userbyid(d.defaclrole) AS \"%s\",\n"
 					  "  n.nspname AS \"%s\",\n"
-					  "  CASE d.defaclobjtype WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' END AS \"%s\",\n"
+					  "  CASE d.defaclobjtype "
+					  "    WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' WHEN '%c' THEN '%s'"
+					  "    WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' END AS \"%s\",\n"
 					  "  ",
 					  gettext_noop("Owner"),
 					  gettext_noop("Schema"),
@@ -1236,6 +1238,8 @@ listDefaultACLs(const char *pattern)
 					  gettext_noop("type"),
 					  DEFACLOBJ_NAMESPACE,
 					  gettext_noop("schema"),
+					  DEFACLOBJ_LARGEOBJECT,
+					  gettext_noop("large object"),
 					  gettext_noop("Type"));
 
 	printACLColumn(&buf, "d.defaclacl");
@@ -3102,7 +3106,8 @@ describeOneTableDetails(const char *schemaname,
 		{
 			printfPQExpBuffer(&buf,
 							  "SELECT c.conname, a.attname, c.connoinherit,\n"
-							  "  c.conislocal, c.coninhcount <> 0\n"
+							  "  c.conislocal, c.coninhcount <> 0,\n"
+							  "  c.convalidated\n"
 							  "FROM pg_catalog.pg_constraint c JOIN\n"
 							  "  pg_catalog.pg_attribute a ON\n"
 							  "    (a.attrelid = c.conrelid AND a.attnum = c.conkey[1])\n"
@@ -3125,14 +3130,16 @@ describeOneTableDetails(const char *schemaname,
 			{
 				bool		islocal = PQgetvalue(result, i, 3)[0] == 't';
 				bool		inherited = PQgetvalue(result, i, 4)[0] == 't';
+				bool		validated = PQgetvalue(result, i, 5)[0] == 't';
 
-				printfPQExpBuffer(&buf, "    \"%s\" NOT NULL \"%s\"%s",
+				printfPQExpBuffer(&buf, "    \"%s\" NOT NULL \"%s\"%s%s",
 								  PQgetvalue(result, i, 0),
 								  PQgetvalue(result, i, 1),
 								  PQgetvalue(result, i, 2)[0] == 't' ?
 								  " NO INHERIT" :
 								  islocal && inherited ? _(" (local, inherited)") :
-								  inherited ? _(" (inherited)") : "");
+								  inherited ? _(" (inherited)") : "",
+								  !validated ? " NOT VALID" : "");
 
 				printTableAddFooter(&cont, buf.data);
 			}

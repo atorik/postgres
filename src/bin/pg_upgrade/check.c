@@ -1825,7 +1825,7 @@ static void
 check_for_unicode_update(ClusterInfo *cluster)
 {
 	UpgradeTaskReport report;
-	UpgradeTask *task = upgrade_task_create();
+	UpgradeTask *task;
 	const char *query;
 
 	/*
@@ -1911,11 +1911,16 @@ check_for_unicode_update(ClusterInfo *cluster)
 		"  UNION "
 		"    SELECT partrelid "
 		"    FROM pg_partitioned_table, patterns WHERE partexprs::text ~ p "
+		"  UNION "
+		"    SELECT ev_class "
+		"    FROM pg_rewrite, pg_class, patterns "
+		"    WHERE ev_class = pg_class.oid AND relkind = 'm' AND ev_action::text ~ p"
 		"  ) s(reloid), pg_class c, pg_namespace n, pg_database d "
 		"  WHERE s.reloid = c.oid AND c.relnamespace = n.oid AND "
 		"        d.datname = current_database() AND "
 		"        d.encoding = pg_char_to_encoding('UTF8');";
 
+	task = upgrade_task_create();
 	upgrade_task_add_step(task, query,
 						  process_unicode_update,
 						  true, &report);
