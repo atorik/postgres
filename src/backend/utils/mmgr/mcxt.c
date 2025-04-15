@@ -1113,7 +1113,7 @@ MemoryContextStatsPrint(MemoryContext context, void *passthru,
 				(errhidestmt(true),
 				 errhidecontext(true),
 				 errmsg_internal("level: %d; %s: %s%s",
-								 level, name, stats_string, truncated_ident)));
+								 level + 1, name, stats_string, truncated_ident)));
 }
 
 /*
