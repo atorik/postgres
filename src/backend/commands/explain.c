@@ -1882,7 +1882,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 
 		if (es->format == EXPLAIN_FORMAT_TEXT)
 		{
-			appendStringInfo(es->str, " (actual ");
+			appendStringInfoString(es->str, " (actual ");
 
 			if (es->timing)
 				appendStringInfo(es->str, "time=%.3f..%.3f ", startup_ms, total_ms);
@@ -1951,7 +1951,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (es->format == EXPLAIN_FORMAT_TEXT)
 			{
 				ExplainIndentText(es);
-				appendStringInfo(es->str, "actual ");
+				appendStringInfoString(es->str, "actual ");
 				if (es->timing)
 					appendStringInfo(es->str, "time=%.3f..%.3f ", startup_ms, total_ms);
 
