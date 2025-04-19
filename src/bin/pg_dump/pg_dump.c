@@ -1777,7 +1777,7 @@ expand_table_name_patterns(Archive *fout,
 		 */
 		if (with_child_tables)
 		{
-			appendPQExpBuffer(query, "WITH RECURSIVE partition_tree (relid) AS (\n");
+			appendPQExpBufferStr(query, "WITH RECURSIVE partition_tree (relid) AS (\n");
 		}
 
 		appendPQExpBuffer(query,
@@ -1804,13 +1804,13 @@ expand_table_name_patterns(Archive *fout,
 
 		if (with_child_tables)
 		{
-			appendPQExpBuffer(query, "UNION"
-							  "\nSELECT i.inhrelid"
-							  "\nFROM partition_tree p"
-							  "\n     JOIN pg_catalog.pg_inherits i"
-							  "\n     ON p.relid OPERATOR(pg_catalog.=) i.inhparent"
-							  "\n)"
-							  "\nSELECT relid FROM partition_tree");
+			appendPQExpBufferStr(query, "UNION"
+								 "\nSELECT i.inhrelid"
+								 "\nFROM partition_tree p"
+								 "\n     JOIN pg_catalog.pg_inherits i"
+								 "\n     ON p.relid OPERATOR(pg_catalog.=) i.inhparent"
+								 "\n)"
+								 "\nSELECT relid FROM partition_tree");
 		}
 
 		ExecuteSqlStatement(fout, "RESET search_path");
@@ -5034,8 +5034,8 @@ getSubscriptions(Archive *fout)
 		appendPQExpBufferStr(query,
 							 " s.subfailover\n");
 	else
-		appendPQExpBuffer(query,
-						  " false AS subfailover\n");
+		appendPQExpBufferStr(query,
+							 " false AS subfailover\n");
 
 	appendPQExpBufferStr(query,
 						 "FROM pg_subscription s\n");
@@ -5257,7 +5257,7 @@ dumpSubscriptionTable(Archive *fout, const SubRelInfo *subrinfo)
 		if (subrinfo->srsublsn && subrinfo->srsublsn[0] != '\0')
 			appendPQExpBuffer(query, ", '%s'", subrinfo->srsublsn);
 		else
-			appendPQExpBuffer(query, ", NULL");
+			appendPQExpBufferStr(query, ", NULL");
 
 		appendPQExpBufferStr(query, ");\n");
 	}
@@ -5352,7 +5352,7 @@ dumpSubscription(Archive *fout, const SubscriptionInfo *subinfo)
 		appendPQExpBufferStr(query, ", disable_on_error = true");
 
 	if (!subinfo->subpasswordrequired)
-		appendPQExpBuffer(query, ", password_required = false");
+		appendPQExpBufferStr(query, ", password_required = false");
 
 	if (subinfo->subrunasowner)
 		appendPQExpBufferStr(query, ", run_as_owner = true");
@@ -9751,7 +9751,7 @@ determineNotNullFlags(Archive *fout, PGresult *res, int r,
 		{
 			*invalidnotnulloids = createPQExpBuffer();
 			appendPQExpBufferChar(*invalidnotnulloids, '{');
-			appendPQExpBuffer(*invalidnotnulloids, "%s", constroid);
+			appendPQExpBufferStr(*invalidnotnulloids, constroid);
 		}
 		else
 			appendPQExpBuffer(*invalidnotnulloids, ",%s", constroid);
@@ -10978,7 +10978,7 @@ dumpRelationStats_dumper(Archive *fout, const void *userArg, const TocEntry *te)
 		 */
 		if (rsinfo->nindAttNames == 0)
 		{
-			appendPQExpBuffer(out, ",\n\t'attname', ");
+			appendPQExpBufferStr(out, ",\n\t'attname', ");
 			appendStringLiteralAH(out, attname, fout);
 		}
 		else
@@ -17953,7 +17953,17 @@ dumpIndex(Archive *fout, const IndxInfo *indxinfo)
 							  qindxname);
 		}
 
-		appendPQExpBuffer(delq, "DROP INDEX %s;\n", qqindxname);
+		/*
+		 * If this index is a member of a partitioned index, the backend will
+		 * not allow us to drop it separately, so don't try.  It will go away
+		 * automatically when we drop either the index's table or the
+		 * partitioned index.  (If, in a selective restore with --clean, we
+		 * drop neither of those, then this index will not be dropped either.
+		 * But that's fine, and even if you think it's not, the backend won't
+		 * let us do differently.)
+		 */
+		if (indxinfo->parentidx == 0)
+			appendPQExpBuffer(delq, "DROP INDEX %s;\n", qqindxname);
 
 		if (indxinfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
 			ArchiveEntry(fout, indxinfo->dobj.catId, indxinfo->dobj.dumpId,
@@ -18006,11 +18016,15 @@ dumpIndexAttach(Archive *fout, const IndexAttachInfo *attachinfo)
 						  fmtQualifiedDumpable(attachinfo->partitionIdx));
 
 		/*
-		 * There is no point in creating a drop query as the drop is done by
-		 * index drop.  (If you think to change this, see also
-		 * _printTocEntry().)  Although this object doesn't really have
-		 * ownership as such, set the owner field anyway to ensure that the
-		 * command is run by the correct role at restore time.
+		 * There is no need for a dropStmt since the drop is done implicitly
+		 * when we drop either the index's table or the partitioned index.
+		 * Moreover, since there's no ALTER INDEX DETACH PARTITION command,
+		 * there's no way to do it anyway.  (If you think to change this,
+		 * consider also what to do with --if-exists.)
+		 *
+		 * Although this object doesn't really have ownership as such, set the
+		 * owner field anyway to ensure that the command is run by the correct
+		 * role at restore time.
 		 */
 		ArchiveEntry(fout, attachinfo->dobj.catId, attachinfo->dobj.dumpId,
 					 ARCHIVE_OPTS(.tag = attachinfo->dobj.name,
