@@ -730,10 +730,7 @@ pgstat_report_stat(bool force)
 		}
 
 		if (!do_flush)
-		{
-			Assert(pending_since == 0);
 			return 0;
-		}
 	}
 
 	/*
@@ -1904,6 +1901,14 @@ pgstat_read_statsfile(void)
 						if (!pgstat_is_kind_valid(key.kind))
 						{
 							elog(WARNING, "invalid stats kind for entry %u/%u/%" PRIu64 " of type %c",
+								 key.kind, key.dboid,
+								 key.objid, t);
+							goto error;
+						}
+
+						if (!pgstat_get_kind_info(key.kind))
+						{
+							elog(WARNING, "could not find information of kind for entry %u/%u/%" PRIu64 " of type %c",
 								 key.kind, key.dboid,
 								 key.objid, t);
 							goto error;

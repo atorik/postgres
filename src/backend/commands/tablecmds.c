@@ -10712,14 +10712,16 @@ addFkConstraint(addFkConstraintSides fkside,
 
 	/*
 	 * Caller supplies us with a constraint name; however, it may be used in
-	 * this partition, so come up with a different one in that case.
+	 * this partition, so come up with a different one in that case.  Unless
+	 * truncation to NAMEDATALEN dictates otherwise, the new name will be the
+	 * supplied name with an underscore and digit(s) appended.
 	 */
 	if (ConstraintNameIsUsed(CONSTRAINT_RELATION,
 							 RelationGetRelid(rel),
 							 constraintname))
-		conname = ChooseConstraintName(RelationGetRelationName(rel),
-									   ChooseForeignKeyConstraintNameAddition(fkconstraint->fk_attrs),
-									   "fkey",
+		conname = ChooseConstraintName(constraintname,
+									   NULL,
+									   "",
 									   RelationGetNamespace(rel), NIL);
 	else
 		conname = constraintname;
@@ -11999,7 +12001,7 @@ DropForeignKeyConstraintTriggers(Relation trigrel, Oid conoid, Oid confrelid,
 		if (OidIsValid(confrelid) && trgform->tgrelid != confrelid)
 			continue;
 
-		/* We should be droping trigger related to foreign key constraint */
+		/* We should be dropping trigger related to foreign key constraint */
 		Assert(trgform->tgfoid == F_RI_FKEY_CHECK_INS ||
 			   trgform->tgfoid == F_RI_FKEY_CHECK_UPD ||
 			   trgform->tgfoid == F_RI_FKEY_CASCADE_DEL ||

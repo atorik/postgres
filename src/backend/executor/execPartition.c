@@ -1778,7 +1778,7 @@ adjust_partition_colnos_using_map(List *colnos, AttrMap *attrMap)
  *		Updates the PartitionPruneState found at given part_prune_index in
  *		EState.es_part_prune_states for use during "exec" pruning if required.
  *		Also returns the set of subplans to initialize that would be stored at
- *		part_prune_index in EState.es_part_prune_result by
+ *		part_prune_index in EState.es_part_prune_results by
  *		ExecDoInitialPruning().  Maps in PartitionPruneState are updated to
  *		account for initial pruning possibly having eliminated some of the
  *		subplans.
@@ -1983,8 +1983,8 @@ ExecInitPartitionExecPruning(PlanState *planstate,
 	 * account for any that were removed due to initial pruning; refer to the
 	 * condition in InitExecPartitionPruneContexts() that is used to determine
 	 * whether to do this.  If no exec pruning needs to be done, we would thus
-	 * leave the maps to be in an invalid invalid state, but that's ok since
-	 * that data won't be consulted again (cf initial Assert in
+	 * leave the maps to be in an invalid state, but that's ok since that data
+	 * won't be consulted again (cf initial Assert in
 	 * ExecFindMatchingSubPlans).
 	 */
 	if (prunestate->do_exec_prune)
@@ -2109,7 +2109,7 @@ CreatePartitionPruneState(EState *estate, PartitionPruneInfo *pruneinfo,
 			 */
 			partrel = ExecGetRangeTableRelation(estate, pinfo->rtindex, false);
 
-			/* Remember for InitExecPartitionPruneContext(). */
+			/* Remember for InitExecPartitionPruneContexts(). */
 			pprune->partrel = partrel;
 
 			partkey = RelationGetPartitionKey(partrel);
