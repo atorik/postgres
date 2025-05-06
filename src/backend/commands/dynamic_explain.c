@@ -28,7 +28,7 @@ static bool ProcessLogQueryPlanInterruptActive = false;
 static QueryDesc *ActiveQueryDesc = NULL;
 
 static TupleTableSlot *ExecProcNodeWithExplain(PlanState *ps);
-static void WrapExecProcNodeWithExplain(PlanState *ps);
+void WrapExecProcNodeWithExplain(PlanState *ps);
 static void UnwrapExecProcNodeWithExplain(PlanState *ps);
 
 /*
@@ -87,17 +87,20 @@ WrapCustomPlanChildWithExplain(CustomScanState *css)
 /*
  * Wrap ExecProcNode with ExecProcNodeWithExplain recursively
  */
-static void
+void
 WrapExecProcNodeWithExplain(PlanState *ps)
 {
+	elog(NOTICE, "WrapExecProcNodeWithExplain");
 	/* wrapping can be done only once */
-	if (ps->ExecProcNodeOriginal != NULL)
-		return;
+//	if (ps->ExecProcNodeOriginal != NULL)
+//		return;
 
 	check_stack_depth();
 
-	ps->ExecProcNodeOriginal = ps->ExecProcNode;
 	ps->ExecProcNode = ExecProcNodeWithExplain;
+
+//	ps->ExecProcNodeOriginal = ps->ExecProcNode;
+//	ps->ExecProcNode = ExecProcNodeWithExplain;
 
 	if (ps->lefttree != NULL)
 		WrapExecProcNodeWithExplain(ps->lefttree);
@@ -143,6 +146,7 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 		default:
 			break;
 	}
+	ProcessLogQueryPlanInterruptActive = false;
 }
 
 /*
@@ -175,12 +179,13 @@ UnwrapCustomPlanChildWithExplain(CustomScanState *css)
 static void
 UnwrapExecProcNodeWithExplain(PlanState *ps)
 {
-	Assert(ps->ExecProcNodeOriginal != NULL);
+//	Assert(ps->ExecProcNodeOriginal != NULL);
 
 	check_stack_depth();
 
-	ps->ExecProcNode = ps->ExecProcNodeOriginal;
-	ps->ExecProcNodeOriginal = NULL;
+//	ps->ExecProcNode = ps->ExecProcNodeOriginal;
+//	ps->ExecProcNodeOriginal = NULL;
+	ps->ExecProcNode = ps->ExecProcNodeReal;
 
 	if (ps->lefttree != NULL)
 		UnwrapExecProcNodeWithExplain(ps->lefttree);
@@ -273,6 +278,59 @@ ExecProcNodeWithExplain(PlanState *ps)
 	return ps->ExecProcNode(ps);
 }
 
+///*
+// *
+// */
+//static TupleTableSlot *
+//ExecProcNodeExplain(PlanState *ps)
+//{
+//	TupleTableSlot *result;
+//	ExplainState *es;
+//	MemoryContext cxt;
+//	MemoryContext old_cxt;
+//
+//	check_stack_depth();
+//
+//	cxt = AllocSetContextCreate(CurrentMemoryContext,
+//								"log_query_plan temporary context",
+//								ALLOCSET_DEFAULT_SIZES);
+//
+//	old_cxt = MemoryContextSwitchTo(cxt);
+//
+//	es = NewExplainState();
+//
+//	es->format = EXPLAIN_FORMAT_TEXT;
+//	es->settings = true;
+//	es->verbose = true;
+//	es->signaled = true;
+//
+//	ExplainStringAssemble(es, ActiveQueryDesc, es->format, 0, -1);
+//
+//	ereport(LOG_SERVER_ONLY,
+//			errmsg("query plan running on backend with PID %d is:\n%s",
+//				   MyProcPid, es->str->data),
+//			errhidestmt(true),
+//			errhidecontext(true));
+//
+//	MemoryContextSwitchTo(old_cxt);
+//	MemoryContextDelete(cxt);
+//
+//	UnwrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
+//
+//	/*
+//	 * Since unwrapping has already done, call ExecProcNodeReal().
+//	 */
+//	result = ps->ExecProcNodeReal(ps);
+//
+//	return result;
+//}
+
+bool
+IsLogQueryPlanInterruptActive(void)
+{
+	return ProcessLogQueryPlanInterruptActive;
+}
+
 /*
  * Add wrapper which logs explain of the plan to ExecProcNode
  *
@@ -304,8 +362,8 @@ ProcessLogQueryPlanInterrupt(void)
 		return;
 	}
 
-	WrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
-	ProcessLogQueryPlanInterruptActive = false;
+	//WrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
+	ExecSetExecProcNode(ActiveQueryDesc->planstate, ActiveQueryDesc->planstate->ExecProcNode);
 }
 
 QueryDesc *

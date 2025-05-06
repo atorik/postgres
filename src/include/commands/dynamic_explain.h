@@ -21,6 +21,8 @@ extern void ResetLogQueryPlanState(void);
 extern void ProcessLogQueryPlanInterrupt(void);
 extern QueryDesc *GetActiveQueryDesc(void);
 extern void SetActiveQueryDesc(QueryDesc *queryDesc);
+extern bool IsLogQueryPlanInterruptActive(void);
+extern void WrapExecProcNodeWithExplain(PlanState *ps);
 extern Datum pg_log_query_plan(PG_FUNCTION_ARGS);
 
 #endif							/* DYNAMIC_EXPLAIN_H */

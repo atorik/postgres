@@ -72,6 +72,7 @@
  */
 #include "postgres.h"
 
+#include "commands/dynamic_explain.h"
 #include "executor/executor.h"
 #include "executor/nodeAgg.h"
 #include "executor/nodeAppend.h"
@@ -465,6 +466,11 @@ ExecProcNodeFirst(PlanState *node)
 		node->ExecProcNode = ExecProcNodeInstr;
 	else
 		node->ExecProcNode = node->ExecProcNodeReal;
+
+	/* TODO:double wrappingを予防 */
+	if (IsLogQueryPlanInterruptActive())
+		WrapExecProcNodeWithExplain(node);
+		//node->ExecProcNode = ExecProcNodeExplain;
 
 	return node->ExecProcNode(node);
 }
