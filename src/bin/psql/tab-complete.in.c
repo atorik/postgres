@@ -1190,6 +1190,19 @@ Alter_procedure_options, "COST", "IMMUTABLE", "LEAKPROOF", "NOT LEAKPROOF", \
 Alter_routine_options, "CALLED ON NULL INPUT", "RETURNS NULL ON NULL INPUT", \
 "STRICT", "SUPPORT"
 
+/* COPY options shared between FROM and TO */
+#define Copy_common_options \
+"DELIMITER", "ENCODING", "ESCAPE", "FORMAT", "HEADER", "NULL", "QUOTE"
+
+/* COPY FROM options */
+#define Copy_from_options \
+Copy_common_options, "DEFAULT", "FORCE_NOT_NULL", "FORCE_NULL", "FREEZE", \
+"LOG_VERBOSITY", "ON_ERROR", "REJECT_LIMIT"
+
+/* COPY TO options */
+#define Copy_to_options \
+Copy_common_options, "FORCE_QUOTE"
+
 /*
  * These object types were introduced later than our support cutoff of
  * server version 9.2.  We use the VersionedQuery infrastructure so that
@@ -3280,14 +3293,11 @@ match_previous_words(int pattern_id,
 
 	/* Complete COPY <sth> FROM filename WITH ( */
 	else if (Matches("COPY|\\copy", MatchAny, "FROM", MatchAny, "WITH", "("))
-		COMPLETE_WITH("FORMAT", "FREEZE", "DELIMITER", "NULL", "HEADER", "QUOTE", "ESCAPE",
-					  "FORCE_NOT_NULL", "FORCE_NULL", "ENCODING", "DEFAULT",
-					  "ON_ERROR", "LOG_VERBOSITY", "REJECT_LIMIT");
+		COMPLETE_WITH(Copy_from_options);
 
 	/* Complete COPY <sth> TO filename WITH ( */
 	else if (Matches("COPY|\\copy", MatchAny, "TO", MatchAny, "WITH", "("))
-		COMPLETE_WITH("FORMAT", "DELIMITER", "NULL", "HEADER", "QUOTE", "ESCAPE",
-					  "FORCE_QUOTE", "ENCODING");
+		COMPLETE_WITH(Copy_to_options);
 
 	/* Complete COPY <sth> FROM|TO filename WITH (FORMAT */
 	else if (Matches("COPY|\\copy", MatchAny, "FROM|TO", MatchAny, "WITH", "(", "FORMAT"))
