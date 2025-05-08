@@ -222,6 +222,8 @@ ROLLBACK;
       if this process caused data to be fetched from the storage layer, and a
       write is counted at the page-dirtying time. On Linux, the unit of
       measurement for read and write operations is 512 bytes.
+     </para>
+     <para>
       Buffers information is included by default when <literal>ANALYZE</literal>
       is used but otherwise is not included by default, but can be enabled using
       this option.
