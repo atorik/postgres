@@ -203,6 +203,8 @@ ROLLBACK;
       upper-level node includes those used by all its child nodes.  In text
       format, only non-zero values are printed.  Buffers information is
       automatically included when <literal>ANALYZE</literal> is used.
+     </para>
+     <para>
       If possible, this option also displays the number of read and write
       operations performed on storage during the planning and execution phases,
       shown at the end of the plan. These values are obtained from the
