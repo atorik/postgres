@@ -495,6 +495,8 @@ ConstraintNameExists(const char *conname, Oid namespaceid)
  * name1, name2, and label are used the same way as for makeObjectName(),
  * except that the label can't be NULL; digits will be appended to the label
  * if needed to create a name that is unique within the specified namespace.
+ * If the given label is empty, we only consider names that include at least
+ * one added digit.
  *
  * 'others' can be a list of string names already chosen within the current
  * command (but not yet reflected into the catalogs); we will not choose
@@ -523,8 +525,11 @@ ChooseConstraintName(const char *name1, const char *name2,
 
 	conDesc = table_open(ConstraintRelationId, AccessShareLock);
 
-	/* try the unmodified label first */
-	strlcpy(modlabel, label, sizeof(modlabel));
+	/* try the unmodified label first, unless it's empty */
+	if (label[0] != '\0')
+		strlcpy(modlabel, label, sizeof(modlabel));
+	else
+		snprintf(modlabel, sizeof(modlabel), "%s%d", label, ++pass);
 
 	for (;;)
 	{
@@ -756,7 +761,9 @@ AdjustNotNullInheritance(Oid relid, AttrNumber attnum,
 			ereport(ERROR,
 					errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					errmsg("cannot change NO INHERIT status of NOT NULL constraint \"%s\" on relation \"%s\"",
-						   NameStr(conform->conname), get_rel_name(relid)));
+						   NameStr(conform->conname), get_rel_name(relid)),
+					errhint("You might need to make the existing constraint inheritable using %s.",
+							"ALTER TABLE ... ALTER CONSTRAINT ... INHERIT"));
 
 		/*
 		 * Throw an error if the existing constraint is NOT VALID and caller
@@ -767,7 +774,8 @@ AdjustNotNullInheritance(Oid relid, AttrNumber attnum,
 					errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					errmsg("incompatible NOT VALID constraint \"%s\" on relation \"%s\"",
 						   NameStr(conform->conname), get_rel_name(relid)),
-					errhint("You will need to use ALTER TABLE ... VALIDATE CONSTRAINT to validate it."));
+					errhint("You might need to validate it using %s.",
+							"ALTER TABLE ... VALIDATE CONSTRAINT"));
 
 		if (!is_local)
 		{

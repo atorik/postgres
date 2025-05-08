@@ -36,7 +36,7 @@ static void transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_
  *
  *     // be sure to sync any remaining files in the queue
  *     sync_queue_sync_all();
- *     synq_queue_destroy();
+ *     sync_queue_destroy();
  */
 
 #define SYNC_QUEUE_MAX_LEN	(1024)
@@ -424,8 +424,8 @@ swap_catalog_files(FileNameMap *maps, int size, const char *old_catalog_dir,
 		 * stage of pg_upgrade in swap mode, so we need to synchronize them
 		 * ourselves.  We only do this for the catalog files because they were
 		 * created during pg_restore with fsync=off.  We assume that the user
-		 * data files files were properly persisted to disk when the user last
-		 * shut it down.
+		 * data files were properly persisted to disk when the user last shut
+		 * it down.
 		 */
 		if (user_opts.do_sync)
 			sync_queue_push(dest);

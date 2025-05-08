@@ -432,7 +432,7 @@ main(int argc, char *argv[])
 	/* Warn about the possibility of compromising the backups, when link mode */
 	if (opt.copy_method == COPY_METHOD_LINK)
 		pg_log_warning("--link mode was used; any modifications to the output "
-					   "directory may destructively modify input directories");
+					   "directory might destructively modify input directories");
 
 	/* It's a success, so don't remove the output directories. */
 	reset_directory_cleanup_list();
@@ -814,7 +814,7 @@ parse_oid(char *s, Oid *result)
  * Copy files from the input directory to the output directory, reconstructing
  * full files from incremental files as required.
  *
- * If processing is a user-defined tablespace, the tsoid should be the OID
+ * If processing a user-defined tablespace, the tsoid should be the OID
  * of that tablespace and input_directory and output_directory should be the
  * toplevel input and output directories for that tablespace. Otherwise,
  * tsoid should be InvalidOid and input_directory and output_directory should
@@ -826,7 +826,7 @@ parse_oid(char *s, Oid *result)
  *
  * n_prior_backups is the number of prior backups that we have available.
  * This doesn't count the very last backup, which is referenced by
- * output_directory, just the older ones. prior_backup_dirs is an array of
+ * input_directory, just the older ones. prior_backup_dirs is an array of
  * the locations of those previous backups.
  */
 static void

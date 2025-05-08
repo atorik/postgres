@@ -47,8 +47,7 @@ local all test oauth issuer="$issuer" scope="$scope"
 });
 $node->reload;
 
-my ($log_start, $log_end);
-$log_start = $node->wait_for_log(qr/reloading configuration files/);
+my $log_start = $node->wait_for_log(qr/reloading configuration files/);
 
 $ENV{PGOAUTHDEBUG} = "UNSAFE";
 
@@ -111,7 +110,7 @@ if ($ENV{with_libcurl} ne 'yes')
 		"fails without custom hook installed",
 		flags => ["--no-hook"],
 		expected_stderr =>
-		  qr/no custom OAuth flows are available, and libpq was not built with libcurl support/
+		  qr/no OAuth flows are available \(try installing the libpq-oauth package\)/
 	);
 }
 

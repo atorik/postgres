@@ -1856,7 +1856,7 @@ _bt_preprocess_array_keys(IndexScanDesc scan, int *new_numberOfKeys)
 		numArrayKeyData++;		/* keep this scan key/array */
 	}
 
-	Assert(numSkipArrayKeys == 0);
+	Assert(numSkipArrayKeys == 0 || !so->qual_ok);
 
 	/* Set final number of equality-type array keys */
 	so->numArrayKeys = numArrayKeys;
@@ -2051,7 +2051,7 @@ _bt_preprocess_array_keys_final(IndexScanDesc scan, int *keyDataMap)
  * the scan's BTArrayKeyInfo array, which is guaranteed to be large enough to
  * fit every so->arrayKeys[] entry.
  *
- * Also sets *numSkipArrayKeys_out to the number of of skip arrays caller must
+ * Also sets *numSkipArrayKeys_out to the number of skip arrays caller must
  * add to the scan keys it'll output.  Caller must add this many skip arrays:
  * one array for each of the most significant attributes that lack a = input
  * key (IS NULL keys count as = input keys here).  The specific attributes

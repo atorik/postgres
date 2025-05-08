@@ -1832,7 +1832,7 @@ LWLockDisownInternal(LWLock *lock)
 
 /*
  * Helper function to release lock, shared between LWLockRelease() and
- * LWLockeleaseDisowned().
+ * LWLockReleaseDisowned().
  */
 static void
 LWLockReleaseInternal(LWLock *lock, LWLockMode mode)
@@ -1960,6 +1960,21 @@ LWLockReleaseAll(void)
 	}
 }
 
+
+/*
+ * ForEachLWLockHeldByMe - run a callback for each held lock
+ *
+ * This is meant as debug support only.
+ */
+void
+ForEachLWLockHeldByMe(void (*callback) (LWLock *, LWLockMode, void *),
+					  void *context)
+{
+	int			i;
+
+	for (i = 0; i < num_held_lwlocks; i++)
+		callback(held_lwlocks[i].lock, held_lwlocks[i].mode, context);
+}
 
 /*
  * LWLockHeldByMe - test whether my process holds a lock in any mode

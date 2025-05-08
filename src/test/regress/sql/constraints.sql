@@ -940,6 +940,20 @@ ALTER TABLE pp_nn_1 VALIDATE CONSTRAINT nn1;
 ALTER TABLE pp_nn ATTACH PARTITION pp_nn_1 FOR VALUES IN (NULL,5); --ok
 DROP TABLE pp_nn;
 
+-- Try a partition with an invalid constraint and create a PK on the parent.
+CREATE TABLE pp_nn (a int) PARTITION BY HASH (a);
+CREATE TABLE pp_nn_1 PARTITION OF pp_nn FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+ALTER TABLE pp_nn_1 ADD CONSTRAINT nn NOT NULL a NOT VALID;
+ALTER TABLE ONLY pp_nn ADD PRIMARY KEY (a);
+DROP TABLE pp_nn;
+
+-- same as above, but the constraint is NO INHERIT
+CREATE TABLE pp_nn (a int) PARTITION BY HASH (a);
+CREATE TABLE pp_nn_1 PARTITION OF pp_nn FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+ALTER TABLE pp_nn_1 ADD CONSTRAINT nn NOT NULL a NO INHERIT;
+ALTER TABLE ONLY pp_nn ADD PRIMARY KEY (a);
+DROP TABLE pp_nn;
+
 -- Create table with NOT NULL INVALID constraint, for pg_upgrade.
 CREATE TABLE notnull_tbl1_upg (a int, b int);
 INSERT INTO notnull_tbl1_upg VALUES (NULL, 1), (NULL, 2), (300, 3);
@@ -965,6 +979,24 @@ INSERT INTO notnull_part1_3_upg values(NULL,1);
 ALTER TABLE notnull_part1_3_upg add CONSTRAINT nn3 NOT NULL a NOT VALID;
 ALTER TABLE notnull_part1_upg ATTACH PARTITION notnull_part1_3_upg FOR VALUES IN (NULL,5);
 EXECUTE get_nnconstraint_info('{notnull_part1_upg, notnull_part1_1_upg, notnull_part1_2_upg, notnull_part1_3_upg}');
+
+-- Inheritance test tables for pg_upgrade
+create table constr_parent (a int);
+create table constr_child (a int) inherits (constr_parent);
+alter table constr_parent add not null a not valid;
+alter table constr_child validate constraint constr_parent_a_not_null;
+EXECUTE get_nnconstraint_info('{constr_parent, constr_child}');
+
+create table constr_parent2 (a int);
+create table constr_child2 () inherits (constr_parent2);
+alter table constr_parent2 add not null a not valid;
+alter table constr_child2 validate constraint constr_parent2_a_not_null;
+EXECUTE get_nnconstraint_info('{constr_parent2, constr_child2}');
+
+create table constr_parent3 (a int not null);
+create table constr_child3 () inherits (constr_parent2, constr_parent3);
+EXECUTE get_nnconstraint_info('{constr_parent3, constr_child3}');
+
 DEALLOCATE get_nnconstraint_info;
 
 -- end NOT NULL NOT VALID

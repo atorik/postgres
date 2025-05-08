@@ -560,7 +560,7 @@ INSERT INTO tmp_ok SELECT generate_series(1, 10000);
 		qr/^t$/,
 		qr/^$/);
 
-	# Because local buffers don't use IO_IN_PROGRESS, a second StartLocalBufer
+	# Because local buffers don't use IO_IN_PROGRESS, a second StartLocalBufferIO
 	# succeeds as well. This test mostly serves as a documentation of that
 	# fact. If we had actually started IO, it'd be different.
 	psql_like(
@@ -813,7 +813,7 @@ SELECT invalidate_rel_block('tbl_ok', 2);
 		"first hard IO error is reported",
 		qq(SELECT count(*) FROM tbl_ok),
 		qr/^$/,
-		qr/ERROR:.*could not read blocks 2\.\.2 in file \"base\/.*\": Input\/output error/
+		qr!ERROR:.*could not read blocks 2\.\.2 in file "base/.*": (?:I/O|Input/output) error!
 	);
 
 	psql_like(
@@ -822,7 +822,7 @@ SELECT invalidate_rel_block('tbl_ok', 2);
 		"second hard IO error is reported",
 		qq(SELECT count(*) FROM tbl_ok),
 		qr/^$/,
-		qr/ERROR:.*could not read blocks 2\.\.2 in file \"base\/.*\": Input\/output error/
+		qr!ERROR:.*could not read blocks 2\.\.2 in file "base/.*": (?:I/O|Input/output) error!
 	);
 
 	$psql->query_safe(qq(SELECT inj_io_short_read_detach()));

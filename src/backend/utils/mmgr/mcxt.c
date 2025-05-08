@@ -184,7 +184,7 @@ static void MemoryContextStatsInternal(MemoryContext context, int level,
 static void MemoryContextStatsPrint(MemoryContext context, void *passthru,
 									const char *stats_string,
 									bool print_to_stderr);
-static void PublishMemoryContext(MemoryStatsEntry *memcxt_infos,
+static void PublishMemoryContext(MemoryStatsEntry *memcxt_info,
 								 int curr_id, MemoryContext context,
 								 List *path,
 								 MemoryContextCounters stat,
@@ -873,7 +873,7 @@ MemoryContextStatsDetail(MemoryContext context,
 		print_location = PRINT_STATS_TO_LOGS;
 
 	/* num_contexts report number of contexts aggregated in the output */
-	MemoryContextStatsInternal(context, 0, max_level, max_children,
+	MemoryContextStatsInternal(context, 1, max_level, max_children,
 							   &grand_totals, print_location, &num_contexts);
 
 	if (print_to_stderr)
@@ -910,7 +910,7 @@ MemoryContextStatsDetail(MemoryContext context,
  *
  * Print stats for this context if possible, but in any case accumulate counts
  * into *totals (if not NULL). The callers should make sure that print_location
- * is set to PRINT_STATS_STDERR or PRINT_STATS_TO_LOGS or PRINT_STATS_NONE.
+ * is set to PRINT_STATS_TO_STDERR or PRINT_STATS_TO_LOGS or PRINT_STATS_NONE.
  */
 static void
 MemoryContextStatsInternal(MemoryContext context, int level,
@@ -968,7 +968,7 @@ MemoryContextStatsInternal(MemoryContext context, int level,
 	 */
 	child = context->firstchild;
 	ichild = 0;
-	if (level < max_level && !stack_is_too_deep())
+	if (level <= max_level && !stack_is_too_deep())
 	{
 		for (; child != NULL && ichild < max_children;
 			 child = child->nextchild, ichild++)
@@ -1003,7 +1003,7 @@ MemoryContextStatsInternal(MemoryContext context, int level,
 
 		if (print_location == PRINT_STATS_TO_STDERR)
 		{
-			for (int i = 0; i <= level; i++)
+			for (int i = 0; i < level; i++)
 				fprintf(stderr, "  ");
 			fprintf(stderr,
 					"%d more child contexts containing %zu total in %zu blocks; %zu free (%zu chunks); %zu used\n",
@@ -1104,7 +1104,7 @@ MemoryContextStatsPrint(MemoryContext context, void *passthru,
 
 	if (print_to_stderr)
 	{
-		for (i = 0; i < level; i++)
+		for (i = 1; i < level; i++)
 			fprintf(stderr, "  ");
 		fprintf(stderr, "%s: %s%s\n", name, stats_string, truncated_ident);
 	}
@@ -1180,6 +1180,10 @@ MemoryContextCreate(MemoryContext node,
 {
 	/* Creating new memory contexts is not allowed in a critical section */
 	Assert(CritSectionCount == 0);
+
+	/* Validate parent, to help prevent crazy context linkages */
+	Assert(parent == NULL || MemoryContextIsValid(parent));
+	Assert(node != parent);
 
 	/* Initialize all standard fields of memory context header */
 	node->type = tag;
@@ -1478,7 +1482,7 @@ ProcessGetMemoryContextInterrupt(void)
 								   summary);
 
 	/*
-	 * Allocate memory in this process's DSA for storing statistics of the the
+	 * Allocate memory in this process's DSA for storing statistics of the
 	 * memory contexts upto max_stats, for contexts that don't fit within a
 	 * limit, a cumulative total is written as the last record in the DSA
 	 * segment.
@@ -1488,9 +1492,9 @@ ProcessGetMemoryContextInterrupt(void)
 	LWLockAcquire(&memCxtArea->lw_lock, LW_EXCLUSIVE);
 
 	/*
-	 * Create a DSA and send handle to the the client process after storing
-	 * the context statistics. If number of contexts exceed a predefined
-	 * limit(8MB), a cumulative total is stored for such contexts.
+	 * Create a DSA and send handle to the client process after storing the
+	 * context statistics. If number of contexts exceed a predefined limit
+	 * (1MB), a cumulative total is stored for such contexts.
 	 */
 	if (memCxtArea->memstats_dsa_handle == DSA_HANDLE_INVALID)
 	{
@@ -1508,8 +1512,10 @@ ProcessGetMemoryContextInterrupt(void)
 
 		/*
 		 * Pin the DSA area, this is to make sure the area remains attachable
-		 * even if current backend exits. This is done so that the statistics
-		 * are published even if the process exits while a client is waiting.
+		 * even if the backend that created it exits. This is done so that the
+		 * statistics are published even if the process exits while a client
+		 * is waiting. Also, other processes that publish statistics will use
+		 * the same area.
 		 */
 		dsa_pin(MemoryStatsDsaArea);
 
@@ -1576,7 +1582,7 @@ ProcessGetMemoryContextInterrupt(void)
 		cxt_id = cxt_id + 1;
 
 		/*
-		 * Copy statistics for each of TopMemoryContexts children.	This
+		 * Copy statistics for each of TopMemoryContexts children.  This
 		 * includes statistics of at most 100 children per node, with each
 		 * child node limited to a depth of 100 in its subtree.
 		 */
@@ -1585,12 +1591,11 @@ ProcessGetMemoryContextInterrupt(void)
 		{
 			MemoryContextCounters grand_totals;
 			int			num_contexts = 0;
-			int			level = 0;
 
 			path = NIL;
 			memset(&grand_totals, 0, sizeof(grand_totals));
 
-			MemoryContextStatsInternal(c, level, 100, 100, &grand_totals,
+			MemoryContextStatsInternal(c, 1, 100, 100, &grand_totals,
 									   PRINT_STATS_NONE, &num_contexts);
 
 			path = compute_context_path(c, context_id_lookup);
@@ -1606,9 +1611,9 @@ ProcessGetMemoryContextInterrupt(void)
 		}
 		memCxtState[idx].total_stats = cxt_id;
 
+		/* Notify waiting backends and return */
 		end_memorycontext_reporting();
 
-		/* Notify waiting backends and return */
 		hash_destroy(context_id_lookup);
 
 		return;
@@ -1659,7 +1664,7 @@ ProcessGetMemoryContextInterrupt(void)
 			num_individual_stats = context_id + 1;
 			meminfo[max_stats - 1].name = dsa_allocate(MemoryStatsDsaArea, namelen + 1);
 			nameptr = dsa_get_address(MemoryStatsDsaArea, meminfo[max_stats - 1].name);
-			strncpy(nameptr, "Remaining Totals", namelen);
+			strlcpy(nameptr, "Remaining Totals", namelen + 1);
 			meminfo[max_stats - 1].ident = InvalidDsaPointer;
 			meminfo[max_stats - 1].path = InvalidDsaPointer;
 			meminfo[max_stats - 1].type = 0;

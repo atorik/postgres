@@ -158,6 +158,12 @@ static int	ldapServiceLookup(const char *purl, PQconninfoOption *options,
  *		"*"		Password field - hide value
  *		"D"		Debug option - don't show by default
  *
+ * NB: Server-side clients -- dblink, postgres_fdw, libpqrcv -- use dispchar to
+ * determine which options to expose to end users, and how. Changing dispchar
+ * has compatibility and security implications for those clients. For example,
+ * postgres_fdw will attach a "*" option to USER MAPPING instead of the default
+ * SERVER, and it disallows setting "D" options entirely.
+ *
  * PQconninfoOptions[] is a constant static array that we use to initialize
  * a dynamically allocated working copy.  All the "val" fields in
  * PQconninfoOptions[] *must* be NULL.  In a working copy, non-null "val"
@@ -394,7 +400,7 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 	offsetof(struct pg_conn, oauth_client_id)},
 
 	{"oauth_client_secret", NULL, NULL, NULL,
-		"OAuth-Client-Secret", "", 40,
+		"OAuth-Client-Secret", "*", 40,
 	offsetof(struct pg_conn, oauth_client_secret)},
 
 	{"oauth_scope", NULL, NULL, NULL,
@@ -402,7 +408,7 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 	offsetof(struct pg_conn, oauth_scope)},
 
 	{"sslkeylogfile", NULL, NULL, NULL,
-		"SSL-Key-Log-File", "", 0,	/* sizeof("") = 0 */
+		"SSL-Key-Log-File", "D", 64,
 	offsetof(struct pg_conn, sslkeylogfile)},
 
 	/* Terminating entry --- MUST BE LAST */
@@ -693,7 +699,7 @@ pqDropServerData(PGconn *conn)
 	conn->oauth_want_retry = false;
 
 	/*
-	 * Cancel connections need to retain their be_pid and be_key across
+	 * Cancel connections need to retain their be_pid and be_cancel_key across
 	 * PQcancelReset invocations, otherwise they would not have access to the
 	 * secret token of the connection they are supposed to cancel.
 	 */
@@ -1833,7 +1839,7 @@ pqConnectOptions2(PGconn *conn)
 		 * sslmode='allow' or sslmode='disable' either. If a user goes through
 		 * the trouble of setting sslnegotiation='direct', they probably
 		 * intend to use SSL, and sslmode=disable or allow is probably a user
-		 * user mistake anyway.
+		 * mistake anyway.
 		 */
 		if (conn->sslnegotiation[0] == 'd' &&
 			conn->sslmode[0] != 'r' && conn->sslmode[0] != 'v')

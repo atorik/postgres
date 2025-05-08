@@ -410,6 +410,7 @@ CatCacheHeader
 CatalogId
 CatalogIdMapEntry
 CatalogIndexState
+ChangeVarNodes_callback
 ChangeVarNodes_context
 CheckPoint
 CheckPointStmt
@@ -615,6 +616,7 @@ DatumTupleFields
 DbInfo
 DbInfoArr
 DbLocaleInfo
+DbOidName
 DeClonePtrType
 DeadLockState
 DeallocateStmt
@@ -2757,8 +2759,6 @@ SimpleActionListCell
 SimpleEcontextStackEntry
 SimpleOidList
 SimpleOidListCell
-SimpleOidStringList
-SimpleOidListStringCell
 SimplePtrList
 SimplePtrListCell
 SimpleStats

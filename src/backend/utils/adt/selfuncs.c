@@ -3850,6 +3850,8 @@ estimate_multivariate_bucketsize(PlannerInfo *root, RelOptInfo *inner,
 			if (bms_get_singleton_member(relids, &relid) &&
 				root->simple_rel_array[relid]->statlist != NIL)
 			{
+				bool		is_duplicate = false;
+
 				/*
 				 * This inner-side expression references only one relation.
 				 * Extended statistics on this clause can exist.
@@ -3880,11 +3882,61 @@ estimate_multivariate_bucketsize(PlannerInfo *root, RelOptInfo *inner,
 					 */
 					continue;
 
-				varinfo = (GroupVarInfo *) palloc(sizeof(GroupVarInfo));
+				/*
+				 * We're going to add the new clause to the varinfos list.  We
+				 * might re-use add_unique_group_var(), but we don't do so for
+				 * two reasons.
+				 *
+				 * 1) We must keep the origin_rinfos list ordered exactly the
+				 * same way as varinfos.
+				 *
+				 * 2) add_unique_group_var() is designed for
+				 * estimate_num_groups(), where a larger number of groups is
+				 * worse.   While estimating the number of hash buckets, we
+				 * have the opposite: a lesser number of groups is worse.
+				 * Therefore, we don't have to remove "known equal" vars: the
+				 * removed var may valuably contribute to the multivariate
+				 * statistics to grow the number of groups.
+				 */
+
+				/*
+				 * Clear nullingrels to correctly match hash keys.  See
+				 * add_unique_group_var()'s comment for details.
+				 */
+				expr = remove_nulling_relids(expr, root->outer_join_rels, NULL);
+
+				/*
+				 * Detect and exclude exact duplicates from the list of hash
+				 * keys (like add_unique_group_var does).
+				 */
+				foreach(lc1, varinfos)
+				{
+					varinfo = (GroupVarInfo *) lfirst(lc1);
+
+					if (!equal(expr, varinfo->var))
+						continue;
+
+					is_duplicate = true;
+					break;
+				}
+
+				if (is_duplicate)
+				{
+					/*
+					 * Skip exact duplicates. Adding them to the otherclauses
+					 * list also doesn't make sense.
+					 */
+					continue;
+				}
+
+				/*
+				 * Initialize GroupVarInfo.  We only use it to call
+				 * estimate_multivariate_ndistinct(), which doesn't care about
+				 * ndistinct and isdefault fields.  Thus, skip these fields.
+				 */
+				varinfo = (GroupVarInfo *) palloc0(sizeof(GroupVarInfo));
 				varinfo->var = expr;
 				varinfo->rel = root->simple_rel_array[relid];
-				varinfo->ndistinct = 0.0;
-				varinfo->isdefault = false;
 				varinfos = lappend(varinfos, varinfo);
 
 				/*
@@ -3894,8 +3946,10 @@ estimate_multivariate_bucketsize(PlannerInfo *root, RelOptInfo *inner,
 				origin_rinfos = lappend(origin_rinfos, rinfo);
 			}
 			else
+			{
 				/* This clause can't be estimated with extended statistics */
 				otherclauses = lappend(otherclauses, rinfo);
+			}
 
 			clauses = foreach_delete_current(clauses, lc);
 		}
@@ -4146,14 +4200,18 @@ estimate_hashagg_tablesize(PlannerInfo *root, Path *path,
  */
 
 /*
- * Find applicable ndistinct statistics for the given list of VarInfos (which
- * must all belong to the given rel), and update *ndistinct to the estimate of
- * the MVNDistinctItem that best matches.  If a match it found, *varinfos is
- * updated to remove the list of matched varinfos.
+ * Find the best matching ndistinct extended statistics for the given list of
+ * GroupVarInfos.
  *
- * Varinfos that aren't for simple Vars are ignored.
+ * Callers must ensure that the given GroupVarInfos all belong to 'rel' and
+ * the GroupVarInfos list does not contain any duplicate Vars or expressions.
  *
- * Return true if we're able to find a match, false otherwise.
+ * When statistics are found that match > 1 of the given GroupVarInfo, the
+ * *ndistinct parameter is set according to the ndistinct estimate and a new
+ * list is built with the matching GroupVarInfos removed, which is output via
+ * the *varinfos parameter before returning true.  When no matching stats are
+ * found, false is returned and the *varinfos and *ndistinct parameters are
+ * left untouched.
  */
 static bool
 estimate_multivariate_ndistinct(PlannerInfo *root, RelOptInfo *rel,
@@ -4234,15 +4292,22 @@ estimate_multivariate_ndistinct(PlannerInfo *root, RelOptInfo *rel,
 			}
 		}
 
+		/*
+		 * The ndistinct extended statistics contain estimates for a minimum
+		 * of pairs of columns which the statistics are defined on and
+		 * certainly not single columns.  Here we skip unless we managed to
+		 * match to at least two columns.
+		 */
 		if (nshared_vars + nshared_exprs < 2)
 			continue;
 
 		/*
-		 * Does this statistics object match more columns than the currently
-		 * best object?  If so, use this one instead.
+		 * Check if these statistics are a better match than the previous best
+		 * match and if so, take note of the StatisticExtInfo.
 		 *
-		 * XXX This should break ties using name of the object, or something
-		 * like that, to make the outcome stable.
+		 * The statslist is sorted by statOid, so the StatisticExtInfo we
+		 * select as the best match is deterministic even when multiple sets
+		 * of statistics match equally as well.
 		 */
 		if ((nshared_exprs > nmatches_exprs) ||
 			(((nshared_exprs == nmatches_exprs)) && (nshared_vars > nmatches_vars)))

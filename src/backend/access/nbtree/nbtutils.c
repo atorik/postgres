@@ -1110,7 +1110,7 @@ _bt_rewind_nonrequired_arrays(IndexScanDesc scan, ScanDirection dir)
  *
  * readpagetup callers must only call here when _bt_check_compare already set
  * continuescan=false.  We help these callers deal with _bt_check_compare's
- * inability to distinguishing between the < and > cases (it uses equality
+ * inability to distinguish between the < and > cases (it uses equality
  * operator scan keys, whereas we use 3-way ORDER procs).  These callers pass
  * a _bt_check_compare-set sktrig value that indicates which scan key
  * triggered the call (!readpagetup callers just pass us sktrig=0 instead).
@@ -1826,7 +1826,7 @@ _bt_advance_array_keys(IndexScanDesc scan, BTReadPageState *pstate,
 
 		/* Recheck _bt_check_compare on behalf of caller */
 		if (_bt_check_compare(scan, dir, tuple, tupnatts, tupdesc, false,
-							  false, &continuescan,
+							  !sktrig_required, &continuescan,
 							  &nsktrig) &&
 			!so->scanBehind)
 		{
@@ -1950,7 +1950,7 @@ _bt_advance_array_keys(IndexScanDesc scan, BTReadPageState *pstate,
 	 * keys for one or more truncated attribute values (scan keys required in
 	 * _either_ scan direction).
 	 *
-	 * There is a chance that _bt_checkkeys (which checks so->scanBehind) will
+	 * There is a chance that _bt_readpage (which checks so->scanBehind) will
 	 * find that even the sibling leaf page's finaltup is < the new array
 	 * keys.  When that happens, our optimistic policy will have incurred a
 	 * single extra leaf page access that could have been avoided.
@@ -2393,11 +2393,27 @@ _bt_scanbehind_checkkeys(IndexScanDesc scan, ScanDirection dir,
 	TupleDesc	tupdesc = RelationGetDescr(rel);
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	int			nfinaltupatts = BTreeTupleGetNAtts(finaltup, rel);
+	bool		scanBehind;
 
 	Assert(so->numArrayKeys);
 
 	if (_bt_tuple_before_array_skeys(scan, dir, finaltup, tupdesc,
-									 nfinaltupatts, false, 0, NULL))
+									 nfinaltupatts, false, 0, &scanBehind))
+		return false;
+
+	/*
+	 * If scanBehind was set, all of the untruncated attribute values from
+	 * finaltup that correspond to an array match the array's current element,
+	 * but there are other keys associated with truncated suffix attributes.
+	 * Array advancement must have incremented the scan's arrays on the
+	 * previous page, resulting in a set of array keys that happen to be an
+	 * exact match for the current page high key's untruncated prefix values.
+	 *
+	 * This page definitely doesn't contain tuples that the scan will need to
+	 * return.  The next page may or may not contain relevant tuples.  Handle
+	 * this by cutting our losses and starting a new primscan.
+	 */
+	if (scanBehind)
 		return false;
 
 	if (!so->oppositeDirCheck)
@@ -2473,13 +2489,14 @@ _bt_oppodir_checkkeys(IndexScanDesc scan, ScanDirection dir,
  * primscan's first page would mislead _bt_advance_array_keys, which expects
  * pstate.nskipadvances to be representative of every first page's key space.)
  *
- * Caller must reset startikey and forcenonrequired ahead of the _bt_checkkeys
- * call for pstate.finaltup iff we set forcenonrequired=true.  This will give
- * _bt_checkkeys the opportunity to call _bt_advance_array_keys once more,
- * with sktrig_required=true, to advance the arrays that were ignored during
- * checks of all of the page's prior tuples.  Caller doesn't need to do this
- * on the rightmost/leftmost page in the index (where pstate.finaltup isn't
- * set), since forcenonrequired won't be set here by us in the first place.
+ * Caller must call _bt_start_array_keys and reset startikey/forcenonrequired
+ * ahead of the finaltup _bt_checkkeys call when we set forcenonrequired=true.
+ * This will give _bt_checkkeys the opportunity to call _bt_advance_array_keys
+ * with sktrig_required=true, restoring the invariant that the scan's required
+ * arrays always track the scan's progress through the index's key space.
+ * Caller won't need to do this on the rightmost/leftmost page in the index
+ * (where pstate.finaltup isn't ever set), since forcenonrequired will never
+ * be set here in the first place.
  */
 void
 _bt_set_startikey(IndexScanDesc scan, BTReadPageState *pstate)
@@ -2540,10 +2557,31 @@ _bt_set_startikey(IndexScanDesc scan, BTReadPageState *pstate)
 		if (key->sk_flags & SK_ROW_HEADER)
 		{
 			/*
-			 * Can't let pstate.startikey get set to an ikey beyond a
-			 * RowCompare inequality
+			 * RowCompare inequality.
+			 *
+			 * Only the first subkey from a RowCompare can ever be marked
+			 * required (that happens when the row header is marked required).
+			 * There is no simple, general way for us to transitively deduce
+			 * whether or not every tuple on the page satisfies a RowCompare
+			 * key based only on firsttup and lasttup -- so we just give up.
 			 */
-			break;				/* unsafe */
+			if (!start_past_saop_eq && !so->skipScan)
+				break;			/* unsafe to go further */
+
+			/*
+			 * We have to be even more careful with RowCompares that come
+			 * after an array: we assume it's unsafe to even bypass the array.
+			 * Calling _bt_start_array_keys to recover the scan's arrays
+			 * following use of forcenonrequired mode isn't compatible with
+			 * _bt_check_rowcompare's continuescan=false behavior with NULL
+			 * row compare members.  _bt_advance_array_keys must not make a
+			 * decision on the basis of a key not being satisfied in the
+			 * opposite-to-scan direction until the scan reaches a leaf page
+			 * where the same key begins to be satisfied in scan direction.
+			 * The _bt_first !used_all_subkeys behavior makes this limitation
+			 * hard to work around some other way.
+			 */
+			return;				/* completely unsafe to set pstate.startikey */
 		}
 		if (key->sk_strategy != BTEqualStrategyNumber)
 		{
@@ -2597,7 +2635,7 @@ _bt_set_startikey(IndexScanDesc scan, BTReadPageState *pstate)
 			continue;
 		}
 
-		/* Some = key (could be a a scalar = key, could be an array = key) */
+		/* Some = key (could be a scalar = key, could be an array = key) */
 		Assert(key->sk_strategy == BTEqualStrategyNumber);
 
 		if (!(key->sk_flags & SK_SEARCHARRAY))
@@ -2799,8 +2837,6 @@ _bt_check_compare(IndexScanDesc scan, ScanDirection dir,
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 
-	Assert(!forcenonrequired || advancenonrequired);
-
 	*continuescan = true;		/* default assumption */
 
 	for (; *ikey < so->numberOfKeys; (*ikey)++)
@@ -2920,6 +2956,17 @@ _bt_check_compare(IndexScanDesc scan, ScanDirection dir,
 
 		if (isNull)
 		{
+			/*
+			 * Scalar scan key isn't satisfied by NULL tuple value.
+			 *
+			 * If we're treating scan keys as nonrequired, and key is for a
+			 * skip array, then we must attempt to advance the array to NULL
+			 * (if we're successful then the tuple might match the qual).
+			 */
+			if (unlikely(forcenonrequired && key->sk_flags & SK_BT_SKIP))
+				return _bt_advance_array_keys(scan, NULL, tuple, tupnatts,
+											  tupdesc, *ikey, false);
+
 			if (key->sk_flags & SK_BT_NULLS_FIRST)
 			{
 				/*
@@ -2958,7 +3005,7 @@ _bt_check_compare(IndexScanDesc scan, ScanDirection dir,
 			}
 
 			/*
-			 * In any case, this indextuple doesn't match the qual.
+			 * This indextuple doesn't match the qual.
 			 */
 			return false;
 		}

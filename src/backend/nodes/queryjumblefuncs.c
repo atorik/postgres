@@ -58,10 +58,10 @@ bool		query_id_enabled = false;
 static JumbleState *InitJumble(void);
 static uint64 DoJumble(JumbleState *jstate, Node *node);
 static void AppendJumble(JumbleState *jstate,
-						 const unsigned char *item, Size size);
+						 const unsigned char *value, Size size);
 static void FlushPendingNulls(JumbleState *jstate);
 static void RecordConstLocation(JumbleState *jstate,
-								int location, bool merged);
+								int location, bool squashed);
 static void _jumbleNode(JumbleState *jstate, Node *node);
 static void _jumbleElements(JumbleState *jstate, List *elements);
 static void _jumbleA_Const(JumbleState *jstate, Node *node);
@@ -357,7 +357,7 @@ AppendJumble64(JumbleState *jstate, const unsigned char *value)
 
 /*
  * FlushPendingNulls
- *		Incorporate the pending_null value into the jumble buffer.
+ *		Incorporate the pending_nulls value into the jumble buffer.
  *
  * Note: Callers must ensure that there's at least 1 pending NULL.
  */
