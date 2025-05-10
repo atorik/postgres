@@ -153,7 +153,10 @@ ProcessLogQueryPlanInterrupt(void)
 	}
 
 	//WrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
-	ExecSetExecProcNode(ActiveQueryDesc->planstate, ActiveQueryDesc->planstate->ExecProcNode);
+
+	//ExecSetExecProcNode(ActiveQueryDesc->planstate, ActiveQueryDesc->planstate->ExecProcNode);
+	/* ExecProcNodeはRealのまま*/
+	ExecSetExecProcNode(ActiveQueryDesc->planstate, ActiveQueryDesc->planstate->ExecProcNodeReal);
 }
 
 bool
