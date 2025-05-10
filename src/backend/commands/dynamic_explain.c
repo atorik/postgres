@@ -111,9 +111,15 @@ ExecProcNodeWithExplain(PlanState *ps)
 	MemoryContextSwitchTo(old_cxt);
 	MemoryContextDelete(cxt);
 
-	// UnwrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
 	/* Unwrap */
-	ps->ExecProcNode = ps->ExecProcNodeReal;
+	// ps->ExecProcNode = ps->ExecProcNodeReal;
+
+	//InstrStarNodeより先にラッピングしてしまったので、まだInstrStarNode()を呼び出していないなら呼び出す
+	if (ps->instrument && INSTR_TIME_IS_ZERO(ps->instrument->starttime))
+		ps->ExecProcNode = ExecProcNodeInstr;
+	else
+		ps->ExecProcNode = ps->ExecProcNodeReal;
+
 	ProcessLogQueryPlanInterruptActive = false;
 
 	// ps->ExecProcNodeReal = NULL;

@@ -1166,9 +1166,6 @@ typedef struct PlanState
 	ExecProcNodeMtd ExecProcNodeReal;	/* actual function, if above is a
 										 * wrapper */
 
-	ExecProcNodeMtd ExecProcNodeOriginal;	/* temporary place when adding
-											 * process for ExecProcNode */
-
 	Instrumentation *instrument;	/* Optional runtime stats for this node */
 	WorkerInstrumentation *worker_instrument;	/* per-worker instrumentation */
 

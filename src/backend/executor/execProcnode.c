@@ -121,7 +121,6 @@
 #include "nodes/nodeFuncs.h"
 
 static TupleTableSlot *ExecProcNodeFirst(PlanState *node);
-static TupleTableSlot *ExecProcNodeInstr(PlanState *node);
 static bool ExecShutdownNode_walker(PlanState *node, void *context);
 
 
@@ -457,19 +456,20 @@ ExecProcNodeFirst(PlanState *node)
 	 */
 	check_stack_depth();
 
+	/* log plan? insturment*/
+	if (GetProcessLogQueryPlanInterruptActive())
+		/* 複数wrapping対策が必要 */
+		node->ExecProcNode = ExecProcNodeWithExplain;
+
 	/*
 	 * If instrumentation is required, change the wrapper to one that just
 	 * does instrumentation.  Otherwise we can dispense with all wrappers and
 	 * have ExecProcNode() directly call the relevant function from now on.
 	 */
-	if (node->instrument)
+	else if (node->instrument)
 		node->ExecProcNode = ExecProcNodeInstr;
 	else
 		node->ExecProcNode = node->ExecProcNodeReal;
-
-	/* 上書き よいのか？ */
-	if (GetProcessLogQueryPlanInterruptActive())
-		node->ExecProcNode = ExecProcNodeWithExplain;
 
 	return node->ExecProcNode(node);
 }
@@ -480,7 +480,7 @@ ExecProcNodeFirst(PlanState *node)
  * this a separate function, we avoid overhead in the normal case where
  * no instrumentation is wanted.
  */
-static TupleTableSlot *
+TupleTableSlot *
 ExecProcNodeInstr(PlanState *node)
 {
 	TupleTableSlot *result;
