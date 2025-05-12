@@ -458,9 +458,8 @@ ExecProcNodeFirst(PlanState *node)
 
 	/* log plan? insturment*/
 	if (GetProcessLogQueryPlanInterruptActive())
-		/* 複数wrapping対策が必要 */
+		/* 複数wrapping対策が必要? */
 		node->ExecProcNode = ExecProcNodeWithExplain;
-
 	/*
 	 * If instrumentation is required, change the wrapper to one that just
 	 * does instrumentation.  Otherwise we can dispense with all wrappers and

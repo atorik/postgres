@@ -57,25 +57,6 @@ ResetLogQueryPlanState(void)
 }
 
 /*
- * Wrap ExecProcNode with ExecProcNodeWithExplain recursively
- */
-//static void
-//WrapExecProcNodeWithExplain(PlanState *ps)
-//{
-////	/* wrapping can be done only once */
-////	if (ps->ExecProcNodeOriginal != NULL)
-////		return;
-//
-//	// No Need?
-//	// check_stack_depth();
-//
-//	ExecSetExecProcNode(ps, ps->ExecProcNode);
-//
-////	ps->ExecProcNodeReal = ps->ExecProcNode;
-////	ps->ExecProcNode = ExecProcNodeWithExplain;
-//}
-
-/*
  * Wrap ExecProcNode with codes which logs currently running plan
  */
 TupleTableSlot *
@@ -112,17 +93,13 @@ ExecProcNodeWithExplain(PlanState *ps)
 	MemoryContextDelete(cxt);
 
 	/* Unwrap */
-	// ps->ExecProcNode = ps->ExecProcNodeReal;
-
-	//InstrStarNodeより先にラッピングしてしまったので、まだInstrStarNode()を呼び出していないなら呼び出す
+	// ExecProcNodeWithExplain()はInstrStarNodeより先にラッピングする(See ExecProcNodeFirst())ので、instrumentが必要であればInstrStartNode()をまだ呼び出していいないのならここでラッピング
 	if (ps->instrument && INSTR_TIME_IS_ZERO(ps->instrument->starttime))
 		ps->ExecProcNode = ExecProcNodeInstr;
 	else
 		ps->ExecProcNode = ps->ExecProcNodeReal;
 
 	ProcessLogQueryPlanInterruptActive = false;
-
-	// ps->ExecProcNodeReal = NULL;
 
 	return ps->ExecProcNode(ps);
 }
@@ -131,7 +108,7 @@ ExecProcNodeWithExplain(PlanState *ps)
  * Add wrapper which logs explain of the plan to ExecProcNode
  *
  * Since running EXPLAIN codes at any arbitrary CHECK_FOR_INTERRUPTS() is
- * unsafe, this function just wraps every ExecProcNode.
+ * unsafe, this function just wraps ExecProcNode function.
  * In this way, EXPLAIN code is only executed at the timing of ExecProcNode,
  * which seems safe.
  */
@@ -140,7 +117,7 @@ ProcessLogQueryPlanInterrupt(void)
 {
 	LogQueryPlanPending = false;
 
-	/* Cannot re-enter */
+	/* Cannot re-enter プランを実際にログ出力するまではreentrant不可 */
 	if (ProcessLogQueryPlanInterruptActive)
 		return;
 
@@ -157,11 +134,7 @@ ProcessLogQueryPlanInterrupt(void)
 		ProcessLogQueryPlanInterruptActive = false;
 		return;
 	}
-
-	//WrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
-
-	//ExecSetExecProcNode(ActiveQueryDesc->planstate, ActiveQueryDesc->planstate->ExecProcNode);
-	/* ExecProcNodeはRealのまま*/
+	/* ExecProcNodeはRealのままにする。ExecProcNode */
 	ExecSetExecProcNode(ActiveQueryDesc->planstate, ActiveQueryDesc->planstate->ExecProcNodeReal);
 }
 
