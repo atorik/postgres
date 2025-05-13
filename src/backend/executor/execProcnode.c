@@ -456,7 +456,7 @@ ExecProcNodeFirst(PlanState *node)
 	 */
 	check_stack_depth();
 
-	/* log plan? insturment*/
+	/* log plan? insturment */
 	if (GetProcessLogQueryPlanInterruptActive())
 		/* 複数wrapping対策が必要? */
 		node->ExecProcNode = ExecProcNodeWithExplain;

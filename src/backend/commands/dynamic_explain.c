@@ -27,6 +27,9 @@ static bool ProcessLogQueryPlanInterruptActive = false;
 /* Currently executing query's QueryDesc */
 static QueryDesc *ActiveQueryDesc = NULL;
 
+static void WrapExecProcNodeWithExplain(PlanState *ps);
+static void UnwrapExecProcNodeWithExplain(PlanState *ps);
+
 /*
  * Handle receipt of an interrupt indicating logging the plan of the currently
  * running query.
@@ -54,6 +57,180 @@ ResetLogQueryPlanState(void)
 	 */
 	ActiveQueryDesc = NULL;
 	ProcessLogQueryPlanInterruptActive = false;
+}
+
+/*
+ * Wrap array of PlanState ExecProcNodes with ExecProcNodeWithExplain
+ */
+static void
+WrapPlanStatesWithExplain(PlanState **planstates, int nplans)
+{
+	int			i;
+
+	for (i = 0; i < nplans; i++)
+		WrapExecProcNodeWithExplain(planstates[i]);
+}
+
+/*
+ * Wrap CustomScanState children's ExecProcNodes with ExecProcNodeWithExplain
+ */
+static void
+WrapCustomPlanChildWithExplain(CustomScanState *css)
+{
+	ListCell   *cell;
+
+	foreach(cell, css->custom_ps)
+		WrapExecProcNodeWithExplain((PlanState *) lfirst(cell));
+}
+
+/*
+ * Wrap ExecProcNode with ExecProcNodeWithExplain recursively
+ */
+static void
+WrapExecProcNodeWithExplain(PlanState *ps)
+{
+//	/* wrapping can be done only once */
+//	if (ps->ExecProcNodeOriginal != NULL)
+//		return;
+
+	check_stack_depth();
+
+	//ps->ExecProcNodeOriginal = ps->ExecProcNode;
+	//ps->ExecProcNode = ExecProcNodeWithExplain;
+	ExecSetExecProcNode(ps, ps->ExecProcNodeReal);
+
+	if (ps->lefttree != NULL)
+		WrapExecProcNodeWithExplain(ps->lefttree);
+	if (ps->righttree != NULL)
+		WrapExecProcNodeWithExplain(ps->righttree);
+	if (ps->subPlan != NULL)
+	{
+		ListCell   *l;
+
+		foreach(l, ps->subPlan)
+		{
+			SubPlanState *sstate = (SubPlanState *) lfirst(l);
+
+			WrapExecProcNodeWithExplain(sstate->planstate);
+		}
+	}
+
+	/* special child plans */
+	switch (nodeTag(ps->plan))
+	{
+		case T_Append:
+			WrapPlanStatesWithExplain(((AppendState *) ps)->appendplans,
+									  ((AppendState *) ps)->as_nplans);
+			break;
+		case T_MergeAppend:
+			WrapPlanStatesWithExplain(((MergeAppendState *) ps)->mergeplans,
+									  ((MergeAppendState *) ps)->ms_nplans);
+			break;
+		case T_BitmapAnd:
+			WrapPlanStatesWithExplain(((BitmapAndState *) ps)->bitmapplans,
+									  ((BitmapAndState *) ps)->nplans);
+			break;
+		case T_BitmapOr:
+			WrapPlanStatesWithExplain(((BitmapOrState *) ps)->bitmapplans,
+									  ((BitmapOrState *) ps)->nplans);
+			break;
+		case T_SubqueryScan:
+			WrapExecProcNodeWithExplain(((SubqueryScanState *) ps)->subplan);
+			break;
+		case T_CustomScan:
+			WrapCustomPlanChildWithExplain((CustomScanState *) ps);
+			break;
+		default:
+			break;
+	}
+}
+
+/*
+ * Unwrap array of PlanStates ExecProcNodes with ExecProcNodeWithExplain
+ */
+static void
+UnwrapPlanStatesWithExplain(PlanState **planstates, int nplans)
+{
+	int			i;
+
+	for (i = 0; i < nplans; i++)
+		UnwrapExecProcNodeWithExplain(planstates[i]);
+}
+
+/*
+ * Unwrap CustomScanState children's ExecProcNodes with ExecProcNodeWithExplain
+ */
+static void
+UnwrapCustomPlanChildWithExplain(CustomScanState *css)
+{
+	ListCell   *cell;
+
+	foreach(cell, css->custom_ps)
+		UnwrapExecProcNodeWithExplain((PlanState *) lfirst(cell));
+}
+
+/*
+ * Unwrap ExecProcNode with ExecProcNodeWithExplain recursively
+ */
+static void
+UnwrapExecProcNodeWithExplain(PlanState *ps)
+{
+//	Assert(ps->ExecProcNodeOriginal != NULL);
+
+	check_stack_depth();
+
+	// ps->ExecProcNode = ps->ExecProcNodeOriginal;
+	// ps->ExecProcNodeOriginal = NULL;
+
+	if (ps->instrument && INSTR_TIME_IS_ZERO(ps->instrument->starttime))
+		ps->ExecProcNode = ExecProcNodeInstr;
+	else
+		ps->ExecProcNode = ps->ExecProcNodeReal;
+
+	if (ps->lefttree != NULL)
+		UnwrapExecProcNodeWithExplain(ps->lefttree);
+	if (ps->righttree != NULL)
+		UnwrapExecProcNodeWithExplain(ps->righttree);
+	if (ps->subPlan != NULL)
+	{
+		ListCell   *l;
+
+		foreach(l, ps->subPlan)
+		{
+			SubPlanState *sstate = (SubPlanState *) lfirst(l);
+
+			UnwrapExecProcNodeWithExplain(sstate->planstate);
+		}
+	}
+
+	/* special child plans */
+	switch (nodeTag(ps->plan))
+	{
+		case T_Append:
+			UnwrapPlanStatesWithExplain(((AppendState *) ps)->appendplans,
+										((AppendState *) ps)->as_nplans);
+			break;
+		case T_MergeAppend:
+			UnwrapPlanStatesWithExplain(((MergeAppendState *) ps)->mergeplans,
+										((MergeAppendState *) ps)->ms_nplans);
+			break;
+		case T_BitmapAnd:
+			UnwrapPlanStatesWithExplain(((BitmapAndState *) ps)->bitmapplans,
+										((BitmapAndState *) ps)->nplans);
+			break;
+		case T_BitmapOr:
+			UnwrapPlanStatesWithExplain(((BitmapOrState *) ps)->bitmapplans,
+										((BitmapOrState *) ps)->nplans);
+			break;
+		case T_SubqueryScan:
+			UnwrapExecProcNodeWithExplain(((SubqueryScanState *) ps)->subplan);
+			break;
+		case T_CustomScan:
+			UnwrapCustomPlanChildWithExplain((CustomScanState *) ps);
+			break;
+		default:
+			break;
+	}
 }
 
 /*
@@ -93,7 +270,7 @@ ExecProcNodeWithExplain(PlanState *ps)
 	MemoryContextDelete(cxt);
 
 	/* Unwrap */
-	// ExecProcNodeWithExplain()はInstrStarNodeより先にラッピングする(See ExecProcNodeFirst())ので、instrumentが必要であればInstrStartNode()をまだ呼び出していいないのならここでラッピング
+	// ExecProcNodeWithExplain()はInstrStarNodeより先にラッピングする(See ExecProcNodeFirst())ので、instrumentが必要であればInstrStartNode()をまだ呼び出していないのならここでラッピング
 	if (ps->instrument && INSTR_TIME_IS_ZERO(ps->instrument->starttime))
 		ps->ExecProcNode = ExecProcNodeInstr;
 	else
@@ -135,7 +312,8 @@ ProcessLogQueryPlanInterrupt(void)
 		return;
 	}
 	/* ExecProcNodeはRealのままにする。ExecProcNode */
-	ExecSetExecProcNode(ActiveQueryDesc->planstate, ActiveQueryDesc->planstate->ExecProcNodeReal);
+	WrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
+	//ExecSetExecProcNode(ActiveQueryDesc->planstate, ActiveQueryDesc->planstate->ExecProcNodeReal);
 }
 
 bool
