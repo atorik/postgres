@@ -258,13 +258,23 @@ ExecProcNodeWithExplain(PlanState *ps)
 	es->verbose = true;
 	es->signaled = true;
 
-	ExplainStringAssemble(es, ActiveQueryDesc, es->format, 0, -1);
+	/* This case can happen, i.e. ExecPostprocessPlan() */
+	if (ActiveQueryDesc == NULL)
+		ereport(LOG_SERVER_ONLY,
+				errmsg("backend with PID %d is finishing query",
+					   MyProcPid),
+				errhidestmt(true),
+				errhidecontext(true));
+	else
+	{
+		ExplainStringAssemble(es, ActiveQueryDesc, es->format, 0, -1);
 
-	ereport(LOG_SERVER_ONLY,
-			errmsg("query plan running on backend with PID %d is:\n%s",
-				   MyProcPid, es->str->data),
-			errhidestmt(true),
-			errhidecontext(true));
+		ereport(LOG_SERVER_ONLY,
+				errmsg("query plan running on backend with PID %d is:\n%s",
+					   MyProcPid, es->str->data),
+				errhidestmt(true),
+				errhidecontext(true));
+	}
 
 	MemoryContextSwitchTo(old_cxt);
 	MemoryContextDelete(cxt);
