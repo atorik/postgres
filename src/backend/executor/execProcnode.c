@@ -456,9 +456,12 @@ ExecProcNodeFirst(PlanState *node)
 	 */
 	check_stack_depth();
 
-	/* log plan? insturment */
+	/*
+	 * If logging plan is requested, handle it first. If instrumentation is also
+	 * requested, update the wrapper accordingly after logging plan is completed.
+	 * See ExecProcNodeWithExplain().
+	 */
 	if (GetProcessLogQueryPlanInterruptActive())
-		/* 複数wrapping対策が必要? */
 		node->ExecProcNode = ExecProcNodeWithExplain;
 	/*
 	 * If instrumentation is required, change the wrapper to one that just

@@ -2905,7 +2905,10 @@ AbortTransaction(void)
 	/* Reset snapshot export state. */
 	SnapBuildResetExportedSnapshotState();
 
-	/* Reset pg_log_query_plan() related state. */
+	/*
+	 * After abort, some elements of ActiveQueryDesc are freed. To avoid
+	 * accessing them, reset ActiveQueryDesc here.
+	 */
 	ResetLogQueryPlanState();
 
 	/*
@@ -5297,7 +5300,10 @@ AbortSubTransaction(void)
 	/* Forget about any active REINDEX. */
 	ResetReindexState(s->nestingLevel);
 
-	/* Reset logical streaming state. */
+	/*
+	 * After abort, some elements of ActiveQueryDesc are freed. To avoid
+	 * accessing them, reset ActiveQueryDesc here.
+	 */
 	ResetLogicalStreamingState();
 
 	/* Reset pg_log_query_plan() related state. */

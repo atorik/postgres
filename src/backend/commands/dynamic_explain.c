@@ -21,7 +21,10 @@
 #include "storage/procarray.h"
 #include "utils/backend_status.h"
 
-/* Whether this backend is performing logging plan */
+/*
+ * True while this backend is processing a log query plan request,
+ * from the start of wrapping plan nodes until the log output is completed.
+ */
 static bool ProcessLogQueryPlanInterruptActive = false;
 
 /* Currently executing query's QueryDesc */
@@ -51,10 +54,6 @@ HandleLogQueryPlanInterrupt(void)
 void
 ResetLogQueryPlanState(void)
 {
-	/*
-	 * After abort, some elements of ActiveQueryDesc is freed. To avoid
-	 * accessing them, reset ActiveQueryDesc here.
-	 */
 	ActiveQueryDesc = NULL;
 	ProcessLogQueryPlanInterruptActive = false;
 }
@@ -84,19 +83,17 @@ WrapCustomPlanChildWithExplain(CustomScanState *css)
 }
 
 /*
- * Wrap ExecProcNode with ExecProcNodeWithExplain recursively
+ * Recursively wrap all possible ExecProcNode().
+ *
+ * Recursion is necessary because the next ExecProcNode() call may be invoked
+ * not only through the current node ('ps' parameter), but also via lefttree,
+ * righttree, subPlan, or other special child plans.
  */
 static void
 WrapExecProcNodeWithExplain(PlanState *ps)
 {
-//	/* wrapping can be done only once */
-//	if (ps->ExecProcNodeOriginal != NULL)
-//		return;
-
 	check_stack_depth();
 
-	//ps->ExecProcNodeOriginal = ps->ExecProcNode;
-	//ps->ExecProcNode = ExecProcNodeWithExplain;
 	ExecSetExecProcNode(ps, ps->ExecProcNodeReal);
 
 	if (ps->lefttree != NULL)
@@ -110,7 +107,6 @@ WrapExecProcNodeWithExplain(PlanState *ps)
 		foreach(l, ps->subPlan)
 		{
 			SubPlanState *sstate = (SubPlanState *) lfirst(l);
-
 			WrapExecProcNodeWithExplain(sstate->planstate);
 		}
 	}
@@ -234,7 +230,9 @@ UnwrapExecProcNodeWithExplain(PlanState *ps)
 }
 
 /*
- * Wrap ExecProcNode with codes which logs currently running plan
+ * Wrapper for logging currently running plan.
+ *
+ * ExecProcNode wrapper that performs logging plan of the currently running query.
  */
 TupleTableSlot *
 ExecProcNodeWithExplain(PlanState *ps)
@@ -258,7 +256,11 @@ ExecProcNodeWithExplain(PlanState *ps)
 	es->verbose = true;
 	es->signaled = true;
 
-	/* This case can happen, i.e. ExecPostprocessPlan() */
+	/*
+	 * ActiveQueryDesc is valid only during standard_ExecutorRun(). However,
+	 * ExecProcNode() can still be called afterward, such as ExecPostprocessPlan().
+	 *  To handle the case, check ActiveQueryDesc.
+	 */
 	if (ActiveQueryDesc == NULL)
 		ereport(LOG_SERVER_ONLY,
 				errmsg("backend with PID %d is finishing query",
@@ -279,8 +281,11 @@ ExecProcNodeWithExplain(PlanState *ps)
 	MemoryContextSwitchTo(old_cxt);
 	MemoryContextDelete(cxt);
 
-	/* Unwrap */
-	// ExecProcNodeWithExplain()はInstrStarNodeより先にラッピングする(See ExecProcNodeFirst())ので、instrumentが必要であればInstrStartNode()をまだ呼び出していないのならここでラッピング
+	/*
+	 * Unwrap ExecProcNode(), or wrap it for instrumentation if needed.
+	 * Since ExecProcNodeWithExplain() is wrapped ealier in ExecProcNodeFirst(),
+	 * perform instrumentation wrapping here if requied.
+	 */
 	if (ps->instrument && INSTR_TIME_IS_ZERO(ps->instrument->starttime))
 		ps->ExecProcNode = ExecProcNodeInstr;
 	else
@@ -292,19 +297,19 @@ ExecProcNodeWithExplain(PlanState *ps)
 }
 
 /*
- * Add wrapper which logs explain of the plan to ExecProcNode
+ * Perform logging plan for the currently running query.
  *
- * Since running EXPLAIN codes at any arbitrary CHECK_FOR_INTERRUPTS() is
- * unsafe, this function just wraps ExecProcNode function.
- * In this way, EXPLAIN code is only executed at the timing of ExecProcNode,
- * which seems safe.
+ * Since executing EXPLAIN-related code at an arbitrary CHECK_FOR_INTERRUPTS()
+ * point is potentially unsafe, this function wraps the ExecProcNode() to log
+ * the query plan. This ensures that EXPLAIN code is executed only during
+ * ExecProcNode(), where it is considered safe.
  */
 void
 ProcessLogQueryPlanInterrupt(void)
 {
 	LogQueryPlanPending = false;
 
-	/* Cannot re-enter プランを実際にログ出力するまではreentrant不可 */
+	/* Prevent re-entrance until the plan has been logged and the unwrapping has done */
 	if (ProcessLogQueryPlanInterruptActive)
 		return;
 
@@ -321,9 +326,7 @@ ProcessLogQueryPlanInterrupt(void)
 		ProcessLogQueryPlanInterruptActive = false;
 		return;
 	}
-	/* ExecProcNodeはRealのままにする。ExecProcNode */
 	WrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
-	//ExecSetExecProcNode(ActiveQueryDesc->planstate, ActiveQueryDesc->planstate->ExecProcNodeReal);
 }
 
 bool
