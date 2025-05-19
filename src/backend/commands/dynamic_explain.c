@@ -327,14 +327,14 @@ GetProcessLogQueryPlanInterruptActive(void)
 	return ProcessLogQueryPlanInterruptActive;
 }
 
-QueryDesc *
+inline QueryDesc *
 GetActiveQueryDesc(void)
 {
 	return ActiveQueryDesc;
 }
 
 void
-SetActiveQueryDesc(QueryDesc *queryDesc)
+inline SetActiveQueryDesc(QueryDesc *queryDesc)
 {
 	ActiveQueryDesc = queryDesc;
 }
