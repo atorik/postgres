@@ -86,8 +86,8 @@ WrapCustomPlanChildWithExplain(CustomScanState *css)
  * Recursively wrap all possible ExecProcNode().
  *
  * Recursion is necessary because the next ExecProcNode() call may be invoked
- * not only through the current node ('ps' parameter), but also via lefttree,
- * righttree, subPlan, or other special child plans.
+ * not only through the current node, but also via lefttree, righttree, subPlan,
+ * or other special child plans.
  */
 static void
 WrapExecProcNodeWithExplain(PlanState *ps)
@@ -166,17 +166,16 @@ UnwrapCustomPlanChildWithExplain(CustomScanState *css)
 }
 
 /*
- * Unwrap ExecProcNode with ExecProcNodeWithExplain recursively
+ * Recursively unwrap all possible ExecProcNode().
+ *
+ * Unwrap ExecProcNode() or wrap it for instrumentation if needed.
+ * Since ExecProcNodeWithExplain() is wrapped ealier in ExecProcNodeFirst(),
+ * perform instrumentation wrapping in this function.
  */
 static void
 UnwrapExecProcNodeWithExplain(PlanState *ps)
 {
-//	Assert(ps->ExecProcNodeOriginal != NULL);
-
 	check_stack_depth();
-
-	// ps->ExecProcNode = ps->ExecProcNodeOriginal;
-	// ps->ExecProcNodeOriginal = NULL;
 
 	if (ps->instrument && INSTR_TIME_IS_ZERO(ps->instrument->starttime))
 		ps->ExecProcNode = ExecProcNodeInstr;
@@ -259,7 +258,7 @@ ExecProcNodeWithExplain(PlanState *ps)
 	/*
 	 * ActiveQueryDesc is valid only during standard_ExecutorRun(). However,
 	 * ExecProcNode() can still be called afterward, such as ExecPostprocessPlan().
-	 *  To handle the case, check ActiveQueryDesc.
+	 * To handle the case, check ActiveQueryDesc.
 	 */
 	if (ActiveQueryDesc == NULL)
 		ereport(LOG_SERVER_ONLY,
@@ -281,15 +280,7 @@ ExecProcNodeWithExplain(PlanState *ps)
 	MemoryContextSwitchTo(old_cxt);
 	MemoryContextDelete(cxt);
 
-	/*
-	 * Unwrap ExecProcNode(), or wrap it for instrumentation if needed.
-	 * Since ExecProcNodeWithExplain() is wrapped ealier in ExecProcNodeFirst(),
-	 * perform instrumentation wrapping here if requied.
-	 */
-	if (ps->instrument && INSTR_TIME_IS_ZERO(ps->instrument->starttime))
-		ps->ExecProcNode = ExecProcNodeInstr;
-	else
-		ps->ExecProcNode = ps->ExecProcNodeReal;
+	UnwrapExecProcNodeWithExplain(ps);
 
 	ProcessLogQueryPlanInterruptActive = false;
 
@@ -300,8 +291,8 @@ ExecProcNodeWithExplain(PlanState *ps)
  * Perform logging plan for the currently running query.
  *
  * Since executing EXPLAIN-related code at an arbitrary CHECK_FOR_INTERRUPTS()
- * point is potentially unsafe, this function wraps the ExecProcNode() to log
- * the query plan. This ensures that EXPLAIN code is executed only during
+ * point is potentially unsafe, this function just wraps the ExecProcNode() to
+ * log the query plan. This ensures that EXPLAIN code is executed only during
  * ExecProcNode(), where it is considered safe.
  */
 void
@@ -326,6 +317,7 @@ ProcessLogQueryPlanInterrupt(void)
 		ProcessLogQueryPlanInterruptActive = false;
 		return;
 	}
+
 	WrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
 }
 

@@ -5300,13 +5300,13 @@ AbortSubTransaction(void)
 	/* Forget about any active REINDEX. */
 	ResetReindexState(s->nestingLevel);
 
+	/* Reset logical streaming state. */
+	ResetLogicalStreamingState();
+
 	/*
 	 * After abort, some elements of ActiveQueryDesc are freed. To avoid
 	 * accessing them, reset ActiveQueryDesc here.
 	 */
-	ResetLogicalStreamingState();
-
-	/* Reset pg_log_query_plan() related state. */
 	ResetLogQueryPlanState();
 
 	/*
