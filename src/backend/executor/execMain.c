@@ -465,6 +465,9 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 
 	MemoryContextSwitchTo(oldcontext);
 	SetActiveQueryDesc(oldActiveQueryDesc);
+
+	/* LogQueryPlan()が呼ばれる前に終了した場合に備え、ProcessLogMemoryContextInterruptを初期化 */
+	ResetProcessLogQueryPlanInterruptActive();
 }
 
 /* ----------------------------------------------------------------

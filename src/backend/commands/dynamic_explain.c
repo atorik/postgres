@@ -58,6 +58,12 @@ ResetLogQueryPlanState(void)
 	ProcessLogQueryPlanInterruptActive = false;
 }
 
+void
+ResetProcessLogQueryPlanInterruptActive(void)
+{
+	ProcessLogQueryPlanInterruptActive = false;
+}
+
 /*
  * Wrap array of PlanState ExecProcNodes with ExecProcNodeWithExplain
  */
@@ -287,6 +293,60 @@ ExecProcNodeWithExplain(PlanState *ps)
 	return ps->ExecProcNode(ps);
 }
 
+void
+LogQueryPlan(void)
+{
+	ExplainState *es;
+	MemoryContext cxt;
+	MemoryContext old_cxt;
+
+	check_stack_depth();
+
+	cxt = AllocSetContextCreate(CurrentMemoryContext,
+								"log_query_plan temporary context",
+								ALLOCSET_DEFAULT_SIZES);
+
+	old_cxt = MemoryContextSwitchTo(cxt);
+
+	es = NewExplainState();
+
+	es->format = EXPLAIN_FORMAT_TEXT;
+	es->settings = true;
+	es->verbose = true;
+	es->signaled = true;
+
+	/*
+	 * ActiveQueryDesc is valid only during standard_ExecutorRun(). However,
+	 * ExecProcNode() can still be called afterward, such as ExecPostprocessPlan().
+	 * To handle the case, check ActiveQueryDesc.
+	 */
+	if (ActiveQueryDesc == NULL)
+		ereport(LOG_SERVER_ONLY,
+				errmsg("backend with PID %d is finishing query",
+					   MyProcPid),
+				errhidestmt(true),
+				errhidecontext(true));
+	else
+	{
+		ExplainStringAssemble(es, ActiveQueryDesc, es->format, 0, -1);
+
+		ereport(LOG_SERVER_ONLY,
+				errmsg("query plan running on backend with PID %d is:\n%s",
+					   MyProcPid, es->str->data),
+				errhidestmt(true),
+				errhidecontext(true));
+	}
+
+	MemoryContextSwitchTo(old_cxt);
+	MemoryContextDelete(cxt);
+
+//	UnwrapExecProcNodeWithExplain(ps);
+//
+	ProcessLogQueryPlanInterruptActive = false;
+//
+//	return ps->ExecProcNode(ps);
+}
+
 /*
  * Perform logging plan for the currently running query.
  *
@@ -319,6 +379,7 @@ ProcessLogQueryPlanInterrupt(void)
 	}
 
 	WrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
+	//ExecSetExecProcNode(ActiveQueryDesc->planstate, ActiveQueryDesc->planstate->ExecProcNodeReal);
 }
 
 bool
