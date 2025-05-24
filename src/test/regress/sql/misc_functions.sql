@@ -144,7 +144,11 @@ REVOKE EXECUTE ON FUNCTION pg_log_backend_memory_contexts(integer)
   FROM regress_log_function;
 
 -- pg_log_query_plan()
-SELECT pg_log_query_plan(pg_backend_pid());
+-- Note that we're using a slightly more complex query here because
+-- a simple 'SELECT pg_log_query_plan(pg_backend_pid())' would finish
+-- before it reaches the code path that actually outputs the plan.
+
+SELECT result FROM (SELECT pg_log_query_plan(pg_backend_pid())) result;
 
 SELECT has_function_privilege('regress_log_function',
   'pg_log_query_plan(integer)', 'EXECUTE'); -- no

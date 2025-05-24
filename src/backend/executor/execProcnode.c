@@ -121,6 +121,7 @@
 #include "nodes/nodeFuncs.h"
 
 static TupleTableSlot *ExecProcNodeFirst(PlanState *node);
+static TupleTableSlot *ExecProcNodeInstr(PlanState *node);
 static bool ExecShutdownNode_walker(PlanState *node, void *context);
 
 
@@ -431,7 +432,8 @@ ExecSetExecProcNode(PlanState *node, ExecProcNodeMtd function)
 {
 	/*
 	 * Add a wrapper around the ExecProcNode callback that checks stack depth
-	 * during the first execution and maybe adds an instrumentation wrapper.
+	 * and query logging request during the execution and maybe adds an
+	 * instrumentation wrapper.
 	 * When the callback is changed after execution has already begun that
 	 * means we'll superfluously execute ExecProcNodeFirst, but that seems ok.
 	 */
@@ -472,13 +474,6 @@ ExecProcNodeFirst(PlanState *node)
 	if (GetProcessLogQueryPlanInterruptActive())
 		LogQueryPlan();
 
-//	/*
-//	 * If logging plan is requested, handle it first. If instrumentation is also
-//	 * requested, update the wrapper accordingly after logging plan is completed.
-//	 * See ExecProcNodeWithExplain().
-//	 */
-//	if (GetProcessLogQueryPlanInterruptActive())
-//		node->ExecProcNode = ExecProcNodeWithExplain;
 	/*
 	 * If instrumentation is required, change the wrapper to one that just
 	 * does instrumentation.  Otherwise we can dispense with all wrappers and
@@ -498,7 +493,7 @@ ExecProcNodeFirst(PlanState *node)
  * this a separate function, we avoid overhead in the normal case where
  * no instrumentation is wanted.
  */
-TupleTableSlot *
+static TupleTableSlot *
 ExecProcNodeInstr(PlanState *node)
 {
 	TupleTableSlot *result;
@@ -567,6 +562,87 @@ MultiExecProcNode(PlanState *node)
 	}
 
 	return result;
+}
+
+/*
+ * Wrap array of PlanState ExecProcNode with ExecProcNodeFirst.
+ */
+static void
+ExecSetExecProcNodesRecurse(PlanState **planstates, int nplans)
+{
+	int			i;
+
+	for (i = 0; i < nplans; i++)
+		ExecSetExecProcNodeRecurse(planstates[i]);
+}
+
+/*
+ * Wrap CustomScanState children's ExecProcNode with ExecProcNodeFirst.
+ */
+static void
+CustomScanStateExecSetExecProcNodes(CustomScanState *css)
+{
+	ListCell   *cell;
+
+	foreach(cell, css->custom_ps)
+		ExecSetExecProcNodeRecurse((PlanState *) lfirst(cell));
+}
+
+/*
+ * Recursively wrap all the underlying ExecProcNode with ExecProcNodeFirst.
+ *
+ * Recursion is usually necessary because the next ExecProcNode() call may be
+ * invoked not only through the current node, but also via lefttree, righttree,
+ * subPlan, or other special child plans.
+ */
+void
+ExecSetExecProcNodeRecurse(PlanState *ps)
+{
+	ExecSetExecProcNode(ps, ps->ExecProcNodeReal);
+
+	if (ps->lefttree != NULL)
+		ExecSetExecProcNodeRecurse(ps->lefttree);
+	if (ps->righttree != NULL)
+		ExecSetExecProcNodeRecurse(ps->righttree);
+	if (ps->subPlan != NULL)
+	{
+		ListCell   *l;
+
+		foreach(l, ps->subPlan)
+		{
+			SubPlanState *sstate = (SubPlanState *) lfirst(l);
+			ExecSetExecProcNodeRecurse(sstate->planstate);
+		}
+	}
+
+	/* special child plans */
+	switch (nodeTag(ps->plan))
+	{
+		case T_Append:
+			ExecSetExecProcNodesRecurse(((AppendState *) ps)->appendplans,
+									  ((AppendState *) ps)->as_nplans);
+			break;
+		case T_MergeAppend:
+			ExecSetExecProcNodesRecurse(((MergeAppendState *) ps)->mergeplans,
+									  ((MergeAppendState *) ps)->ms_nplans);
+			break;
+		case T_BitmapAnd:
+			ExecSetExecProcNodesRecurse(((BitmapAndState *) ps)->bitmapplans,
+									  ((BitmapAndState *) ps)->nplans);
+			break;
+		case T_BitmapOr:
+			ExecSetExecProcNodesRecurse(((BitmapOrState *) ps)->bitmapplans,
+									  ((BitmapOrState *) ps)->nplans);
+			break;
+		case T_SubqueryScan:
+			ExecSetExecProcNodeRecurse(((SubqueryScanState *) ps)->subplan);
+			break;
+		case T_CustomScan:
+			CustomScanStateExecSetExecProcNodes((CustomScanState *) ps);
+			break;
+		default:
+			break;
+	}
 }
 
 
