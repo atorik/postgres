@@ -692,9 +692,6 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 	if (CheckProcSignal(PROCSIG_LOG_MEMORY_CONTEXT))
 		HandleLogMemoryContextInterrupt();
 
-	if (CheckProcSignal(PROCSIG_GET_MEMORY_CONTEXT))
-		HandleGetMemoryContextInterrupt();
-
 	if (CheckProcSignal(PROCSIG_LOG_QUERY_PLAN))
 		HandleLogQueryPlanInterrupt();
 

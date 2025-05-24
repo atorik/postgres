@@ -140,7 +140,7 @@
      An example of what this file might look like is:
 <programlisting>
 # This is a comment
-log_connections = yes
+log_connections = all
 log_destination = 'syslog'
 search_path = '"$user", public'
 shared_buffers = 128MB
@@ -337,7 +337,7 @@ UPDATE pg_settings SET setting = reset_val WHERE name = 'configuration_parameter
        <option>-c name=value</option> command-line parameter, or its equivalent
        <option>--name=value</option> variation.  For example,
 <programlisting>
-postgres -c log_connections=yes --log-destination='syslog'
+postgres -c log_connections=all --log-destination='syslog'
 </programlisting>
        Settings provided in this way override those set via
        <filename>postgresql.conf</filename> or <command>ALTER SYSTEM</command>,
@@ -1151,6 +1151,22 @@ include_dir 'conf.d'
         encrypted with SCRAM-SHA-256 as the iteration count is fixed at the
         time of encryption. In order to make use of a changed value, a new
         password must be set.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-md5-password-warnings" xreflabel="md5_password_warnings">
+      <term><varname>md5_password_warnings</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>md5_password_warnings</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Controls whether a <literal>WARNING</literal> about MD5 password
+        deprecation is produced when a <command>CREATE ROLE</command> or
+        <command>ALTER ROLE</command> statement sets an MD5-encrypted password.
+        The default value is <literal>on</literal>.
        </para>
       </listitem>
      </varlistentry>
@@ -8114,22 +8130,6 @@ log_line_prefix = '%m [%p] %q%u@%d/%a '
         See <xref linkend="datatype-timezones"/> for more information.
         This parameter can only be set in the <filename>postgresql.conf</filename>
         file or on the server command line.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry id="guc-md5-password-warnings" xreflabel="md5_password_warnings">
-      <term><varname>md5_password_warnings</varname> (<type>boolean</type>)
-      <indexterm>
-       <primary><varname>md5_password_warnings</varname> configuration parameter</primary>
-      </indexterm>
-      </term>
-      <listitem>
-       <para>
-        Controls whether a <literal>WARNING</literal> about MD5 password
-        deprecation is produced when a <command>CREATE ROLE</command> or
-        <command>ALTER ROLE</command> statement sets an MD5-encrypted password.
-        The default value is <literal>on</literal>.
        </para>
       </listitem>
      </varlistentry>

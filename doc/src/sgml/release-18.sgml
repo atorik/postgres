@@ -6,7 +6,7 @@
 
   <formalpara>
    <title>Release date:</title>
-   <para>2025-??-??, CURRENT AS OF 2025-05-01</para>
+   <para>2025-??-??, CURRENT AS OF 2025-05-23</para>
   </formalpara>
 
   <sect2 id="release-18-highlights">
@@ -459,8 +459,6 @@ Author: Peter Geoghegan <pg@bowt.ie>
 2025-04-04 [92fe23d93] Add nbtree skip scan optimization.
 Author: Peter Geoghegan <pg@bowt.ie>
 2025-04-04 [8a510275d] Further optimize nbtree search scan key comparisons.
-Author: Peter Geoghegan <pg@bowt.ie>
-2025-04-04 [8a510275d] Further optimize nbtree search scan key comparisons.
 -->
 
 <listitem>
@@ -468,11 +466,11 @@ Author: Peter Geoghegan <pg@bowt.ie>
 Allow skip scans of btree indexes (Peter Geoghegan)
 <ulink url="&commit_baseurl;92fe23d93">&sect;</ulink>
 <ulink url="&commit_baseurl;8a510275d">&sect;</ulink>
-<ulink url="&commit_baseurl;8a510275d">&sect;</ulink>
 </para>
 
 <para>
-This is effective if the earlier non-referenced columns contain few unique values.
+This allows multi-column btree indexes to be used by queries that only
+equality-reference the second or later indexed columns.
 </para>
 </listitem>
 
@@ -585,27 +583,6 @@ Author: Tomas Vondra <tomas.vondra@postgresql.org>
 <para>
 Improve the locking performance of queries that access many relations (Tomas Vondra)
 <ulink url="&commit_baseurl;c4d5cb71d">&sect;</ulink>
-</para>
-</listitem>
-
-<!--
-Author: Amit Langote <amitlan@postgresql.org>
-2025-01-30 [bb3ec16e1] Move PartitionPruneInfo out of plan nodes into PlannedSt
-Author: Amit Langote <amitlan@postgresql.org>
-2025-01-31 [d47cbf474] Perform runtime initial pruning outside ExecInitNode()
-Author: Amit Langote <amitlan@postgresql.org>
-2025-02-07 [cbc127917] Track unpruned relids to avoid processing pruned relatio
-Author: Amit Langote <amitlan@postgresql.org>
-2025-02-20 [525392d57] Don't lock partitions pruned by initial pruning
--->
-
-<listitem>
-<para>
-Avoid the locking of pruned partitions during execution (Amit Langote)
-<ulink url="&commit_baseurl;bb3ec16e1">&sect;</ulink>
-<ulink url="&commit_baseurl;d47cbf474">&sect;</ulink>
-<ulink url="&commit_baseurl;cbc127917">&sect;</ulink>
-<ulink url="&commit_baseurl;525392d57">&sect;</ulink>
 </para>
 </listitem>
 
@@ -985,21 +962,6 @@ This is true even if the tables in different schemas have different column names
 </listitem>
 
 <!--
-Author: Daniel Gustafsson <dgustafsson@postgresql.org>
-2025-04-08 [042a66291] Add function to get memory context stats for processes
-Author: Daniel Gustafsson <dgustafsson@postgresql.org>
-2025-04-08 [c57971034] Rename argument in pg_get_process_memory_contexts().
--->
-
-<listitem>
-<para>
-Add function pg_get_process_memory_contexts() to report process memory context statistics (Rahila Syed)
-<ulink url="&commit_baseurl;042a66291">&sect;</ulink>
-<ulink url="&commit_baseurl;c57971034">&sect;</ulink>
-</para>
-</listitem>
-
-<!--
 Author: David Rowley <drowley@postgresql.org>
 2024-07-01 [12227a1d5] Add context type field to pg_backend_memory_contexts
 -->
@@ -1250,12 +1212,15 @@ This is useful for operating system configuration.
 <!--
 Author: Peter Eisentraut <peter@eisentraut.org>
 2025-03-19 [4f7f7b037] extension_control_path
+Author: Peter Eisentraut <peter@eisentraut.org>
+2025-05-02 [81eaaa2c4] Make "directory" setting work with extension_control_pat
 -->
 
 <listitem>
 <para>
 Add server variable extension_control_path to specify the location of extension control files (Peter Eisentraut, Matheus Alcantara)
 <ulink url="&commit_baseurl;4f7f7b037">&sect;</ulink>
+<ulink url="&commit_baseurl;81eaaa2c4">&sect;</ulink>
 </para>
 </listitem>
 
@@ -1339,7 +1304,7 @@ Author: Amit Kapila <akapila@postgresql.org>
 
 <listitem>
 <para>
-Change the default CREATE SUBSCRIPTION streaming option from "off" to "parallel" (Hayato Kuroda, Masahiko Sawada, Peter Smith, Amit Kapila)
+Change the default CREATE SUBSCRIPTION streaming option from "off" to "parallel" (Vignesh C)
 <ulink url="&commit_baseurl;1bf1140be">&sect;</ulink>
 </para>
 </listitem>
@@ -2620,12 +2585,15 @@ Add pg_dump options --with-schema, --with-data, and --with-statistics (Jeff Davi
 <!--
 Author: Nathan Bossart <nathan@postgresql.org>
 2025-03-25 [9c49f0e8c] pg_dump: Add - -sequence-data.
+Author: Nathan Bossart <nathan@postgresql.org>
+2025-05-07 [acea3fc49] pg_dumpall: Add - -sequence-data.
 -->
 
 <listitem>
 <para>
-Add pg_dump option --sequence-data to dump sequence data that would normally be excluded (Nathan Bossart)
+Add pg_dump and pg_dumpall option --sequence-data to dump sequence data that would normally be excluded (Nathan Bossart)
 <ulink url="&commit_baseurl;9c49f0e8c">&sect;</ulink>
+<ulink url="&commit_baseurl;acea3fc49">&sect;</ulink>
 </para>
 </listitem>
 
@@ -2868,6 +2836,18 @@ Separate the loading and running of injection points (Michael Paquier, Heikki Li
 
 <para>
 Injection points can now be created, but not run, via INJECTION_POINT_LOAD(), and such injection points can be run via INJECTION_POINT_CACHED().
+</para>
+</listitem>
+
+<!--
+Author: Michael Paquier <michael@paquier.xyz>
+2025-05-10 [371f2db8b] Add support for runtime arguments in injection points
+-->
+
+<listitem>
+<para>
+Support runtime arguments in injection points (Michael Paquier)
+<ulink url="&commit_baseurl;371f2db8b">&sect;</ulink>
 </para>
 </listitem>
 
