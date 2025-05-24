@@ -93,6 +93,7 @@ LogQueryPlan(void)
 	 * To handle the case, check ActiveQueryDesc.
 	 */
 	if (ActiveQueryDesc == NULL)
+	{
 		ProcessLogQueryPlanInterruptActive = false;
 
 		ereport(LOG_SERVER_ONLY,
@@ -100,6 +101,7 @@ LogQueryPlan(void)
 					   MyProcPid),
 				errhidestmt(true),
 				errhidecontext(true));
+	}
 
 	ExplainStringAssemble(es, ActiveQueryDesc, es->format, 0, -1);
 
