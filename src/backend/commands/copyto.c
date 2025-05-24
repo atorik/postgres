@@ -592,6 +592,10 @@ EndCopy(CopyToState cstate)
 	}
 	else
 	{
+	#if defined(USE_POSIX_FADVISE) && defined(POSIX_FADV_DONTNEED)
+		if (cstate->filename != NULL)
+			posix_fadvise(fileno(cstate->copy_file), 0, 0, POSIX_FADV_DONTNEED);
+	#endif
 		if (cstate->filename != NULL && FreeFile(cstate->copy_file))
 			ereport(ERROR,
 					(errcode_for_file_access(),
