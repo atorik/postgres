@@ -471,7 +471,8 @@ ExecProcNodeFirst(PlanState *node)
 	 * that when entering a node the state will be sufficiently consistent
 	 * that trying to print the plan makes sense.
 	 */
-	if (GetProcessLogQueryPlanInterruptActive())
+//	if (GetProcessLogQueryPlanInterruptActive())
+	if (LogQueryPlanPending)
 		LogQueryPlan();
 
 	/*

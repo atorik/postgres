@@ -402,7 +402,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	 * Ensure ProcessLogQueryPlanInterruptActive is initialized in case
 	 * LogQueryPlan() exits before being called.
 	 */
-	ResetProcessLogQueryPlanInterruptActive();
+	LogQueryPlanPending = false;
 }
 
 /* ----------------------------------------------------------------

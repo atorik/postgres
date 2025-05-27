@@ -21,12 +21,6 @@
 #include "storage/procarray.h"
 #include "utils/backend_status.h"
 
-/*
- * True while this backend is processing a log query plan request,
- * from the start of wrapping plan nodes until the log output is completed.
- */
-static bool ProcessLogQueryPlanInterruptActive = false;
-
 /* Currently executing query's QueryDesc */
 static QueryDesc *ActiveQueryDesc = NULL;
 
@@ -52,16 +46,7 @@ void
 ResetLogQueryPlanState(void)
 {
 	ActiveQueryDesc = NULL;
-	ProcessLogQueryPlanInterruptActive = false;
-}
-
-/*
- * Reset ProcessLogQueryPlanInterruptActive.
- */
-void
-ResetProcessLogQueryPlanInterruptActive(void)
-{
-	ProcessLogQueryPlanInterruptActive = false;
+	LogQueryPlanPending = false;
 }
 
 /*
@@ -94,7 +79,7 @@ LogQueryPlan(void)
 	 */
 	if (ActiveQueryDesc == NULL)
 	{
-		ProcessLogQueryPlanInterruptActive = false;
+		LogQueryPlanPending = false;
 
 		ereport(LOG_SERVER_ONLY,
 				errmsg("backend with PID %d is finishing query",
@@ -114,7 +99,7 @@ LogQueryPlan(void)
 	MemoryContextSwitchTo(old_cxt);
 	MemoryContextDelete(cxt);
 
-	ProcessLogQueryPlanInterruptActive = false;
+	LogQueryPlanPending = false;
 }
 
 /*
@@ -129,17 +114,6 @@ LogQueryPlan(void)
 void
 ProcessLogQueryPlanInterrupt(void)
 {
-	LogQueryPlanPending = false;
-
-	/*
-	 * Prevent re-entrance until the plan has been logged and the unwrapping
-	 * has done
-	 */
-	if (ProcessLogQueryPlanInterruptActive)
-		return;
-
-	ProcessLogQueryPlanInterruptActive = true;
-
 	if (ActiveQueryDesc == NULL)
 	{
 		ereport(LOG_SERVER_ONLY,
@@ -148,7 +122,7 @@ ProcessLogQueryPlanInterrupt(void)
 				errhidestmt(true),
 				errhidecontext(true));
 
-		ProcessLogQueryPlanInterruptActive = false;
+		LogQueryPlanPending = false;
 		return;
 	}
 
@@ -157,16 +131,7 @@ ProcessLogQueryPlanInterrupt(void)
 }
 
 /*
- * Returns ProcessLogQueryPlanInterruptActive.
- */
-bool
-GetProcessLogQueryPlanInterruptActive(void)
-{
-	return ProcessLogQueryPlanInterruptActive;
-}
-
-/*
- * Returns ProcessLogQueryPlanInterruptActive.
+ * Returns ActiveQueryDesc.
  */
 QueryDesc *
 GetActiveQueryDesc(void)

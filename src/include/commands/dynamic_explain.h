@@ -20,7 +20,6 @@ extern void HandleLogQueryPlanInterrupt(void);
 extern void ResetLogQueryPlanState(void);
 extern void ResetProcessLogQueryPlanInterruptActive(void);
 extern void ProcessLogQueryPlanInterrupt(void);
-extern bool GetProcessLogQueryPlanInterruptActive(void);
 extern QueryDesc *GetActiveQueryDesc(void);
 extern void SetActiveQueryDesc(QueryDesc *queryDesc);
 extern TupleTableSlot *ExecProcNodeWithExplain(PlanState *ps);
