@@ -433,9 +433,9 @@ ExecSetExecProcNode(PlanState *node, ExecProcNodeMtd function)
 	/*
 	 * Add a wrapper around the ExecProcNode callback that checks stack depth
 	 * and query logging request during the execution and maybe adds an
-	 * instrumentation wrapper.
-	 * When the callback is changed after execution has already begun that
-	 * means we'll superfluously execute ExecProcNodeFirst, but that seems ok.
+	 * instrumentation wrapper. When the callback is changed after execution
+	 * has already begun that means we'll superfluously execute
+	 * ExecProcNodeFirst, but that seems ok.
 	 */
 	node->ExecProcNodeReal = function;
 	node->ExecProcNode = ExecProcNodeFirst;
@@ -458,19 +458,19 @@ ExecProcNodeFirst(PlanState *node)
 {
 	/*
 	 * Perform a stack depth check.  We don't want to do this all the time
-	 * because it turns out to not be cheap on some common architectures
-	 * (eg. x86).  This relies on the assumption that ExecProcNode calls for
-	 * a given plan node will always be made at roughly the same stack depth.
+	 * because it turns out to not be cheap on some common architectures (eg.
+	 * x86).  This relies on the assumption that ExecProcNode calls for a
+	 * given plan node will always be made at roughly the same stack depth.
 	 */
 	check_stack_depth();
 
 	/*
-	* If we have been asked to print the query plan, do that now. We dare
-	* not try to do this directly from CHECK_FOR_INTERRUPTS() because we
-	* don't really know what the executor state is at that point, but we
-	* assume that when entering a node the state will be sufficiently
-	* consistent that trying to print the plan makes sense.
-	*/
+	 * If we have been asked to print the query plan, do that now. We dare not
+	 * try to do this directly from CHECK_FOR_INTERRUPTS() because we don't
+	 * really know what the executor state is at that point, but we assume
+	 * that when entering a node the state will be sufficiently consistent
+	 * that trying to print the plan makes sense.
+	 */
 	if (GetProcessLogQueryPlanInterruptActive())
 		LogQueryPlan();
 
@@ -611,6 +611,7 @@ ExecSetExecProcNodeRecurse(PlanState *ps)
 		foreach(l, ps->subPlan)
 		{
 			SubPlanState *sstate = (SubPlanState *) lfirst(l);
+
 			ExecSetExecProcNodeRecurse(sstate->planstate);
 		}
 	}
@@ -620,19 +621,19 @@ ExecSetExecProcNodeRecurse(PlanState *ps)
 	{
 		case T_Append:
 			ExecSetExecProcNodesRecurse(((AppendState *) ps)->appendplans,
-									  ((AppendState *) ps)->as_nplans);
+										((AppendState *) ps)->as_nplans);
 			break;
 		case T_MergeAppend:
 			ExecSetExecProcNodesRecurse(((MergeAppendState *) ps)->mergeplans,
-									  ((MergeAppendState *) ps)->ms_nplans);
+										((MergeAppendState *) ps)->ms_nplans);
 			break;
 		case T_BitmapAnd:
 			ExecSetExecProcNodesRecurse(((BitmapAndState *) ps)->bitmapplans,
-									  ((BitmapAndState *) ps)->nplans);
+										((BitmapAndState *) ps)->nplans);
 			break;
 		case T_BitmapOr:
 			ExecSetExecProcNodesRecurse(((BitmapOrState *) ps)->bitmapplans,
-									  ((BitmapOrState *) ps)->nplans);
+										((BitmapOrState *) ps)->nplans);
 			break;
 		case T_SubqueryScan:
 			ExecSetExecProcNodeRecurse(((SubqueryScanState *) ps)->subplan);
