@@ -89,8 +89,8 @@ LogQueryPlan(void)
 
 	/*
 	 * ActiveQueryDesc is valid only during standard_ExecutorRun(). However,
-	 * ExecProcNode can be called afterward(i.e., ExecPostprocessPlan)
-	 * To handle the case, check ActiveQueryDesc.
+	 * ExecProcNode can be called afterward(i.e., ExecPostprocessPlan) To
+	 * handle the case, check ActiveQueryDesc.
 	 */
 	if (ActiveQueryDesc == NULL)
 	{
@@ -131,7 +131,10 @@ ProcessLogQueryPlanInterrupt(void)
 {
 	LogQueryPlanPending = false;
 
-	/* Prevent re-entrance until the plan has been logged and the unwrapping has done */
+	/*
+	 * Prevent re-entrance until the plan has been logged and the unwrapping
+	 * has done
+	 */
 	if (ProcessLogQueryPlanInterruptActive)
 		return;
 
@@ -149,6 +152,7 @@ ProcessLogQueryPlanInterrupt(void)
 		return;
 	}
 
+	/* Wrap ExecProcNode */
 	ExecSetExecProcNodeRecurse(ActiveQueryDesc->planstate);
 }
 
