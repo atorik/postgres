@@ -399,10 +399,9 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	SetActiveQueryDesc(oldActiveQueryDesc);
 
 	/*
-	 * Ensure LogQueryPlanPending is initialized in case there was no time
-	 * for logging the plan.
-	 * Othewise plan will be logged at the next query execution on the same
-	 * session.
+	 * Ensure LogQueryPlanPending is initialized in case there was no time for
+	 * logging the plan. Othewise plan will be logged at the next query
+	 * execution on the same session.
 	 */
 	LogQueryPlanPending = false;
 }

@@ -471,7 +471,6 @@ ExecProcNodeFirst(PlanState *node)
 	 * that when entering a node the state will be sufficiently consistent
 	 * that trying to print the plan makes sense.
 	 */
-//	if (GetProcessLogQueryPlanInterruptActive())
 	if (LogQueryPlanPending)
 		LogQueryPlan();
 
@@ -569,7 +568,7 @@ MultiExecProcNode(PlanState *node)
  * Wrap array of PlanState ExecProcNode with ExecProcNodeFirst.
  */
 static void
-ExecSetExecProcNodesRecurse(PlanState **planstates, int nplans)
+ExecSetExecProcNodeArray(PlanState **planstates, int nplans)
 {
 	int			i;
 
@@ -581,7 +580,7 @@ ExecSetExecProcNodesRecurse(PlanState **planstates, int nplans)
  * Wrap CustomScanState children's ExecProcNode with ExecProcNodeFirst.
  */
 static void
-CustomScanStateExecSetExecProcNodes(CustomScanState *css)
+CSSChildExecSetExecProcNodeArray(CustomScanState *css)
 {
 	ListCell   *cell;
 
@@ -621,26 +620,26 @@ ExecSetExecProcNodeRecurse(PlanState *ps)
 	switch (nodeTag(ps->plan))
 	{
 		case T_Append:
-			ExecSetExecProcNodesRecurse(((AppendState *) ps)->appendplans,
-										((AppendState *) ps)->as_nplans);
+			ExecSetExecProcNodeArray(((AppendState *) ps)->appendplans,
+									 ((AppendState *) ps)->as_nplans);
 			break;
 		case T_MergeAppend:
-			ExecSetExecProcNodesRecurse(((MergeAppendState *) ps)->mergeplans,
-										((MergeAppendState *) ps)->ms_nplans);
+			ExecSetExecProcNodeArray(((MergeAppendState *) ps)->mergeplans,
+									 ((MergeAppendState *) ps)->ms_nplans);
 			break;
 		case T_BitmapAnd:
-			ExecSetExecProcNodesRecurse(((BitmapAndState *) ps)->bitmapplans,
-										((BitmapAndState *) ps)->nplans);
+			ExecSetExecProcNodeArray(((BitmapAndState *) ps)->bitmapplans,
+									 ((BitmapAndState *) ps)->nplans);
 			break;
 		case T_BitmapOr:
-			ExecSetExecProcNodesRecurse(((BitmapOrState *) ps)->bitmapplans,
-										((BitmapOrState *) ps)->nplans);
+			ExecSetExecProcNodeArray(((BitmapOrState *) ps)->bitmapplans,
+									 ((BitmapOrState *) ps)->nplans);
 			break;
 		case T_SubqueryScan:
 			ExecSetExecProcNodeRecurse(((SubqueryScanState *) ps)->subplan);
 			break;
 		case T_CustomScan:
-			CustomScanStateExecSetExecProcNodes((CustomScanState *) ps);
+			CSSChildExecSetExecProcNodeArray((CustomScanState *) ps);
 			break;
 		default:
 			break;
