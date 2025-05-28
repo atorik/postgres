@@ -28847,14 +28847,16 @@ LOG:  query plan running on backend with PID 201116 is:
         Settings: work_mem = '1MB'
         Query Identifier: 8621255546560739680
 </screen>
-    Note that when the target is executing nested statements(statements executed
+    When the target is executing nested statements(statements executed
     inside a function), only the innermost query plan is logged.
-    Note that logging plan may take some time, as it occurs when
-    the plan node is executed. For example, when a query is
-    running <function>pg_sleep</function>, the plan will not be
-    logged until the function execution completes.
+    Logging plan may take some time, as it occurs when the plan node is
+    executed. For example, when a query is running <function>pg_sleep</function>,
+    the plan will not be logged until the function execution completes.
     Similarly, when a query is running under the extended query
     protocol, the plan is logged only during the execute step.
+    <function>pg_log_query_plan()</function> may return <literal>true</literal>
+    even if no plan is actually logged, when the query is already about to
+    finish and the plan logging request comes too late.
    </para>
 
   </sect2>

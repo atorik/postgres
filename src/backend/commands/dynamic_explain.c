@@ -73,8 +73,8 @@ LogQueryPlan(void)
 	es->signaled = true;
 
 	/*
-	 * ActiveQueryDesc is valid only during standard_ExecutorRun(). However,
-	 * ExecProcNode can be called afterward(i.e., ExecPostprocessPlan) To
+	 * ActiveQueryDesc is valid only during standard_ExecutorRun. However,
+	 * ExecProcNode can be called afterward(i.e., ExecPostprocessPlan). To
 	 * handle the case, check ActiveQueryDesc.
 	 */
 	if (ActiveQueryDesc == NULL)
@@ -82,7 +82,7 @@ LogQueryPlan(void)
 		LogQueryPlanPending = false;
 
 		ereport(LOG_SERVER_ONLY,
-				errmsg("backend with PID %d is finishing query",
+				errmsg("backend with PID %d is finishing query execution and cannot log the plan.",
 					   MyProcPid),
 				errhidestmt(true),
 				errhidecontext(true));
@@ -103,7 +103,7 @@ LogQueryPlan(void)
 }
 
 /*
- * Process the request for logging current query plan.
+ * Process the request for logging query plan at CHECK_FOR_INTERRUPTS().
  *
  * Since executing EXPLAIN-related code at an arbitrary CHECK_FOR_INTERRUPTS()
  * point is potentially unsafe, this function just wraps the nodes of
@@ -186,7 +186,6 @@ pg_log_query_plan(PG_FUNCTION_ARGS)
 
 	if (SendProcSignal(pid, PROCSIG_LOG_QUERY_PLAN, proc->vxid.procNumber) < 0)
 	{
-		/* Again, just a warning to allow loops */
 		ereport(WARNING,
 				(errmsg("could not send signal to process %d: %m", pid)));
 		PG_RETURN_BOOL(false);
