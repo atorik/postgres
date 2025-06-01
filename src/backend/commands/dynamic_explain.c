@@ -126,7 +126,7 @@ ProcessLogQueryPlanInterrupt(void)
 		return;
 	}
 
-	/* Wrap ExecProcNode */
+	/* Wrap ExecProcNodes */
 	ExecSetExecProcNodeRecurse(ActiveQueryDesc->planstate);
 }
 
