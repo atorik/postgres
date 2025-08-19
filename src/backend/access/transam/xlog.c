@@ -4390,7 +4390,7 @@ WriteControlFile(void)
 	ControlFile->toast_max_chunk_size = TOAST_MAX_CHUNK_SIZE;
 	ControlFile->loblksize = LOBLKSIZE;
 
-	ControlFile->float8ByVal = FLOAT8PASSBYVAL;
+	ControlFile->float8ByVal = true;	/* vestigial */
 
 	/*
 	 * Initialize the default 'char' signedness.
@@ -4651,23 +4651,7 @@ ReadControlFile(void)
 						   "LOBLKSIZE", (int) LOBLKSIZE),
 				 errhint("It looks like you need to recompile or initdb.")));
 
-#ifdef USE_FLOAT8_BYVAL
-	if (ControlFile->float8ByVal != true)
-		ereport(FATAL,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("database files are incompatible with server"),
-				 errdetail("The database cluster was initialized without USE_FLOAT8_BYVAL"
-						   " but the server was compiled with USE_FLOAT8_BYVAL."),
-				 errhint("It looks like you need to recompile or initdb.")));
-#else
-	if (ControlFile->float8ByVal != false)
-		ereport(FATAL,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("database files are incompatible with server"),
-				 errdetail("The database cluster was initialized with USE_FLOAT8_BYVAL"
-						   " but the server was compiled without USE_FLOAT8_BYVAL."),
-				 errhint("It looks like you need to recompile or initdb.")));
-#endif
+	Assert(ControlFile->float8ByVal);	/* vestigial, not worth an error msg */
 
 	wal_segment_size = ControlFile->xlog_seg_size;
 
@@ -9011,7 +8995,7 @@ do_pg_backup_start(const char *backupidstr, bool fast, List **tablespaces,
 	 * work correctly, it is critical that sessionBackupState is only updated
 	 * after this block is over.
 	 */
-	PG_ENSURE_ERROR_CLEANUP(do_pg_abort_backup, DatumGetBool(true));
+	PG_ENSURE_ERROR_CLEANUP(do_pg_abort_backup, BoolGetDatum(true));
 	{
 		bool		gotUniqueStartpoint = false;
 		DIR		   *tblspcdir;
@@ -9250,7 +9234,7 @@ do_pg_backup_start(const char *backupidstr, bool fast, List **tablespaces,
 
 		state->starttime = (pg_time_t) time(NULL);
 	}
-	PG_END_ENSURE_ERROR_CLEANUP(do_pg_abort_backup, DatumGetBool(true));
+	PG_END_ENSURE_ERROR_CLEANUP(do_pg_abort_backup, BoolGetDatum(true));
 
 	state->started_in_recovery = backup_started_in_recovery;
 
@@ -9590,7 +9574,7 @@ register_persistent_abort_backup_handler(void)
 
 	if (already_done)
 		return;
-	before_shmem_exit(do_pg_abort_backup, DatumGetBool(false));
+	before_shmem_exit(do_pg_abort_backup, BoolGetDatum(false));
 	already_done = true;
 }
 
