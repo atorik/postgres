@@ -15,6 +15,7 @@ SUBDIRS = \
 		  plsample \
 		  spgist_name_ops \
 		  test_aio \
+		  test_binaryheap \
 		  test_bloomfilter \
 		  test_copy_callbacks \
 		  test_custom_rmgrs \
@@ -24,6 +25,7 @@ SUBDIRS = \
 		  test_escape \
 		  test_extensions \
 		  test_ginpostinglist \
+		  test_int128 \
 		  test_integerset \
 		  test_json_parser \
 		  test_lfind \

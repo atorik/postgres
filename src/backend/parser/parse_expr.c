@@ -17,7 +17,6 @@
 
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_type.h"
-#include "commands/dbcommands.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -1223,6 +1222,8 @@ transformAExprIn(ParseState *pstate, A_Expr *a)
 			newa->element_typeid = scalar_type;
 			newa->elements = aexprs;
 			newa->multidims = false;
+			newa->list_start = a->rexpr_list_start;
+			newa->list_end = a->rexpr_list_end;
 			newa->location = -1;
 
 			result = (Node *) make_scalar_array_op(pstate,
@@ -2165,6 +2166,8 @@ transformArrayExpr(ParseState *pstate, A_ArrayExpr *a,
 	/* array_collid will be set by parse_collate.c */
 	newa->element_typeid = element_type;
 	newa->elements = newcoercedelems;
+	newa->list_start = a->list_start;
+	newa->list_end = a->list_end;
 	newa->location = a->location;
 
 	return (Node *) newa;

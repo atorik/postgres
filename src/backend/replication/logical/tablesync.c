@@ -316,7 +316,8 @@ process_syncing_tables_for_sync(XLogRecPtr current_lsn)
 		UpdateSubscriptionRelState(MyLogicalRepWorker->subid,
 								   MyLogicalRepWorker->relid,
 								   MyLogicalRepWorker->relstate,
-								   MyLogicalRepWorker->relstate_lsn);
+								   MyLogicalRepWorker->relstate_lsn,
+								   false);
 
 		/*
 		 * End streaming so that LogRepWorkerWalRcvConn can be used to drop
@@ -425,6 +426,7 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 	ListCell   *lc;
 	bool		started_tx = false;
 	bool		should_exit = false;
+	Relation	rel = NULL;
 
 	Assert(!IsTransactionState());
 
@@ -492,7 +494,17 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 				 * worker to remove the origin tracking as if there is any
 				 * error while dropping we won't restart it to drop the
 				 * origin. So passing missing_ok = true.
+				 *
+				 * Lock the subscription and origin in the same order as we
+				 * are doing during DDL commands to avoid deadlocks. See
+				 * AlterSubscription_refresh.
 				 */
+				LockSharedObject(SubscriptionRelationId, MyLogicalRepWorker->subid,
+								 0, AccessShareLock);
+
+				if (!rel)
+					rel = table_open(SubscriptionRelRelationId, RowExclusiveLock);
+
 				ReplicationOriginNameForLogicalRep(MyLogicalRepWorker->subid,
 												   rstate->relid,
 												   originname,
@@ -504,7 +516,7 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 				 */
 				UpdateSubscriptionRelState(MyLogicalRepWorker->subid,
 										   rstate->relid, rstate->state,
-										   rstate->lsn);
+										   rstate->lsn, true);
 			}
 		}
 		else
@@ -555,7 +567,14 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 						 * This is required to avoid any undetected deadlocks
 						 * due to any existing lock as deadlock detector won't
 						 * be able to detect the waits on the latch.
+						 *
+						 * Also close any tables prior to the commit.
 						 */
+						if (rel)
+						{
+							table_close(rel, NoLock);
+							rel = NULL;
+						}
 						CommitTransactionCommand();
 						pgstat_report_stat(false);
 					}
@@ -603,19 +622,30 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 						TimestampDifferenceExceeds(hentry->last_start_time, now,
 												   wal_retrieve_retry_interval))
 					{
-						logicalrep_worker_launch(WORKERTYPE_TABLESYNC,
-												 MyLogicalRepWorker->dbid,
-												 MySubscription->oid,
-												 MySubscription->name,
-												 MyLogicalRepWorker->userid,
-												 rstate->relid,
-												 DSM_HANDLE_INVALID);
+						/*
+						 * Set the last_start_time even if we fail to start
+						 * the worker, so that we won't retry until
+						 * wal_retrieve_retry_interval has elapsed.
+						 */
 						hentry->last_start_time = now;
+						(void) logicalrep_worker_launch(WORKERTYPE_TABLESYNC,
+														MyLogicalRepWorker->dbid,
+														MySubscription->oid,
+														MySubscription->name,
+														MyLogicalRepWorker->userid,
+														rstate->relid,
+														DSM_HANDLE_INVALID,
+														false);
 					}
 				}
 			}
 		}
 	}
+
+	/* Close table if opened */
+	if (rel)
+		table_close(rel, NoLock);
+
 
 	if (started_tx)
 	{
@@ -1408,7 +1438,8 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 	UpdateSubscriptionRelState(MyLogicalRepWorker->subid,
 							   MyLogicalRepWorker->relid,
 							   MyLogicalRepWorker->relstate,
-							   MyLogicalRepWorker->relstate_lsn);
+							   MyLogicalRepWorker->relstate_lsn,
+							   false);
 	CommitTransactionCommand();
 	pgstat_report_stat(true);
 
@@ -1541,14 +1572,15 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 	UpdateSubscriptionRelState(MyLogicalRepWorker->subid,
 							   MyLogicalRepWorker->relid,
 							   SUBREL_STATE_FINISHEDCOPY,
-							   MyLogicalRepWorker->relstate_lsn);
+							   MyLogicalRepWorker->relstate_lsn,
+							   false);
 
 	CommitTransactionCommand();
 
 copy_table_done:
 
 	elog(DEBUG1,
-		 "LogicalRepSyncTableStart: '%s' origin_startpos lsn %X/%X",
+		 "LogicalRepSyncTableStart: '%s' origin_startpos lsn %X/%08X",
 		 originname, LSN_FORMAT_ARGS(*origin_startpos));
 
 	/*

@@ -330,8 +330,8 @@ InitShmemIndex(void)
  */
 HTAB *
 ShmemInitHash(const char *name,		/* table string name for shmem index */
-			  long init_size,	/* initial table size */
-			  long max_size,	/* max size of the table */
+			  int64 init_size,	/* initial table size */
+			  int64 max_size,	/* max size of the table */
 			  HASHCTL *infoP,	/* info about key and bucket size */
 			  int hash_flags)	/* info about infoP */
 {
@@ -679,12 +679,10 @@ pg_get_shmem_allocations_numa(PG_FUNCTION_ARGS)
 		 */
 		for (i = 0; i < shm_ent_page_count; i++)
 		{
-			volatile uint64 touch pg_attribute_unused();
-
 			page_ptrs[i] = startptr + (i * os_page_size);
 
 			if (firstNumaTouch)
-				pg_numa_touch_mem_if_required(touch, page_ptrs[i]);
+				pg_numa_touch_mem_if_required(page_ptrs[i]);
 
 			CHECK_FOR_INTERRUPTS();
 		}
@@ -716,7 +714,7 @@ pg_get_shmem_allocations_numa(PG_FUNCTION_ARGS)
 		for (i = 0; i <= max_nodes; i++)
 		{
 			values[0] = CStringGetTextDatum(ent->key);
-			values[1] = i;
+			values[1] = Int32GetDatum(i);
 			values[2] = Int64GetDatum(nodes[i] * os_page_size);
 
 			tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,

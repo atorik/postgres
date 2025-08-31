@@ -71,10 +71,7 @@ extern void generate_partitionwise_join_paths(PlannerInfo *root,
 extern void create_index_paths(PlannerInfo *root, RelOptInfo *rel);
 extern bool relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 										  List *restrictlist,
-										  List *exprlist, List *oprlist);
-extern bool relation_has_unique_index_ext(PlannerInfo *root, RelOptInfo *rel,
-										  List *restrictlist, List *exprlist,
-										  List *oprlist, List **extra_clauses);
+										  List **extra_clauses);
 extern bool indexcol_is_bool_constant_for_query(PlannerInfo *root,
 												IndexOptInfo *index,
 												int indexcol);
@@ -109,8 +106,6 @@ extern Relids add_outer_joins_to_relids(PlannerInfo *root, Relids input_relids,
 										List **pushed_down_joins);
 extern bool have_join_order_restriction(PlannerInfo *root,
 										RelOptInfo *rel1, RelOptInfo *rel2);
-extern bool have_dangerous_phv(PlannerInfo *root,
-							   Relids outer_relids, Relids inner_params);
 extern void mark_dummy_rel(RelOptInfo *rel);
 extern void init_dummy_sjinfo(SpecialJoinInfo *sjinfo, Relids left_relids,
 							  Relids right_relids);

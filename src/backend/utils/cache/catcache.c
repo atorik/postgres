@@ -213,7 +213,7 @@ namehashfast(Datum datum)
 {
 	char	   *key = NameStr(*DatumGetName(datum));
 
-	return hash_any((unsigned char *) key, strlen(key));
+	return hash_bytes((unsigned char *) key, strlen(key));
 }
 
 static bool
@@ -317,6 +317,7 @@ GetCCHashEqFuncs(Oid keytype, CCHashFN *hashfunc, RegProcedure *eqfunc, CCFastEq
 		case REGDICTIONARYOID:
 		case REGROLEOID:
 		case REGNAMESPACEOID:
+		case REGDATABASEOID:
 			*hashfunc = int4hashfast;
 			*fasteqfunc = int4eqfast;
 			*eqfunc = F_OIDEQ;

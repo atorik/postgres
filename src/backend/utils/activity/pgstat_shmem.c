@@ -180,10 +180,9 @@ StatsShmemInit(void)
 		 * provides a small efficiency win.
 		 */
 		ctl->raw_dsa_area = p;
-		p += MAXALIGN(pgstat_dsa_init_size());
 		dsa = dsa_create_in_place(ctl->raw_dsa_area,
 								  pgstat_dsa_init_size(),
-								  LWTRANCHE_PGSTATS_DSA, 0);
+								  LWTRANCHE_PGSTATS_DSA, NULL);
 		dsa_pin(dsa);
 
 		/*
@@ -255,7 +254,8 @@ pgstat_attach_shmem(void)
 	dsa_pin_mapping(pgStatLocal.dsa);
 
 	pgStatLocal.shared_hash = dshash_attach(pgStatLocal.dsa, &dsh_params,
-											pgStatLocal.shmem->hash_handle, 0);
+											pgStatLocal.shmem->hash_handle,
+											NULL);
 
 	MemoryContextSwitchTo(oldcontext);
 }
@@ -873,11 +873,12 @@ pgstat_drop_entry_internal(PgStatShared_HashEntry *shent,
 	 */
 	if (shent->dropped)
 		elog(ERROR,
-			 "trying to drop stats entry already dropped: kind=%s dboid=%u objid=%" PRIu64 " refcount=%u",
+			 "trying to drop stats entry already dropped: kind=%s dboid=%u objid=%" PRIu64 " refcount=%u generation=%u",
 			 pgstat_get_kind_info(shent->key.kind)->name,
 			 shent->key.dboid,
 			 shent->key.objid,
-			 pg_atomic_read_u32(&shent->refcount));
+			 pg_atomic_read_u32(&shent->refcount),
+			 pg_atomic_read_u32(&shent->generation));
 	shent->dropped = true;
 
 	/* release refcount marking entry as not dropped */

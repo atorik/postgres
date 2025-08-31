@@ -1484,11 +1484,6 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
  * buffers must remain valid until WaitReadBuffers() is called, and any
  * forwarded buffers must also be preserved for a continuing call unless
  * they are explicitly released.
- *
- * Currently the I/O is only started with optional operating system advice if
- * requested by the caller with READ_BUFFERS_ISSUE_ADVICE, and the real I/O
- * happens synchronously in WaitReadBuffers().  In future work, true I/O could
- * be initiated here.
  */
 bool
 StartReadBuffers(ReadBuffersOperation *operation,
@@ -2743,12 +2738,10 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 		 * because mdread doesn't complain about reads beyond EOF (when
 		 * zero_damaged_pages is ON) and so a previous attempt to read a block
 		 * beyond EOF could have left a "valid" zero-filled buffer.
-		 * Unfortunately, we have also seen this case occurring because of
-		 * buggy Linux kernels that sometimes return an lseek(SEEK_END) result
-		 * that doesn't account for a recent write. In that situation, the
-		 * pre-existing buffer would contain valid data that we don't want to
-		 * overwrite.  Since the legitimate cases should always have left a
-		 * zero-filled buffer, complain if not PageIsNew.
+		 *
+		 * This has also been observed when relation was overwritten by
+		 * external process. Since the legitimate cases should always have
+		 * left a zero-filled buffer, complain if not PageIsNew.
 		 */
 		if (existing_id >= 0)
 		{
@@ -2776,10 +2769,9 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 
 			if (valid && !PageIsNew((Page) buf_block))
 				ereport(ERROR,
-						(errmsg("unexpected data beyond EOF in block %u of relation %s",
+						(errmsg("unexpected data beyond EOF in block %u of relation \"%s\"",
 								existing_hdr->tag.blockNum,
-								relpath(bmr.smgr->smgr_rlocator, fork).str),
-						 errhint("This has been seen to occur with buggy kernels; consider updating your system.")));
+								relpath(bmr.smgr->smgr_rlocator, fork).str)));
 
 			/*
 			 * We *must* do smgr[zero]extend before succeeding, else the page
@@ -3339,10 +3331,10 @@ UnpinBufferNoOwner(BufferDesc *buf)
  * BufferSync -- Write out all dirty buffers in the pool.
  *
  * This is called at checkpoint time to write out all dirty shared buffers.
- * The checkpoint request flags should be passed in.  If CHECKPOINT_IMMEDIATE
- * is set, we disable delays between writes; if CHECKPOINT_IS_SHUTDOWN,
- * CHECKPOINT_END_OF_RECOVERY or CHECKPOINT_FLUSH_ALL is set, we write even
- * unlogged buffers, which are otherwise skipped.  The remaining flags
+ * The checkpoint request flags should be passed in.  If CHECKPOINT_FAST is
+ * set, we disable delays between writes; if CHECKPOINT_IS_SHUTDOWN,
+ * CHECKPOINT_END_OF_RECOVERY or CHECKPOINT_FLUSH_UNLOGGED is set, we write
+ * even unlogged buffers, which are otherwise skipped.  The remaining flags
  * currently have no effect here.
  */
 static void
@@ -3367,7 +3359,7 @@ BufferSync(int flags)
 	 * recovery, we write all dirty buffers.
 	 */
 	if (!((flags & (CHECKPOINT_IS_SHUTDOWN | CHECKPOINT_END_OF_RECOVERY |
-					CHECKPOINT_FLUSH_ALL))))
+					CHECKPOINT_FLUSH_UNLOGGED))))
 		mask |= BM_PERMANENT;
 
 	/*
@@ -4550,11 +4542,9 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 	if (RelFileLocatorBackendIsTemp(rlocator))
 	{
 		if (rlocator.backend == MyProcNumber)
-		{
-			for (j = 0; j < nforks; j++)
-				DropRelationLocalBuffers(rlocator.locator, forkNum[j],
-										 firstDelBlock[j]);
-		}
+			DropRelationLocalBuffers(rlocator.locator, forkNum, nforks,
+									 firstDelBlock);
+
 		return;
 	}
 
@@ -6201,7 +6191,7 @@ shared_buffer_write_error_callback(void *arg)
 
 	/* Buffer is pinned, so we can read the tag without locking the spinlock */
 	if (bufHdr != NULL)
-		errcontext("writing block %u of relation %s",
+		errcontext("writing block %u of relation \"%s\"",
 				   bufHdr->tag.blockNum,
 				   relpathperm(BufTagGetRelFileLocator(&bufHdr->tag),
 							   BufTagGetForkNum(&bufHdr->tag)).str);
@@ -6216,7 +6206,7 @@ local_buffer_write_error_callback(void *arg)
 	BufferDesc *bufHdr = (BufferDesc *) arg;
 
 	if (bufHdr != NULL)
-		errcontext("writing block %u of relation %s",
+		errcontext("writing block %u of relation \"%s\"",
 				   bufHdr->tag.blockNum,
 				   relpathbackend(BufTagGetRelFileLocator(&bufHdr->tag),
 								  MyProcNumber,
@@ -6375,8 +6365,8 @@ ckpt_buforder_comparator(const CkptSortItem *a, const CkptSortItem *b)
 static int
 ts_ckpt_progress_comparator(Datum a, Datum b, void *arg)
 {
-	CkptTsStatus *sa = (CkptTsStatus *) a;
-	CkptTsStatus *sb = (CkptTsStatus *) b;
+	CkptTsStatus *sa = (CkptTsStatus *) DatumGetPointer(a);
+	CkptTsStatus *sb = (CkptTsStatus *) DatumGetPointer(b);
 
 	/* we want a min-heap, so return 1 for the a < b */
 	if (sa->progress < sb->progress)
@@ -7315,13 +7305,15 @@ buffer_readv_report(PgAioResult result, const PgAioTargetData *td,
 
 		ereport(elevel,
 				errcode(ERRCODE_DATA_CORRUPTED),
-				errmsg("zeroing %u page(s) and ignoring %u checksum failure(s) among blocks %u..%u of relation %s",
+				errmsg("zeroing %u page(s) and ignoring %u checksum failure(s) among blocks %u..%u of relation \"%s\"",
 					   affected_count, checkfail_count, first, last, rpath.str),
 				affected_count > 1 ?
-				errdetail("Block %u held first zeroed page.",
+				errdetail("Block %u held the first zeroed page.",
 						  first + first_off) : 0,
-				errhint("See server log for details about the other %u invalid block(s).",
-						affected_count + checkfail_count - 1));
+				errhint_plural("See server log for details about the other %d invalid block.",
+							   "See server log for details about the other %d invalid blocks.",
+							   affected_count + checkfail_count - 1,
+							   affected_count + checkfail_count - 1));
 		return;
 	}
 
@@ -7334,25 +7326,25 @@ buffer_readv_report(PgAioResult result, const PgAioTargetData *td,
 	{
 		Assert(!zeroed_any);	/* can't have invalid pages when zeroing them */
 		affected_count = zeroed_or_error_count;
-		msg_one = _("invalid page in block %u of relation %s");
-		msg_mult = _("%u invalid pages among blocks %u..%u of relation %s");
-		det_mult = _("Block %u held first invalid page.");
+		msg_one = _("invalid page in block %u of relation \"%s\"");
+		msg_mult = _("%u invalid pages among blocks %u..%u of relation \"%s\"");
+		det_mult = _("Block %u held the first invalid page.");
 		hint_mult = _("See server log for the other %u invalid block(s).");
 	}
 	else if (zeroed_any && !ignored_any)
 	{
 		affected_count = zeroed_or_error_count;
-		msg_one = _("invalid page in block %u of relation %s; zeroing out page");
-		msg_mult = _("zeroing out %u invalid pages among blocks %u..%u of relation %s");
-		det_mult = _("Block %u held first zeroed page.");
+		msg_one = _("invalid page in block %u of relation \"%s\"; zeroing out page");
+		msg_mult = _("zeroing out %u invalid pages among blocks %u..%u of relation \"%s\"");
+		det_mult = _("Block %u held the first zeroed page.");
 		hint_mult = _("See server log for the other %u zeroed block(s).");
 	}
 	else if (!zeroed_any && ignored_any)
 	{
 		affected_count = checkfail_count;
-		msg_one = _("ignoring checksum failure in block %u of relation %s");
-		msg_mult = _("ignoring %u checksum failures among blocks %u..%u of relation %s");
-		det_mult = _("Block %u held first ignored page.");
+		msg_one = _("ignoring checksum failure in block %u of relation \"%s\"");
+		msg_mult = _("ignoring %u checksum failures among blocks %u..%u of relation \"%s\"");
+		det_mult = _("Block %u held the first ignored page.");
 		hint_mult = _("See server log for the other %u ignored block(s).");
 	}
 	else

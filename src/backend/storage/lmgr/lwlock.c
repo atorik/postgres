@@ -122,9 +122,8 @@ StaticAssertDecl((LW_VAL_EXCLUSIVE & LW_FLAG_MASK) == 0,
  * own tranche.  We absorb the names of these tranches from there into
  * BuiltinTrancheNames here.
  *
- * 2. There are some predefined tranches for built-in groups of locks.
- * These are listed in enum BuiltinTrancheIds in lwlock.h, and their names
- * appear in BuiltinTrancheNames[] below.
+ * 2. There are some predefined tranches for built-in groups of locks defined
+ * in lwlocklist.h.  We absorb the names of these tranches, too.
  *
  * 3. Extensions can create new tranches, via either RequestNamedLWLockTranche
  * or LWLockRegisterTranche.  The names of these that are known in the current
@@ -135,49 +134,10 @@ StaticAssertDecl((LW_VAL_EXCLUSIVE & LW_FLAG_MASK) == 0,
  */
 static const char *const BuiltinTrancheNames[] = {
 #define PG_LWLOCK(id, lockname) [id] = CppAsString(lockname),
+#define PG_LWLOCKTRANCHE(id, lockname) [LWTRANCHE_##id] = CppAsString(lockname),
 #include "storage/lwlocklist.h"
 #undef PG_LWLOCK
-	[LWTRANCHE_XACT_BUFFER] = "XactBuffer",
-	[LWTRANCHE_COMMITTS_BUFFER] = "CommitTsBuffer",
-	[LWTRANCHE_SUBTRANS_BUFFER] = "SubtransBuffer",
-	[LWTRANCHE_MULTIXACTOFFSET_BUFFER] = "MultiXactOffsetBuffer",
-	[LWTRANCHE_MULTIXACTMEMBER_BUFFER] = "MultiXactMemberBuffer",
-	[LWTRANCHE_NOTIFY_BUFFER] = "NotifyBuffer",
-	[LWTRANCHE_SERIAL_BUFFER] = "SerialBuffer",
-	[LWTRANCHE_WAL_INSERT] = "WALInsert",
-	[LWTRANCHE_BUFFER_CONTENT] = "BufferContent",
-	[LWTRANCHE_REPLICATION_ORIGIN_STATE] = "ReplicationOriginState",
-	[LWTRANCHE_REPLICATION_SLOT_IO] = "ReplicationSlotIO",
-	[LWTRANCHE_LOCK_FASTPATH] = "LockFastPath",
-	[LWTRANCHE_BUFFER_MAPPING] = "BufferMapping",
-	[LWTRANCHE_LOCK_MANAGER] = "LockManager",
-	[LWTRANCHE_PREDICATE_LOCK_MANAGER] = "PredicateLockManager",
-	[LWTRANCHE_PARALLEL_HASH_JOIN] = "ParallelHashJoin",
-	[LWTRANCHE_PARALLEL_BTREE_SCAN] = "ParallelBtreeScan",
-	[LWTRANCHE_PARALLEL_QUERY_DSA] = "ParallelQueryDSA",
-	[LWTRANCHE_PER_SESSION_DSA] = "PerSessionDSA",
-	[LWTRANCHE_PER_SESSION_RECORD_TYPE] = "PerSessionRecordType",
-	[LWTRANCHE_PER_SESSION_RECORD_TYPMOD] = "PerSessionRecordTypmod",
-	[LWTRANCHE_SHARED_TUPLESTORE] = "SharedTupleStore",
-	[LWTRANCHE_SHARED_TIDBITMAP] = "SharedTidBitmap",
-	[LWTRANCHE_PARALLEL_APPEND] = "ParallelAppend",
-	[LWTRANCHE_PER_XACT_PREDICATE_LIST] = "PerXactPredicateList",
-	[LWTRANCHE_PGSTATS_DSA] = "PgStatsDSA",
-	[LWTRANCHE_PGSTATS_HASH] = "PgStatsHash",
-	[LWTRANCHE_PGSTATS_DATA] = "PgStatsData",
-	[LWTRANCHE_LAUNCHER_DSA] = "LogicalRepLauncherDSA",
-	[LWTRANCHE_LAUNCHER_HASH] = "LogicalRepLauncherHash",
-	[LWTRANCHE_DSM_REGISTRY_DSA] = "DSMRegistryDSA",
-	[LWTRANCHE_DSM_REGISTRY_HASH] = "DSMRegistryHash",
-	[LWTRANCHE_COMMITTS_SLRU] = "CommitTsSLRU",
-	[LWTRANCHE_MULTIXACTOFFSET_SLRU] = "MultixactOffsetSLRU",
-	[LWTRANCHE_MULTIXACTMEMBER_SLRU] = "MultixactMemberSLRU",
-	[LWTRANCHE_NOTIFY_SLRU] = "NotifySLRU",
-	[LWTRANCHE_SERIAL_SLRU] = "SerialSLRU",
-	[LWTRANCHE_SUBTRANS_SLRU] = "SubtransSLRU",
-	[LWTRANCHE_XACT_SLRU] = "XactSLRU",
-	[LWTRANCHE_PARALLEL_VACUUM_DSA] = "ParallelVacuumDSA",
-	[LWTRANCHE_AIO_URING_COMPLETION] = "AioUringCompletion",
+#undef PG_LWLOCKTRANCHE
 };
 
 StaticAssertDecl(lengthof(BuiltinTrancheNames) ==
@@ -202,8 +162,7 @@ LWLockPadded *MainLWLockArray = NULL;
 /*
  * We use this structure to keep track of locked LWLocks for release
  * during error recovery.  Normally, only a few will be held at once, but
- * occasionally the number can be much higher; for example, the pg_buffercache
- * extension locks all buffer partitions simultaneously.
+ * occasionally the number can be much higher.
  */
 #define MAX_SIMUL_LWLOCKS	200
 
@@ -237,6 +196,7 @@ int			NamedLWLockTrancheRequests = 0;
 
 /* points to data in shared memory: */
 NamedLWLockTranche *NamedLWLockTrancheArray = NULL;
+int		   *LWLockCounter = NULL;
 
 static void InitializeLWLocks(void);
 static inline void LWLockReportWaitStart(LWLock *lock);
@@ -438,11 +398,11 @@ LWLockShmemSize(void)
 	/* Calculate total number of locks needed in the main array. */
 	numLocks += NumLWLocksForNamedTranches();
 
-	/* Space for the LWLock array. */
-	size = mul_size(numLocks, sizeof(LWLockPadded));
-
 	/* Space for dynamic allocation counter, plus room for alignment. */
-	size = add_size(size, sizeof(int) + LWLOCK_PADDED_SIZE);
+	size = sizeof(int) + LWLOCK_PADDED_SIZE;
+
+	/* Space for the LWLock array. */
+	size = add_size(size, mul_size(numLocks, sizeof(LWLockPadded)));
 
 	/* space for named tranches. */
 	size = add_size(size, mul_size(NamedLWLockTrancheRequests, sizeof(NamedLWLockTranche)));
@@ -464,26 +424,19 @@ CreateLWLocks(void)
 	if (!IsUnderPostmaster)
 	{
 		Size		spaceLocks = LWLockShmemSize();
-		int		   *LWLockCounter;
 		char	   *ptr;
 
 		/* Allocate space */
 		ptr = (char *) ShmemAlloc(spaceLocks);
 
-		/* Leave room for dynamic allocation of tranches */
+		/* Initialize the dynamic-allocation counter for tranches */
+		LWLockCounter = (int *) ptr;
+		*LWLockCounter = LWTRANCHE_FIRST_USER_DEFINED;
 		ptr += sizeof(int);
 
 		/* Ensure desired alignment of LWLock array */
 		ptr += LWLOCK_PADDED_SIZE - ((uintptr_t) ptr) % LWLOCK_PADDED_SIZE;
-
 		MainLWLockArray = (LWLockPadded *) ptr;
-
-		/*
-		 * Initialize the dynamic-allocation counter for tranches, which is
-		 * stored just before the first LWLock.
-		 */
-		LWLockCounter = (int *) ((char *) MainLWLockArray - sizeof(int));
-		*LWLockCounter = LWTRANCHE_FIRST_USER_DEFINED;
 
 		/* Initialize all LWLocks */
 		InitializeLWLocks();
@@ -615,9 +568,7 @@ int
 LWLockNewTrancheId(void)
 {
 	int			result;
-	int		   *LWLockCounter;
 
-	LWLockCounter = (int *) ((char *) MainLWLockArray - sizeof(int));
 	/* We use the ShmemLock spinlock to protect LWLockCounter */
 	SpinLockAcquire(ShmemLock);
 	result = (*LWLockCounter)++;

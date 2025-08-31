@@ -58,6 +58,7 @@
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
 #include "rewrite/rewriteManip.h"
+#include "utils/acl.h"
 #include "utils/backend_status.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
@@ -267,6 +268,12 @@ static bool group_by_has_partkey(RelOptInfo *input_rel,
 static int	common_prefix_cmp(const void *a, const void *b);
 static List *generate_setop_child_grouplist(SetOperationStmt *op,
 											List *targetlist);
+static void create_final_unique_paths(PlannerInfo *root, RelOptInfo *input_rel,
+									  List *sortPathkeys, List *groupClause,
+									  SpecialJoinInfo *sjinfo, RelOptInfo *unique_rel);
+static void create_partial_unique_paths(PlannerInfo *root, RelOptInfo *input_rel,
+										List *sortPathkeys, List *groupClause,
+										SpecialJoinInfo *sjinfo, RelOptInfo *unique_rel);
 
 
 /*****************************************************************************
@@ -342,6 +349,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	glob->transientPlan = false;
 	glob->dependsOnRole = false;
 	glob->partition_directory = NULL;
+	glob->rel_notnullatts_hash = NULL;
 
 	/*
 	 * Assess whether it's feasible to use parallel mode for this query. We
@@ -557,6 +565,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 
 	result->commandType = parse->commandType;
 	result->queryId = parse->queryId;
+	result->planOrigin = PLAN_STMT_STANDARD;
 	result->hasReturning = (parse->returningList != NIL);
 	result->hasModifyingCTE = parse->hasModifyingCTE;
 	result->canSetTag = parse->canSetTag;
@@ -721,6 +730,18 @@ subquery_planner(PlannerGlobal *glob, Query *parse, PlannerInfo *parent_root,
 	transform_MERGE_to_join(parse);
 
 	/*
+	 * Scan the rangetable for relation RTEs and retrieve the necessary
+	 * catalog information for each relation.  Using this information, clear
+	 * the inh flag for any relation that has no children, collect not-null
+	 * attribute numbers for any relation that has column not-null
+	 * constraints, and expand virtual generated columns for any relation that
+	 * contains them.  Note that this step does not descend into sublinks and
+	 * subqueries; if we pull up any sublinks or subqueries below, their
+	 * relation RTEs are processed just before pulling them up.
+	 */
+	parse = root->parse = preprocess_relation_rtes(root);
+
+	/*
 	 * If the FROM clause is empty, replace it with a dummy RTE_RESULT RTE, so
 	 * that we don't need so many special cases to deal with that situation.
 	 */
@@ -742,14 +763,6 @@ subquery_planner(PlannerGlobal *glob, Query *parse, PlannerInfo *parent_root,
 	 * for SubLinks.
 	 */
 	preprocess_function_rtes(root);
-
-	/*
-	 * Scan the rangetable for relations with virtual generated columns, and
-	 * replace all Var nodes in the query that reference these columns with
-	 * the generation expressions.  Recursion issues here are handled in the
-	 * same way as for SubLinks.
-	 */
-	parse = root->parse = expand_virtual_generated_columns(root);
 
 	/*
 	 * Check to see if any subqueries in the jointree can be merged into this
@@ -787,23 +800,6 @@ subquery_planner(PlannerGlobal *glob, Query *parse, PlannerInfo *parent_root,
 
 		switch (rte->rtekind)
 		{
-			case RTE_RELATION:
-				if (rte->inh)
-				{
-					/*
-					 * Check to see if the relation actually has any children;
-					 * if not, clear the inh flag so we can treat it as a
-					 * plain base relation.
-					 *
-					 * Note: this could give a false-positive result, if the
-					 * rel once had children but no longer does.  We used to
-					 * be able to clear rte->inh later on when we discovered
-					 * that, but no more; we have to handle such cases as
-					 * full-fledged inheritance.
-					 */
-					rte->inh = has_subclass(rte->relid);
-				}
-				break;
 			case RTE_JOIN:
 				root->hasJoinRTEs = true;
 				if (IS_OUTER_JOIN(rte->jointype))
@@ -846,6 +842,38 @@ subquery_planner(PlannerGlobal *glob, Query *parse, PlannerInfo *parent_root,
 		if (!rte->inh)
 			root->leaf_result_relids =
 				bms_make_singleton(parse->resultRelation);
+	}
+
+	/*
+	 * This would be a convenient time to check access permissions for all
+	 * relations mentioned in the query, since it would be better to fail now,
+	 * before doing any detailed planning.  However, for historical reasons,
+	 * we leave this to be done at executor startup.
+	 *
+	 * Note, however, that we do need to check access permissions for any view
+	 * relations mentioned in the query, in order to prevent information being
+	 * leaked by selectivity estimation functions, which only check view owner
+	 * permissions on underlying tables (see all_rows_selectable() and its
+	 * callers).  This is a little ugly, because it means that access
+	 * permissions for views will be checked twice, which is another reason
+	 * why it would be better to do all the ACL checks here.
+	 */
+	foreach(l, parse->rtable)
+	{
+		RangeTblEntry *rte = lfirst_node(RangeTblEntry, l);
+
+		if (rte->perminfoindex != 0 &&
+			rte->relkind == RELKIND_VIEW)
+		{
+			RTEPermissionInfo *perminfo;
+			bool		result;
+
+			perminfo = getRTEPermissionInfo(parse->rteperminfos, rte);
+			result = ExecCheckOneRelPerms(perminfo);
+			if (!result)
+				aclcheck_error(ACLCHECK_NO_PRIV, OBJECT_VIEW,
+							   get_rel_name(perminfo->relid));
+		}
 	}
 
 	/*
@@ -4893,7 +4921,7 @@ create_partial_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel,
 					limitCount = (Node *) makeConst(INT8OID, -1, InvalidOid,
 													sizeof(int64),
 													Int64GetDatum(1), false,
-													FLOAT8PASSBYVAL);
+													true);
 
 					/*
 					 * Apply a LimitPath onto the partial path to restrict the
@@ -4917,10 +4945,10 @@ create_partial_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel,
 				else
 				{
 					add_partial_path(partial_distinct_rel, (Path *)
-									 create_upper_unique_path(root, partial_distinct_rel,
-															  sorted_path,
-															  list_length(root->distinct_pathkeys),
-															  numDistinctRows));
+									 create_unique_path(root, partial_distinct_rel,
+														sorted_path,
+														list_length(root->distinct_pathkeys),
+														numDistinctRows));
 				}
 			}
 		}
@@ -5096,7 +5124,7 @@ create_final_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel,
 					limitCount = (Node *) makeConst(INT8OID, -1, InvalidOid,
 													sizeof(int64),
 													Int64GetDatum(1), false,
-													FLOAT8PASSBYVAL);
+													true);
 
 					/*
 					 * If the query already has a LIMIT clause, then we could
@@ -5111,10 +5139,10 @@ create_final_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel,
 				else
 				{
 					add_path(distinct_rel, (Path *)
-							 create_upper_unique_path(root, distinct_rel,
-													  sorted_path,
-													  list_length(root->distinct_pathkeys),
-													  numDistinctRows));
+							 create_unique_path(root, distinct_rel,
+												sorted_path,
+												list_length(root->distinct_pathkeys),
+												numDistinctRows));
 				}
 			}
 		}
@@ -6879,7 +6907,7 @@ plan_cluster_use_sort(Oid tableOid, Oid indexOid)
  *
  * tableOid is the table on which the index is to be built.  indexOid is the
  * OID of an index to be created or reindexed (which must be an index with
- * support for parallel builds - currently btree or BRIN).
+ * support for parallel builds - currently btree, GIN, or BRIN).
  *
  * Return value is the number of parallel worker processes to request.  It
  * may be unsafe to proceed if this is 0.  Note that this does not include the
@@ -8247,4 +8275,561 @@ generate_setop_child_grouplist(SetOperationStmt *op, List *targetlist)
 	Assert(ct == NULL);
 
 	return grouplist;
+}
+
+/*
+ * create_unique_paths
+ *    Build a new RelOptInfo containing Paths that represent elimination of
+ *    distinct rows from the input data.  Distinct-ness is defined according to
+ *    the needs of the semijoin represented by sjinfo.  If it is not possible
+ *    to identify how to make the data unique, NULL is returned.
+ *
+ * If used at all, this is likely to be called repeatedly on the same rel,
+ * so we cache the result.
+ */
+RelOptInfo *
+create_unique_paths(PlannerInfo *root, RelOptInfo *rel, SpecialJoinInfo *sjinfo)
+{
+	RelOptInfo *unique_rel;
+	List	   *sortPathkeys = NIL;
+	List	   *groupClause = NIL;
+	MemoryContext oldcontext;
+
+	/* Caller made a mistake if SpecialJoinInfo is the wrong one */
+	Assert(sjinfo->jointype == JOIN_SEMI);
+	Assert(bms_equal(rel->relids, sjinfo->syn_righthand));
+
+	/* If result already cached, return it */
+	if (rel->unique_rel)
+		return rel->unique_rel;
+
+	/* If it's not possible to unique-ify, return NULL */
+	if (!(sjinfo->semi_can_btree || sjinfo->semi_can_hash))
+		return NULL;
+
+	/*
+	 * Punt if this is a child relation and we failed to build a unique-ified
+	 * relation for its parent.  This can happen if all the RHS columns were
+	 * found to be equated to constants when unique-ifying the parent table,
+	 * leaving no columns to unique-ify.
+	 */
+	if (IS_OTHER_REL(rel) && rel->top_parent->unique_rel == NULL)
+		return NULL;
+
+	/*
+	 * When called during GEQO join planning, we are in a short-lived memory
+	 * context.  We must make sure that the unique rel and any subsidiary data
+	 * structures created for a baserel survive the GEQO cycle, else the
+	 * baserel is trashed for future GEQO cycles.  On the other hand, when we
+	 * are creating those for a joinrel during GEQO, we don't want them to
+	 * clutter the main planning context.  Upshot is that the best solution is
+	 * to explicitly allocate memory in the same context the given RelOptInfo
+	 * is in.
+	 */
+	oldcontext = MemoryContextSwitchTo(GetMemoryChunkContext(rel));
+
+	unique_rel = makeNode(RelOptInfo);
+	memcpy(unique_rel, rel, sizeof(RelOptInfo));
+
+	/*
+	 * clear path info
+	 */
+	unique_rel->pathlist = NIL;
+	unique_rel->ppilist = NIL;
+	unique_rel->partial_pathlist = NIL;
+	unique_rel->cheapest_startup_path = NULL;
+	unique_rel->cheapest_total_path = NULL;
+	unique_rel->cheapest_parameterized_paths = NIL;
+
+	/*
+	 * Build the target list for the unique rel.  We also build the pathkeys
+	 * that represent the ordering requirements for the sort-based
+	 * implementation, and the list of SortGroupClause nodes that represent
+	 * the columns to be grouped on for the hash-based implementation.
+	 *
+	 * For a child rel, we can construct these fields from those of its
+	 * parent.
+	 */
+	if (IS_OTHER_REL(rel))
+	{
+		PathTarget *child_unique_target;
+		PathTarget *parent_unique_target;
+
+		parent_unique_target = rel->top_parent->unique_rel->reltarget;
+
+		child_unique_target = copy_pathtarget(parent_unique_target);
+
+		/* Translate the target expressions */
+		child_unique_target->exprs = (List *)
+			adjust_appendrel_attrs_multilevel(root,
+											  (Node *) parent_unique_target->exprs,
+											  rel,
+											  rel->top_parent);
+
+		unique_rel->reltarget = child_unique_target;
+
+		sortPathkeys = rel->top_parent->unique_pathkeys;
+		groupClause = rel->top_parent->unique_groupclause;
+	}
+	else
+	{
+		List	   *newtlist;
+		int			nextresno;
+		List	   *sortList = NIL;
+		ListCell   *lc1;
+		ListCell   *lc2;
+
+		/*
+		 * The values we are supposed to unique-ify may be expressions in the
+		 * variables of the input rel's targetlist.  We have to add any such
+		 * expressions to the unique rel's targetlist.
+		 *
+		 * To complicate matters, some of the values to be unique-ified may be
+		 * known redundant by the EquivalenceClass machinery (e.g., because
+		 * they have been equated to constants).  There is no need to compare
+		 * such values during unique-ification, and indeed we had better not
+		 * try because the Vars involved may not have propagated as high as
+		 * the semijoin's level.  We use make_pathkeys_for_sortclauses to
+		 * detect such cases, which is a tad inefficient but it doesn't seem
+		 * worth building specialized infrastructure for this.
+		 */
+		newtlist = make_tlist_from_pathtarget(rel->reltarget);
+		nextresno = list_length(newtlist) + 1;
+
+		forboth(lc1, sjinfo->semi_rhs_exprs, lc2, sjinfo->semi_operators)
+		{
+			Expr	   *uniqexpr = lfirst(lc1);
+			Oid			in_oper = lfirst_oid(lc2);
+			Oid			sortop;
+			TargetEntry *tle;
+			bool		made_tle = false;
+
+			tle = tlist_member(uniqexpr, newtlist);
+			if (!tle)
+			{
+				tle = makeTargetEntry((Expr *) uniqexpr,
+									  nextresno,
+									  NULL,
+									  false);
+				newtlist = lappend(newtlist, tle);
+				nextresno++;
+				made_tle = true;
+			}
+
+			/*
+			 * Try to build an ORDER BY list to sort the input compatibly.  We
+			 * do this for each sortable clause even when the clauses are not
+			 * all sortable, so that we can detect clauses that are redundant
+			 * according to the pathkey machinery.
+			 */
+			sortop = get_ordering_op_for_equality_op(in_oper, false);
+			if (OidIsValid(sortop))
+			{
+				Oid			eqop;
+				SortGroupClause *sortcl;
+
+				/*
+				 * The Unique node will need equality operators.  Normally
+				 * these are the same as the IN clause operators, but if those
+				 * are cross-type operators then the equality operators are
+				 * the ones for the IN clause operators' RHS datatype.
+				 */
+				eqop = get_equality_op_for_ordering_op(sortop, NULL);
+				if (!OidIsValid(eqop))	/* shouldn't happen */
+					elog(ERROR, "could not find equality operator for ordering operator %u",
+						 sortop);
+
+				sortcl = makeNode(SortGroupClause);
+				sortcl->tleSortGroupRef = assignSortGroupRef(tle, newtlist);
+				sortcl->eqop = eqop;
+				sortcl->sortop = sortop;
+				sortcl->reverse_sort = false;
+				sortcl->nulls_first = false;
+				sortcl->hashable = false;	/* no need to make this accurate */
+				sortList = lappend(sortList, sortcl);
+
+				/*
+				 * At each step, convert the SortGroupClause list to pathkey
+				 * form.  If the just-added SortGroupClause is redundant, the
+				 * result will be shorter than the SortGroupClause list.
+				 */
+				sortPathkeys = make_pathkeys_for_sortclauses(root, sortList,
+															 newtlist);
+				if (list_length(sortPathkeys) != list_length(sortList))
+				{
+					/* Drop the redundant SortGroupClause */
+					sortList = list_delete_last(sortList);
+					Assert(list_length(sortPathkeys) == list_length(sortList));
+					/* Undo tlist addition, if we made one */
+					if (made_tle)
+					{
+						newtlist = list_delete_last(newtlist);
+						nextresno--;
+					}
+					/* We need not consider this clause for hashing, either */
+					continue;
+				}
+			}
+			else if (sjinfo->semi_can_btree)	/* shouldn't happen */
+				elog(ERROR, "could not find ordering operator for equality operator %u",
+					 in_oper);
+
+			if (sjinfo->semi_can_hash)
+			{
+				/* Create a GROUP BY list for the Agg node to use */
+				Oid			eq_oper;
+				SortGroupClause *groupcl;
+
+				/*
+				 * Get the hashable equality operators for the Agg node to
+				 * use. Normally these are the same as the IN clause
+				 * operators, but if those are cross-type operators then the
+				 * equality operators are the ones for the IN clause
+				 * operators' RHS datatype.
+				 */
+				if (!get_compatible_hash_operators(in_oper, NULL, &eq_oper))
+					elog(ERROR, "could not find compatible hash operator for operator %u",
+						 in_oper);
+
+				groupcl = makeNode(SortGroupClause);
+				groupcl->tleSortGroupRef = assignSortGroupRef(tle, newtlist);
+				groupcl->eqop = eq_oper;
+				groupcl->sortop = sortop;
+				groupcl->reverse_sort = false;
+				groupcl->nulls_first = false;
+				groupcl->hashable = true;
+				groupClause = lappend(groupClause, groupcl);
+			}
+		}
+
+		/*
+		 * Done building the sortPathkeys and groupClause.  But the
+		 * sortPathkeys are bogus if not all the clauses were sortable.
+		 */
+		if (!sjinfo->semi_can_btree)
+			sortPathkeys = NIL;
+
+		/*
+		 * It can happen that all the RHS columns are equated to constants.
+		 * We'd have to do something special to unique-ify in that case, and
+		 * it's such an unlikely-in-the-real-world case that it's not worth
+		 * the effort.  So just punt if we found no columns to unique-ify.
+		 */
+		if (sortPathkeys == NIL && groupClause == NIL)
+		{
+			MemoryContextSwitchTo(oldcontext);
+			return NULL;
+		}
+
+		/* Convert the required targetlist back to PathTarget form */
+		unique_rel->reltarget = create_pathtarget(root, newtlist);
+	}
+
+	/* build unique paths based on input rel's pathlist */
+	create_final_unique_paths(root, rel, sortPathkeys, groupClause,
+							  sjinfo, unique_rel);
+
+	/* build unique paths based on input rel's partial_pathlist */
+	create_partial_unique_paths(root, rel, sortPathkeys, groupClause,
+								sjinfo, unique_rel);
+
+	/* Now choose the best path(s) */
+	set_cheapest(unique_rel);
+
+	/*
+	 * There shouldn't be any partial paths for the unique relation;
+	 * otherwise, we won't be able to properly guarantee uniqueness.
+	 */
+	Assert(unique_rel->partial_pathlist == NIL);
+
+	/* Cache the result */
+	rel->unique_rel = unique_rel;
+	rel->unique_pathkeys = sortPathkeys;
+	rel->unique_groupclause = groupClause;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	return unique_rel;
+}
+
+/*
+ * create_final_unique_paths
+ *    Create unique paths in 'unique_rel' based on 'input_rel' pathlist
+ */
+static void
+create_final_unique_paths(PlannerInfo *root, RelOptInfo *input_rel,
+						  List *sortPathkeys, List *groupClause,
+						  SpecialJoinInfo *sjinfo, RelOptInfo *unique_rel)
+{
+	Path	   *cheapest_input_path = input_rel->cheapest_total_path;
+
+	/* Estimate number of output rows */
+	unique_rel->rows = estimate_num_groups(root,
+										   sjinfo->semi_rhs_exprs,
+										   cheapest_input_path->rows,
+										   NULL,
+										   NULL);
+
+	/* Consider sort-based implementations, if possible. */
+	if (sjinfo->semi_can_btree)
+	{
+		ListCell   *lc;
+
+		/*
+		 * Use any available suitably-sorted path as input, and also consider
+		 * sorting the cheapest-total path and incremental sort on any paths
+		 * with presorted keys.
+		 *
+		 * To save planning time, we ignore parameterized input paths unless
+		 * they are the cheapest-total path.
+		 */
+		foreach(lc, input_rel->pathlist)
+		{
+			Path	   *input_path = (Path *) lfirst(lc);
+			Path	   *path;
+			bool		is_sorted;
+			int			presorted_keys;
+
+			/*
+			 * Ignore parameterized paths that are not the cheapest-total
+			 * path.
+			 */
+			if (input_path->param_info &&
+				input_path != cheapest_input_path)
+				continue;
+
+			is_sorted = pathkeys_count_contained_in(sortPathkeys,
+													input_path->pathkeys,
+													&presorted_keys);
+
+			/*
+			 * Ignore paths that are not suitably or partially sorted, unless
+			 * they are the cheapest total path (no need to deal with paths
+			 * which have presorted keys when incremental sort is disabled).
+			 */
+			if (!is_sorted && input_path != cheapest_input_path &&
+				(presorted_keys == 0 || !enable_incremental_sort))
+				continue;
+
+			/*
+			 * Make a separate ProjectionPath in case we need a Result node.
+			 */
+			path = (Path *) create_projection_path(root,
+												   unique_rel,
+												   input_path,
+												   unique_rel->reltarget);
+
+			if (!is_sorted)
+			{
+				/*
+				 * We've no need to consider both a sort and incremental sort.
+				 * We'll just do a sort if there are no presorted keys and an
+				 * incremental sort when there are presorted keys.
+				 */
+				if (presorted_keys == 0 || !enable_incremental_sort)
+					path = (Path *) create_sort_path(root,
+													 unique_rel,
+													 path,
+													 sortPathkeys,
+													 -1.0);
+				else
+					path = (Path *) create_incremental_sort_path(root,
+																 unique_rel,
+																 path,
+																 sortPathkeys,
+																 presorted_keys,
+																 -1.0);
+			}
+
+			path = (Path *) create_unique_path(root, unique_rel, path,
+											   list_length(sortPathkeys),
+											   unique_rel->rows);
+
+			add_path(unique_rel, path);
+		}
+	}
+
+	/* Consider hash-based implementation, if possible. */
+	if (sjinfo->semi_can_hash)
+	{
+		Path	   *path;
+
+		/*
+		 * Make a separate ProjectionPath in case we need a Result node.
+		 */
+		path = (Path *) create_projection_path(root,
+											   unique_rel,
+											   cheapest_input_path,
+											   unique_rel->reltarget);
+
+		path = (Path *) create_agg_path(root,
+										unique_rel,
+										path,
+										cheapest_input_path->pathtarget,
+										AGG_HASHED,
+										AGGSPLIT_SIMPLE,
+										groupClause,
+										NIL,
+										NULL,
+										unique_rel->rows);
+
+		add_path(unique_rel, path);
+	}
+}
+
+/*
+ * create_partial_unique_paths
+ *    Create unique paths in 'unique_rel' based on 'input_rel' partial_pathlist
+ */
+static void
+create_partial_unique_paths(PlannerInfo *root, RelOptInfo *input_rel,
+							List *sortPathkeys, List *groupClause,
+							SpecialJoinInfo *sjinfo, RelOptInfo *unique_rel)
+{
+	RelOptInfo *partial_unique_rel;
+	Path	   *cheapest_partial_path;
+
+	/* nothing to do when there are no partial paths in the input rel */
+	if (!input_rel->consider_parallel || input_rel->partial_pathlist == NIL)
+		return;
+
+	/*
+	 * nothing to do if there's anything in the targetlist that's
+	 * parallel-restricted.
+	 */
+	if (!is_parallel_safe(root, (Node *) unique_rel->reltarget->exprs))
+		return;
+
+	cheapest_partial_path = linitial(input_rel->partial_pathlist);
+
+	partial_unique_rel = makeNode(RelOptInfo);
+	memcpy(partial_unique_rel, input_rel, sizeof(RelOptInfo));
+
+	/*
+	 * clear path info
+	 */
+	partial_unique_rel->pathlist = NIL;
+	partial_unique_rel->ppilist = NIL;
+	partial_unique_rel->partial_pathlist = NIL;
+	partial_unique_rel->cheapest_startup_path = NULL;
+	partial_unique_rel->cheapest_total_path = NULL;
+	partial_unique_rel->cheapest_parameterized_paths = NIL;
+
+	/* Estimate number of output rows */
+	partial_unique_rel->rows = estimate_num_groups(root,
+												   sjinfo->semi_rhs_exprs,
+												   cheapest_partial_path->rows,
+												   NULL,
+												   NULL);
+	partial_unique_rel->reltarget = unique_rel->reltarget;
+
+	/* Consider sort-based implementations, if possible. */
+	if (sjinfo->semi_can_btree)
+	{
+		ListCell   *lc;
+
+		/*
+		 * Use any available suitably-sorted path as input, and also consider
+		 * sorting the cheapest partial path and incremental sort on any paths
+		 * with presorted keys.
+		 */
+		foreach(lc, input_rel->partial_pathlist)
+		{
+			Path	   *input_path = (Path *) lfirst(lc);
+			Path	   *path;
+			bool		is_sorted;
+			int			presorted_keys;
+
+			is_sorted = pathkeys_count_contained_in(sortPathkeys,
+													input_path->pathkeys,
+													&presorted_keys);
+
+			/*
+			 * Ignore paths that are not suitably or partially sorted, unless
+			 * they are the cheapest partial path (no need to deal with paths
+			 * which have presorted keys when incremental sort is disabled).
+			 */
+			if (!is_sorted && input_path != cheapest_partial_path &&
+				(presorted_keys == 0 || !enable_incremental_sort))
+				continue;
+
+			/*
+			 * Make a separate ProjectionPath in case we need a Result node.
+			 */
+			path = (Path *) create_projection_path(root,
+												   partial_unique_rel,
+												   input_path,
+												   partial_unique_rel->reltarget);
+
+			if (!is_sorted)
+			{
+				/*
+				 * We've no need to consider both a sort and incremental sort.
+				 * We'll just do a sort if there are no presorted keys and an
+				 * incremental sort when there are presorted keys.
+				 */
+				if (presorted_keys == 0 || !enable_incremental_sort)
+					path = (Path *) create_sort_path(root,
+													 partial_unique_rel,
+													 path,
+													 sortPathkeys,
+													 -1.0);
+				else
+					path = (Path *) create_incremental_sort_path(root,
+																 partial_unique_rel,
+																 path,
+																 sortPathkeys,
+																 presorted_keys,
+																 -1.0);
+			}
+
+			path = (Path *) create_unique_path(root, partial_unique_rel, path,
+											   list_length(sortPathkeys),
+											   partial_unique_rel->rows);
+
+			add_partial_path(partial_unique_rel, path);
+		}
+	}
+
+	/* Consider hash-based implementation, if possible. */
+	if (sjinfo->semi_can_hash)
+	{
+		Path	   *path;
+
+		/*
+		 * Make a separate ProjectionPath in case we need a Result node.
+		 */
+		path = (Path *) create_projection_path(root,
+											   partial_unique_rel,
+											   cheapest_partial_path,
+											   partial_unique_rel->reltarget);
+
+		path = (Path *) create_agg_path(root,
+										partial_unique_rel,
+										path,
+										cheapest_partial_path->pathtarget,
+										AGG_HASHED,
+										AGGSPLIT_SIMPLE,
+										groupClause,
+										NIL,
+										NULL,
+										partial_unique_rel->rows);
+
+		add_partial_path(partial_unique_rel, path);
+	}
+
+	if (partial_unique_rel->partial_pathlist != NIL)
+	{
+		generate_useful_gather_paths(root, partial_unique_rel, true);
+		set_cheapest(partial_unique_rel);
+
+		/*
+		 * Finally, create paths to unique-ify the final result.  This step is
+		 * needed to remove any duplicates due to combining rows from parallel
+		 * workers.
+		 */
+		create_final_unique_paths(root, partial_unique_rel,
+								  sortPathkeys, groupClause,
+								  sjinfo, unique_rel);
+	}
 }

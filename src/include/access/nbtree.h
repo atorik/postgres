@@ -17,9 +17,8 @@
 #include "access/amapi.h"
 #include "access/itup.h"
 #include "access/sdir.h"
-#include "access/tableam.h"
-#include "access/xlogreader.h"
 #include "catalog/pg_am_d.h"
+#include "catalog/pg_class.h"
 #include "catalog/pg_index.h"
 #include "lib/stringinfo.h"
 #include "storage/bufmgr.h"
@@ -939,7 +938,7 @@ typedef BTVacuumPostingData *BTVacuumPosting;
  * processing.  This approach minimizes lock/unlock traffic.  We must always
  * drop the lock to make it okay for caller to process the returned items.
  * Whether or not we can also release the pin during this window will vary.
- * We drop the pin eagerly (when safe) to avoid blocking progress by VACUUM
+ * We drop the pin (when so->dropPin) to avoid blocking progress by VACUUM
  * (see nbtree/README section about making concurrent TID recycling safe).
  * We'll always release both the lock and the pin on the current page before
  * moving on to its sibling page.
@@ -967,7 +966,7 @@ typedef struct BTScanPosData
 	BlockNumber currPage;		/* page referenced by items array */
 	BlockNumber prevPage;		/* currPage's left link */
 	BlockNumber nextPage;		/* currPage's right link */
-	XLogRecPtr	lsn;			/* currPage's LSN */
+	XLogRecPtr	lsn;			/* currPage's LSN (when so->dropPin) */
 
 	/* scan direction for the saved position's call to _bt_readpage */
 	ScanDirection dir;
@@ -1070,6 +1069,7 @@ typedef struct BTScanOpaqueData
 	/* info about killed items if any (killedItems is NULL if never used) */
 	int		   *killedItems;	/* currPos.items indexes of killed items */
 	int			numKilled;		/* number of currently stored items */
+	bool		dropPin;		/* drop leaf pin before btgettuple returns? */
 
 	/*
 	 * If we are doing an index-only scan, these are the tuple storage
@@ -1284,9 +1284,10 @@ extern void _bt_pageinit(Page page, Size size);
 extern void _bt_delitems_vacuum(Relation rel, Buffer buf,
 								OffsetNumber *deletable, int ndeletable,
 								BTVacuumPosting *updatable, int nupdatable);
+struct TM_IndexDeleteOp;		/* avoid including tableam.h here */
 extern void _bt_delitems_delete_check(Relation rel, Buffer buf,
 									  Relation heapRel,
-									  TM_IndexDeleteOp *delstate);
+									  struct TM_IndexDeleteOp *delstate);
 extern void _bt_pagedel(Relation rel, Buffer leafbuf, BTVacState *vstate);
 extern void _bt_pendingfsm_init(Relation rel, BTVacState *vstate,
 								bool cleanuponly);

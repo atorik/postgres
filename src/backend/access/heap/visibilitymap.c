@@ -259,7 +259,7 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 #endif
 
 	Assert(InRecovery || XLogRecPtrIsInvalid(recptr));
-	Assert(InRecovery || PageIsAllVisible((Page) BufferGetPage(heapBuf)));
+	Assert(InRecovery || PageIsAllVisible(BufferGetPage(heapBuf)));
 	Assert((flags & VISIBILITYMAP_VALID_BITS) == flags);
 
 	/* Must never set all_frozen bit without also setting all_visible bit */
@@ -364,7 +364,7 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *vmbuf)
 	{
 		*vmbuf = vm_readbuf(rel, mapBlock, false);
 		if (!BufferIsValid(*vmbuf))
-			return false;
+			return (uint8) 0;
 	}
 
 	map = PageGetContents(BufferGetPage(*vmbuf));

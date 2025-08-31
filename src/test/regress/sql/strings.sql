@@ -76,6 +76,7 @@ SELECT E'De\\000dBeEf'::bytea;
 SELECT E'De\123dBeEf'::bytea;
 SELECT E'De\\123dBeEf'::bytea;
 SELECT E'De\\678dBeEf'::bytea;
+SELECT E'DeAd\\\\BeEf'::bytea;
 
 SELECT reverse(''::bytea);
 SELECT reverse('\xaa'::bytea);
@@ -88,6 +89,7 @@ SELECT E'\\xDe00BeEf'::bytea;
 SELECT E'DeAdBeEf'::bytea;
 SELECT E'De\\000dBeEf'::bytea;
 SELECT E'De\\123dBeEf'::bytea;
+SELECT E'DeAd\\\\BeEf'::bytea;
 
 -- Test non-error-throwing API too
 SELECT pg_input_is_valid(E'\\xDeAdBeE', 'bytea');
@@ -646,6 +648,26 @@ CREATE TABLE toasttest (c char(4096));
 INSERT INTO toasttest VALUES('x');
 SELECT length(c), c::text FROM toasttest;
 SELECT c FROM toasttest;
+DROP TABLE toasttest;
+
+-- test with short varlenas (up to 126 data bytes reduced to a 1-byte header)
+-- being toasted.
+CREATE TABLE toasttest (f1 text, f2 text);
+ALTER TABLE toasttest SET (toast_tuple_target = 128);
+ALTER TABLE toasttest ALTER COLUMN f1 SET STORAGE EXTERNAL;
+ALTER TABLE toasttest ALTER COLUMN f2 SET STORAGE EXTERNAL;
+-- Here, the first value is a varlena large enough to make it toasted and
+-- stored uncompressed.  The second value is a short varlena, toasted
+-- and stored uncompressed.
+INSERT INTO toasttest values(repeat('1234', 1000), repeat('5678', 30));
+SELECT reltoastrelid::regclass AS reltoastname FROM pg_class
+  WHERE oid = 'toasttest'::regclass \gset
+-- There should be two values inserted in the toast relation.
+SELECT count(*) FROM :reltoastname WHERE chunk_seq = 0;
+SELECT substr(f1, 5, 10) AS f1_data, substr(f2, 5, 10) AS f2_data
+  FROM toasttest;
+SELECT pg_column_compression(f1) AS f1_comp, pg_column_compression(f2) AS f2_comp
+  FROM toasttest;
 DROP TABLE toasttest;
 
 --

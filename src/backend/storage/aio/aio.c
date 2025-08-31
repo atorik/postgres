@@ -275,7 +275,7 @@ pgaio_io_release_resowner(dlist_node *ioh_node, bool on_error)
 	ResourceOwnerForgetAioHandle(ioh->resowner, &ioh->resowner_node);
 	ioh->resowner = NULL;
 
-	switch (ioh->state)
+	switch ((PgAioHandleState) ioh->state)
 	{
 		case PGAIO_HS_IDLE:
 			elog(ERROR, "unexpected");
@@ -556,6 +556,13 @@ bool
 pgaio_io_was_recycled(PgAioHandle *ioh, uint64 ref_generation, PgAioHandleState *state)
 {
 	*state = ioh->state;
+
+	/*
+	 * Ensure that we don't see an earlier state of the handle than ioh->state
+	 * due to compiler or CPU reordering. This protects both ->generation as
+	 * directly used here, and other fields in the handle accessed in the
+	 * caller if the handle was not reused.
+	 */
 	pg_read_barrier();
 
 	return ioh->generation != ref_generation;
@@ -593,7 +600,7 @@ pgaio_io_wait(PgAioHandle *ioh, uint64 ref_generation)
 		if (pgaio_io_was_recycled(ioh, ref_generation, &state))
 			return;
 
-		switch (state)
+		switch ((PgAioHandleState) state)
 		{
 			case PGAIO_HS_IDLE:
 			case PGAIO_HS_HANDED_OUT:
@@ -773,7 +780,12 @@ pgaio_io_wait_for_free(void)
 			 * Note that no interrupts are processed between the state check
 			 * and the call to reclaim - that's important as otherwise an
 			 * interrupt could have already reclaimed the handle.
+			 *
+			 * Need to ensure that there's no reordering, in the more common
+			 * paths, where we wait for IO, that's done by
+			 * pgaio_io_was_recycled().
 			 */
+			pg_read_barrier();
 			pgaio_io_reclaim(ioh);
 			reclaimed++;
 		}
@@ -813,7 +825,7 @@ pgaio_io_wait_for_free(void)
 											   &pgaio_my_backend->in_flight_ios);
 		uint64		generation = ioh->generation;
 
-		switch (ioh->state)
+		switch ((PgAioHandleState) ioh->state)
 		{
 				/* should not be in in-flight list */
 			case PGAIO_HS_IDLE:
@@ -852,7 +864,12 @@ pgaio_io_wait_for_free(void)
 				 * check and the call to reclaim - that's important as
 				 * otherwise an interrupt could have already reclaimed the
 				 * handle.
+				 *
+				 * Need to ensure that there's no reordering, in the more
+				 * common paths, where we wait for IO, that's done by
+				 * pgaio_io_was_recycled().
 				 */
+				pg_read_barrier();
 				pgaio_io_reclaim(ioh);
 				break;
 		}
@@ -888,7 +905,7 @@ static const char *
 pgaio_io_state_get_name(PgAioHandleState s)
 {
 #define PGAIO_HS_TOSTR_CASE(sym) case PGAIO_HS_##sym: return #sym
-	switch (s)
+	switch ((PgAioHandleState) s)
 	{
 			PGAIO_HS_TOSTR_CASE(IDLE);
 			PGAIO_HS_TOSTR_CASE(HANDED_OUT);
@@ -913,7 +930,7 @@ pgaio_io_get_state_name(PgAioHandle *ioh)
 const char *
 pgaio_result_status_string(PgAioResultStatus rs)
 {
-	switch (rs)
+	switch ((PgAioResultStatus) rs)
 	{
 		case PGAIO_RS_UNKNOWN:
 			return "UNKNOWN";

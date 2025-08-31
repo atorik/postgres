@@ -666,6 +666,14 @@ GRANT SELECT ON pg_shmem_allocations_numa TO pg_read_all_stats;
 REVOKE EXECUTE ON FUNCTION pg_get_shmem_allocations_numa() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION pg_get_shmem_allocations_numa() TO pg_read_all_stats;
 
+CREATE VIEW pg_dsm_registry_allocations AS
+    SELECT * FROM pg_get_dsm_registry_allocations();
+
+REVOKE ALL ON pg_dsm_registry_allocations FROM PUBLIC;
+GRANT SELECT ON pg_dsm_registry_allocations TO pg_read_all_stats;
+REVOKE EXECUTE ON FUNCTION pg_get_dsm_registry_allocations() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION pg_get_dsm_registry_allocations() TO pg_read_all_stats;
+
 CREATE VIEW pg_backend_memory_contexts AS
     SELECT * FROM pg_get_backend_memory_contexts();
 
@@ -895,7 +903,7 @@ CREATE VIEW pg_stat_activity AS
             S.wait_event,
             S.state,
             S.backend_xid,
-            s.backend_xmin,
+            S.backend_xmin,
             S.query_id,
             S.query,
             S.backend_type
@@ -1319,7 +1327,10 @@ CREATE VIEW pg_stat_progress_basebackup AS
         CASE S.param2 WHEN -1 THEN NULL ELSE S.param2 END AS backup_total,
         S.param3 AS backup_streamed,
         S.param4 AS tablespaces_total,
-        S.param5 AS tablespaces_streamed
+        S.param5 AS tablespaces_streamed,
+        CASE S.param6 WHEN 1 THEN 'full'
+                      WHEN 2 THEN 'incremental'
+                      END AS backup_type
     FROM pg_stat_get_progress_info('BASEBACKUP') AS S;
 
 
@@ -1378,7 +1389,8 @@ REVOKE ALL ON pg_subscription FROM public;
 GRANT SELECT (oid, subdbid, subskiplsn, subname, subowner, subenabled,
               subbinary, substream, subtwophasestate, subdisableonerr,
 			  subpasswordrequired, subrunasowner, subfailover,
-              subslotname, subsynccommit, subpublications, suborigin)
+			  subretaindeadtuples, subslotname, subsynccommit,
+			  subpublications, suborigin)
     ON pg_subscription TO public;
 
 CREATE VIEW pg_stat_subscription_stats AS
@@ -1390,6 +1402,7 @@ CREATE VIEW pg_stat_subscription_stats AS
         ss.confl_insert_exists,
         ss.confl_update_origin_differs,
         ss.confl_update_exists,
+        ss.confl_update_deleted,
         ss.confl_update_missing,
         ss.confl_delete_origin_differs,
         ss.confl_delete_missing,

@@ -90,9 +90,7 @@ extern MemoizePath *create_memoize_path(PlannerInfo *root,
 										List *hash_operators,
 										bool singlerow,
 										bool binary_mode,
-										double calls);
-extern UniquePath *create_unique_path(PlannerInfo *root, RelOptInfo *rel,
-									  Path *subpath, SpecialJoinInfo *sjinfo);
+										Cardinality est_calls);
 extern GatherPath *create_gather_path(PlannerInfo *root,
 									  RelOptInfo *rel, Path *subpath, PathTarget *target,
 									  Relids required_outer, double *rows);
@@ -223,11 +221,11 @@ extern GroupPath *create_group_path(PlannerInfo *root,
 									List *groupClause,
 									List *qual,
 									double numGroups);
-extern UpperUniquePath *create_upper_unique_path(PlannerInfo *root,
-												 RelOptInfo *rel,
-												 Path *subpath,
-												 int numCols,
-												 double numGroups);
+extern UniquePath *create_unique_path(PlannerInfo *root,
+									  RelOptInfo *rel,
+									  Path *subpath,
+									  int numCols,
+									  double numGroups);
 extern AggPath *create_agg_path(PlannerInfo *root,
 								RelOptInfo *rel,
 								Path *subpath,

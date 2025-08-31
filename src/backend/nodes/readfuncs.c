@@ -526,6 +526,8 @@ _readA_Expr(void)
 
 	READ_NODE_FIELD(lexpr);
 	READ_NODE_FIELD(rexpr);
+	READ_LOCATION_FIELD(rexpr_list_start);
+	READ_LOCATION_FIELD(rexpr_list_end);
 	READ_LOCATION_FIELD(location);
 
 	READ_DONE();
@@ -628,7 +630,7 @@ readDatum(bool typbyval)
 		}
 	}
 	else if (length <= 0)
-		res = (Datum) NULL;
+		res = (Datum) 0;
 	else
 	{
 		s = (char *) palloc(length);

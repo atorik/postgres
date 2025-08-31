@@ -95,8 +95,6 @@ static Material *create_material_plan(PlannerInfo *root, MaterialPath *best_path
 									  int flags);
 static Memoize *create_memoize_plan(PlannerInfo *root, MemoizePath *best_path,
 									int flags);
-static Plan *create_unique_plan(PlannerInfo *root, UniquePath *best_path,
-								int flags);
 static Gather *create_gather_plan(PlannerInfo *root, GatherPath *best_path);
 static Plan *create_projection_plan(PlannerInfo *root,
 									ProjectionPath *best_path,
@@ -106,8 +104,7 @@ static Sort *create_sort_plan(PlannerInfo *root, SortPath *best_path, int flags)
 static IncrementalSort *create_incrementalsort_plan(PlannerInfo *root,
 													IncrementalSortPath *best_path, int flags);
 static Group *create_group_plan(PlannerInfo *root, GroupPath *best_path);
-static Unique *create_upper_unique_plan(PlannerInfo *root, UpperUniquePath *best_path,
-										int flags);
+static Unique *create_unique_plan(PlannerInfo *root, UniquePath *best_path, int flags);
 static Agg *create_agg_plan(PlannerInfo *root, AggPath *best_path);
 static Plan *create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path);
 static Result *create_minmaxagg_plan(PlannerInfo *root, MinMaxAggPath *best_path);
@@ -284,7 +281,10 @@ static Material *make_material(Plan *lefttree);
 static Memoize *make_memoize(Plan *lefttree, Oid *hashoperators,
 							 Oid *collations, List *param_exprs,
 							 bool singlerow, bool binary_mode,
-							 uint32 est_entries, Bitmapset *keyparamids);
+							 uint32 est_entries, Bitmapset *keyparamids,
+							 Cardinality est_calls,
+							 Cardinality est_unique_keys,
+							 double est_hit_ratio);
 static WindowAgg *make_windowagg(List *tlist, WindowClause *wc,
 								 int partNumCols, AttrNumber *partColIdx, Oid *partOperators, Oid *partCollations,
 								 int ordNumCols, AttrNumber *ordColIdx, Oid *ordOperators, Oid *ordCollations,
@@ -293,9 +293,9 @@ static WindowAgg *make_windowagg(List *tlist, WindowClause *wc,
 static Group *make_group(List *tlist, List *qual, int numGroupCols,
 						 AttrNumber *grpColIdx, Oid *grpOperators, Oid *grpCollations,
 						 Plan *lefttree);
-static Unique *make_unique_from_sortclauses(Plan *lefttree, List *distinctList);
 static Unique *make_unique_from_pathkeys(Plan *lefttree,
-										 List *pathkeys, int numCols);
+										 List *pathkeys, int numCols,
+										 Relids relids);
 static Gather *make_gather(List *qptlist, List *qpqual,
 						   int nworkers, int rescan_param, bool single_copy, Plan *subplan);
 static SetOp *make_setop(SetOpCmd cmd, SetOpStrategy strategy,
@@ -467,19 +467,9 @@ create_plan_recurse(PlannerInfo *root, Path *best_path, int flags)
 												flags);
 			break;
 		case T_Unique:
-			if (IsA(best_path, UpperUniquePath))
-			{
-				plan = (Plan *) create_upper_unique_plan(root,
-														 (UpperUniquePath *) best_path,
-														 flags);
-			}
-			else
-			{
-				Assert(IsA(best_path, UniquePath));
-				plan = create_unique_plan(root,
-										  (UniquePath *) best_path,
-										  flags);
-			}
+			plan = (Plan *) create_unique_plan(root,
+											   (UniquePath *) best_path,
+											   flags);
 			break;
 		case T_Gather:
 			plan = (Plan *) create_gather_plan(root,
@@ -1318,6 +1308,7 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 			Oid		   *sortOperators;
 			Oid		   *collations;
 			bool	   *nullsFirst;
+			int			presorted_keys;
 
 			/*
 			 * Compute sort column info, and adjust subplan's tlist as needed.
@@ -1353,14 +1344,38 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 						  numsortkeys * sizeof(bool)) == 0);
 
 			/* Now, insert a Sort node if subplan isn't sufficiently ordered */
-			if (!pathkeys_contained_in(pathkeys, subpath->pathkeys))
+			if (!pathkeys_count_contained_in(pathkeys, subpath->pathkeys,
+											 &presorted_keys))
 			{
-				Sort	   *sort = make_sort(subplan, numsortkeys,
+				Plan	   *sort_plan;
+
+				/*
+				 * We choose to use incremental sort if it is enabled and
+				 * there are presorted keys; otherwise we use full sort.
+				 */
+				if (enable_incremental_sort && presorted_keys > 0)
+				{
+					sort_plan = (Plan *)
+						make_incrementalsort(subplan, numsortkeys, presorted_keys,
 											 sortColIdx, sortOperators,
 											 collations, nullsFirst);
 
-				label_sort_with_costsize(root, sort, best_path->limit_tuples);
-				subplan = (Plan *) sort;
+					label_incrementalsort_with_costsize(root,
+														(IncrementalSort *) sort_plan,
+														pathkeys,
+														best_path->limit_tuples);
+				}
+				else
+				{
+					sort_plan = (Plan *) make_sort(subplan, numsortkeys,
+												   sortColIdx, sortOperators,
+												   collations, nullsFirst);
+
+					label_sort_with_costsize(root, (Sort *) sort_plan,
+											 best_path->limit_tuples);
+				}
+
+				subplan = sort_plan;
 			}
 		}
 
@@ -1491,6 +1506,7 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 		Oid		   *sortOperators;
 		Oid		   *collations;
 		bool	   *nullsFirst;
+		int			presorted_keys;
 
 		/* Build the child plan */
 		/* Must insist that all children return the same tlist */
@@ -1525,14 +1541,38 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 					  numsortkeys * sizeof(bool)) == 0);
 
 		/* Now, insert a Sort node if subplan isn't sufficiently ordered */
-		if (!pathkeys_contained_in(pathkeys, subpath->pathkeys))
+		if (!pathkeys_count_contained_in(pathkeys, subpath->pathkeys,
+										 &presorted_keys))
 		{
-			Sort	   *sort = make_sort(subplan, numsortkeys,
+			Plan	   *sort_plan;
+
+			/*
+			 * We choose to use incremental sort if it is enabled and there
+			 * are presorted keys; otherwise we use full sort.
+			 */
+			if (enable_incremental_sort && presorted_keys > 0)
+			{
+				sort_plan = (Plan *)
+					make_incrementalsort(subplan, numsortkeys, presorted_keys,
 										 sortColIdx, sortOperators,
 										 collations, nullsFirst);
 
-			label_sort_with_costsize(root, sort, best_path->limit_tuples);
-			subplan = (Plan *) sort;
+				label_incrementalsort_with_costsize(root,
+													(IncrementalSort *) sort_plan,
+													pathkeys,
+													best_path->limit_tuples);
+			}
+			else
+			{
+				sort_plan = (Plan *) make_sort(subplan, numsortkeys,
+											   sortColIdx, sortOperators,
+											   collations, nullsFirst);
+
+				label_sort_with_costsize(root, (Sort *) sort_plan,
+										 best_path->limit_tuples);
+			}
+
+			subplan = sort_plan;
 		}
 
 		subplans = lappend(subplans, subplan);
@@ -1703,210 +1743,10 @@ create_memoize_plan(PlannerInfo *root, MemoizePath *best_path, int flags)
 
 	plan = make_memoize(subplan, operators, collations, param_exprs,
 						best_path->singlerow, best_path->binary_mode,
-						best_path->est_entries, keyparamids);
+						best_path->est_entries, keyparamids, best_path->est_calls,
+						best_path->est_unique_keys, best_path->est_hit_ratio);
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
-
-	return plan;
-}
-
-/*
- * create_unique_plan
- *	  Create a Unique plan for 'best_path' and (recursively) plans
- *	  for its subpaths.
- *
- *	  Returns a Plan node.
- */
-static Plan *
-create_unique_plan(PlannerInfo *root, UniquePath *best_path, int flags)
-{
-	Plan	   *plan;
-	Plan	   *subplan;
-	List	   *in_operators;
-	List	   *uniq_exprs;
-	List	   *newtlist;
-	int			nextresno;
-	bool		newitems;
-	int			numGroupCols;
-	AttrNumber *groupColIdx;
-	Oid		   *groupCollations;
-	int			groupColPos;
-	ListCell   *l;
-
-	/* Unique doesn't project, so tlist requirements pass through */
-	subplan = create_plan_recurse(root, best_path->subpath, flags);
-
-	/* Done if we don't need to do any actual unique-ifying */
-	if (best_path->umethod == UNIQUE_PATH_NOOP)
-		return subplan;
-
-	/*
-	 * As constructed, the subplan has a "flat" tlist containing just the Vars
-	 * needed here and at upper levels.  The values we are supposed to
-	 * unique-ify may be expressions in these variables.  We have to add any
-	 * such expressions to the subplan's tlist.
-	 *
-	 * The subplan may have a "physical" tlist if it is a simple scan plan. If
-	 * we're going to sort, this should be reduced to the regular tlist, so
-	 * that we don't sort more data than we need to.  For hashing, the tlist
-	 * should be left as-is if we don't need to add any expressions; but if we
-	 * do have to add expressions, then a projection step will be needed at
-	 * runtime anyway, so we may as well remove unneeded items. Therefore
-	 * newtlist starts from build_path_tlist() not just a copy of the
-	 * subplan's tlist; and we don't install it into the subplan unless we are
-	 * sorting or stuff has to be added.
-	 */
-	in_operators = best_path->in_operators;
-	uniq_exprs = best_path->uniq_exprs;
-
-	/* initialize modified subplan tlist as just the "required" vars */
-	newtlist = build_path_tlist(root, &best_path->path);
-	nextresno = list_length(newtlist) + 1;
-	newitems = false;
-
-	foreach(l, uniq_exprs)
-	{
-		Expr	   *uniqexpr = lfirst(l);
-		TargetEntry *tle;
-
-		tle = tlist_member(uniqexpr, newtlist);
-		if (!tle)
-		{
-			tle = makeTargetEntry((Expr *) uniqexpr,
-								  nextresno,
-								  NULL,
-								  false);
-			newtlist = lappend(newtlist, tle);
-			nextresno++;
-			newitems = true;
-		}
-	}
-
-	/* Use change_plan_targetlist in case we need to insert a Result node */
-	if (newitems || best_path->umethod == UNIQUE_PATH_SORT)
-		subplan = change_plan_targetlist(subplan, newtlist,
-										 best_path->path.parallel_safe);
-
-	/*
-	 * Build control information showing which subplan output columns are to
-	 * be examined by the grouping step.  Unfortunately we can't merge this
-	 * with the previous loop, since we didn't then know which version of the
-	 * subplan tlist we'd end up using.
-	 */
-	newtlist = subplan->targetlist;
-	numGroupCols = list_length(uniq_exprs);
-	groupColIdx = (AttrNumber *) palloc(numGroupCols * sizeof(AttrNumber));
-	groupCollations = (Oid *) palloc(numGroupCols * sizeof(Oid));
-
-	groupColPos = 0;
-	foreach(l, uniq_exprs)
-	{
-		Expr	   *uniqexpr = lfirst(l);
-		TargetEntry *tle;
-
-		tle = tlist_member(uniqexpr, newtlist);
-		if (!tle)				/* shouldn't happen */
-			elog(ERROR, "failed to find unique expression in subplan tlist");
-		groupColIdx[groupColPos] = tle->resno;
-		groupCollations[groupColPos] = exprCollation((Node *) tle->expr);
-		groupColPos++;
-	}
-
-	if (best_path->umethod == UNIQUE_PATH_HASH)
-	{
-		Oid		   *groupOperators;
-
-		/*
-		 * Get the hashable equality operators for the Agg node to use.
-		 * Normally these are the same as the IN clause operators, but if
-		 * those are cross-type operators then the equality operators are the
-		 * ones for the IN clause operators' RHS datatype.
-		 */
-		groupOperators = (Oid *) palloc(numGroupCols * sizeof(Oid));
-		groupColPos = 0;
-		foreach(l, in_operators)
-		{
-			Oid			in_oper = lfirst_oid(l);
-			Oid			eq_oper;
-
-			if (!get_compatible_hash_operators(in_oper, NULL, &eq_oper))
-				elog(ERROR, "could not find compatible hash operator for operator %u",
-					 in_oper);
-			groupOperators[groupColPos++] = eq_oper;
-		}
-
-		/*
-		 * Since the Agg node is going to project anyway, we can give it the
-		 * minimum output tlist, without any stuff we might have added to the
-		 * subplan tlist.
-		 */
-		plan = (Plan *) make_agg(build_path_tlist(root, &best_path->path),
-								 NIL,
-								 AGG_HASHED,
-								 AGGSPLIT_SIMPLE,
-								 numGroupCols,
-								 groupColIdx,
-								 groupOperators,
-								 groupCollations,
-								 NIL,
-								 NIL,
-								 best_path->path.rows,
-								 0,
-								 subplan);
-	}
-	else
-	{
-		List	   *sortList = NIL;
-		Sort	   *sort;
-
-		/* Create an ORDER BY list to sort the input compatibly */
-		groupColPos = 0;
-		foreach(l, in_operators)
-		{
-			Oid			in_oper = lfirst_oid(l);
-			Oid			sortop;
-			Oid			eqop;
-			TargetEntry *tle;
-			SortGroupClause *sortcl;
-
-			sortop = get_ordering_op_for_equality_op(in_oper, false);
-			if (!OidIsValid(sortop))	/* shouldn't happen */
-				elog(ERROR, "could not find ordering operator for equality operator %u",
-					 in_oper);
-
-			/*
-			 * The Unique node will need equality operators.  Normally these
-			 * are the same as the IN clause operators, but if those are
-			 * cross-type operators then the equality operators are the ones
-			 * for the IN clause operators' RHS datatype.
-			 */
-			eqop = get_equality_op_for_ordering_op(sortop, NULL);
-			if (!OidIsValid(eqop))	/* shouldn't happen */
-				elog(ERROR, "could not find equality operator for ordering operator %u",
-					 sortop);
-
-			tle = get_tle_by_resno(subplan->targetlist,
-								   groupColIdx[groupColPos]);
-			Assert(tle != NULL);
-
-			sortcl = makeNode(SortGroupClause);
-			sortcl->tleSortGroupRef = assignSortGroupRef(tle,
-														 subplan->targetlist);
-			sortcl->eqop = eqop;
-			sortcl->sortop = sortop;
-			sortcl->reverse_sort = false;
-			sortcl->nulls_first = false;
-			sortcl->hashable = false;	/* no need to make this accurate */
-			sortList = lappend(sortList, sortcl);
-			groupColPos++;
-		}
-		sort = make_sort_from_sortclauses(sortList, subplan);
-		label_sort_with_costsize(root, sort, -1.0);
-		plan = (Plan *) make_unique_from_sortclauses((Plan *) sort, sortList);
-	}
-
-	/* Copy cost data from Path to Plan */
-	copy_generic_path_info(plan, &best_path->path);
 
 	return plan;
 }
@@ -2268,13 +2108,13 @@ create_group_plan(PlannerInfo *root, GroupPath *best_path)
 }
 
 /*
- * create_upper_unique_plan
+ * create_unique_plan
  *
  *	  Create a Unique plan for 'best_path' and (recursively) plans
  *	  for its subpaths.
  */
 static Unique *
-create_upper_unique_plan(PlannerInfo *root, UpperUniquePath *best_path, int flags)
+create_unique_plan(PlannerInfo *root, UniquePath *best_path, int flags)
 {
 	Unique	   *plan;
 	Plan	   *subplan;
@@ -2286,9 +2126,17 @@ create_upper_unique_plan(PlannerInfo *root, UpperUniquePath *best_path, int flag
 	subplan = create_plan_recurse(root, best_path->subpath,
 								  flags | CP_LABEL_TLIST);
 
+	/*
+	 * make_unique_from_pathkeys calls find_ec_member_matching_expr, which
+	 * will ignore any child EC members that don't belong to the given relids.
+	 * Thus, if this unique path is based on a child relation, we must pass
+	 * its relids.
+	 */
 	plan = make_unique_from_pathkeys(subplan,
 									 best_path->path.pathkeys,
-									 best_path->numkeys);
+									 best_path->numkeys,
+									 IS_OTHER_REL(best_path->path.parent) ?
+									 best_path->path.parent->relids : NULL);
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
 
@@ -4344,13 +4192,16 @@ create_nestloop_plan(PlannerInfo *root,
 	NestLoop   *join_plan;
 	Plan	   *outer_plan;
 	Plan	   *inner_plan;
+	Relids		outerrelids;
 	List	   *tlist = build_path_tlist(root, &best_path->jpath.path);
 	List	   *joinrestrictclauses = best_path->jpath.joinrestrictinfo;
 	List	   *joinclauses;
 	List	   *otherclauses;
-	Relids		outerrelids;
 	List	   *nestParams;
+	List	   *outer_tlist;
+	bool		outer_parallel_safe;
 	Relids		saveOuterRels = root->curOuterRels;
+	ListCell   *lc;
 
 	/*
 	 * If the inner path is parameterized by the topmost parent of the outer
@@ -4372,8 +4223,8 @@ create_nestloop_plan(PlannerInfo *root,
 	outer_plan = create_plan_recurse(root, best_path->jpath.outerjoinpath, 0);
 
 	/* For a nestloop, include outer relids in curOuterRels for inner side */
-	root->curOuterRels = bms_union(root->curOuterRels,
-								   best_path->jpath.outerjoinpath->parent->relids);
+	outerrelids = best_path->jpath.outerjoinpath->parent->relids;
+	root->curOuterRels = bms_union(root->curOuterRels, outerrelids);
 
 	inner_plan = create_plan_recurse(root, best_path->jpath.innerjoinpath, 0);
 
@@ -4412,9 +4263,66 @@ create_nestloop_plan(PlannerInfo *root,
 	 * Identify any nestloop parameters that should be supplied by this join
 	 * node, and remove them from root->curOuterParams.
 	 */
-	outerrelids = best_path->jpath.outerjoinpath->parent->relids;
-	nestParams = identify_current_nestloop_params(root, outerrelids);
+	nestParams = identify_current_nestloop_params(root,
+												  outerrelids,
+												  PATH_REQ_OUTER((Path *) best_path));
 
+	/*
+	 * While nestloop parameters that are Vars had better be available from
+	 * the outer_plan already, there are edge cases where nestloop parameters
+	 * that are PHVs won't be.  In such cases we must add them to the
+	 * outer_plan's tlist, since the executor's NestLoopParam machinery
+	 * requires the params to be simple outer-Var references to that tlist.
+	 * (This is cheating a little bit, because the outer path's required-outer
+	 * relids might not be enough to allow evaluating such a PHV.  But in
+	 * practice, if we could have evaluated the PHV at the nestloop node, we
+	 * can do so in the outer plan too.)
+	 */
+	outer_tlist = outer_plan->targetlist;
+	outer_parallel_safe = outer_plan->parallel_safe;
+	foreach(lc, nestParams)
+	{
+		NestLoopParam *nlp = (NestLoopParam *) lfirst(lc);
+		PlaceHolderVar *phv;
+		TargetEntry *tle;
+
+		if (IsA(nlp->paramval, Var))
+			continue;			/* nothing to do for simple Vars */
+		/* Otherwise it must be a PHV */
+		phv = castNode(PlaceHolderVar, nlp->paramval);
+
+		if (tlist_member((Expr *) phv, outer_tlist))
+			continue;			/* already available */
+
+		/*
+		 * It's possible that nestloop parameter PHVs selected to evaluate
+		 * here contain references to surviving root->curOuterParams items
+		 * (that is, they reference values that will be supplied by some
+		 * higher-level nestloop).  Those need to be converted to Params now.
+		 * Note: it's safe to do this after the tlist_member() check, because
+		 * equal() won't pay attention to phv->phexpr.
+		 */
+		phv->phexpr = (Expr *) replace_nestloop_params(root,
+													   (Node *) phv->phexpr);
+
+		/* Make a shallow copy of outer_tlist, if we didn't already */
+		if (outer_tlist == outer_plan->targetlist)
+			outer_tlist = list_copy(outer_tlist);
+		/* ... and add the needed expression */
+		tle = makeTargetEntry((Expr *) copyObject(phv),
+							  list_length(outer_tlist) + 1,
+							  NULL,
+							  true);
+		outer_tlist = lappend(outer_tlist, tle);
+		/* ... and track whether tlist is (still) parallel-safe */
+		if (outer_parallel_safe)
+			outer_parallel_safe = is_parallel_safe(root, (Node *) phv);
+	}
+	if (outer_tlist != outer_plan->targetlist)
+		outer_plan = change_plan_targetlist(outer_plan, outer_tlist,
+											outer_parallel_safe);
+
+	/* And finally, we can build the join plan node */
 	join_plan = make_nestloop(tlist,
 							  joinclauses,
 							  otherclauses,
@@ -6639,7 +6547,9 @@ materialize_finished_plan(Plan *subplan)
 static Memoize *
 make_memoize(Plan *lefttree, Oid *hashoperators, Oid *collations,
 			 List *param_exprs, bool singlerow, bool binary_mode,
-			 uint32 est_entries, Bitmapset *keyparamids)
+			 uint32 est_entries, Bitmapset *keyparamids,
+			 Cardinality est_calls, Cardinality est_unique_keys,
+			 double est_hit_ratio)
 {
 	Memoize    *node = makeNode(Memoize);
 	Plan	   *plan = &node->plan;
@@ -6657,6 +6567,9 @@ make_memoize(Plan *lefttree, Oid *hashoperators, Oid *collations,
 	node->binary_mode = binary_mode;
 	node->est_entries = est_entries;
 	node->keyparamids = keyparamids;
+	node->est_calls = est_calls;
+	node->est_unique_keys = est_unique_keys;
+	node->est_hit_ratio = est_hit_ratio;
 
 	return node;
 }
@@ -6761,61 +6674,14 @@ make_group(List *tlist,
 }
 
 /*
- * distinctList is a list of SortGroupClauses, identifying the targetlist items
- * that should be considered by the Unique filter.  The input path must
- * already be sorted accordingly.
+ * pathkeys is a list of PathKeys, identifying the sort columns and semantics.
+ * The input plan must already be sorted accordingly.
+ *
+ * relids identifies the child relation being unique-ified, if any.
  */
 static Unique *
-make_unique_from_sortclauses(Plan *lefttree, List *distinctList)
-{
-	Unique	   *node = makeNode(Unique);
-	Plan	   *plan = &node->plan;
-	int			numCols = list_length(distinctList);
-	int			keyno = 0;
-	AttrNumber *uniqColIdx;
-	Oid		   *uniqOperators;
-	Oid		   *uniqCollations;
-	ListCell   *slitem;
-
-	plan->targetlist = lefttree->targetlist;
-	plan->qual = NIL;
-	plan->lefttree = lefttree;
-	plan->righttree = NULL;
-
-	/*
-	 * convert SortGroupClause list into arrays of attr indexes and equality
-	 * operators, as wanted by executor
-	 */
-	Assert(numCols > 0);
-	uniqColIdx = (AttrNumber *) palloc(sizeof(AttrNumber) * numCols);
-	uniqOperators = (Oid *) palloc(sizeof(Oid) * numCols);
-	uniqCollations = (Oid *) palloc(sizeof(Oid) * numCols);
-
-	foreach(slitem, distinctList)
-	{
-		SortGroupClause *sortcl = (SortGroupClause *) lfirst(slitem);
-		TargetEntry *tle = get_sortgroupclause_tle(sortcl, plan->targetlist);
-
-		uniqColIdx[keyno] = tle->resno;
-		uniqOperators[keyno] = sortcl->eqop;
-		uniqCollations[keyno] = exprCollation((Node *) tle->expr);
-		Assert(OidIsValid(uniqOperators[keyno]));
-		keyno++;
-	}
-
-	node->numCols = numCols;
-	node->uniqColIdx = uniqColIdx;
-	node->uniqOperators = uniqOperators;
-	node->uniqCollations = uniqCollations;
-
-	return node;
-}
-
-/*
- * as above, but use pathkeys to identify the sort columns and semantics
- */
-static Unique *
-make_unique_from_pathkeys(Plan *lefttree, List *pathkeys, int numCols)
+make_unique_from_pathkeys(Plan *lefttree, List *pathkeys, int numCols,
+						  Relids relids)
 {
 	Unique	   *node = makeNode(Unique);
 	Plan	   *plan = &node->plan;
@@ -6878,7 +6744,7 @@ make_unique_from_pathkeys(Plan *lefttree, List *pathkeys, int numCols)
 			foreach(j, plan->targetlist)
 			{
 				tle = (TargetEntry *) lfirst(j);
-				em = find_ec_member_matching_expr(ec, tle->expr, NULL);
+				em = find_ec_member_matching_expr(ec, tle->expr, relids);
 				if (em)
 				{
 					/* found expr already in tlist */
@@ -7114,6 +6980,8 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 	ModifyTable *node = makeNode(ModifyTable);
 	bool		returning_old_or_new = false;
 	bool		returning_old_or_new_valid = false;
+	bool		transition_tables = false;
+	bool		transition_tables_valid = false;
 	List	   *fdw_private_list;
 	Bitmapset  *direct_modify_plans;
 	ListCell   *lc;
@@ -7260,8 +7128,8 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 		 * callback functions needed for that and (2) there are no local
 		 * structures that need to be run for each modified row: row-level
 		 * triggers on the foreign table, stored generated columns, WITH CHECK
-		 * OPTIONs from parent views, or Vars returning OLD/NEW in the
-		 * RETURNING list.
+		 * OPTIONs from parent views, Vars returning OLD/NEW in the RETURNING
+		 * list, or transition tables on the named relation.
 		 */
 		direct_modify = false;
 		if (fdwroutine != NULL &&
@@ -7273,7 +7141,10 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 			!has_row_triggers(root, rti, operation) &&
 			!has_stored_generated_columns(root, rti))
 		{
-			/* returning_old_or_new is the same for all result relations */
+			/*
+			 * returning_old_or_new and transition_tables are the same for all
+			 * result relations, respectively
+			 */
 			if (!returning_old_or_new_valid)
 			{
 				returning_old_or_new =
@@ -7282,7 +7153,18 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 				returning_old_or_new_valid = true;
 			}
 			if (!returning_old_or_new)
-				direct_modify = fdwroutine->PlanDirectModify(root, node, rti, i);
+			{
+				if (!transition_tables_valid)
+				{
+					transition_tables = has_transition_tables(root,
+															  nominalRelation,
+															  operation);
+					transition_tables_valid = true;
+				}
+				if (!transition_tables)
+					direct_modify = fdwroutine->PlanDirectModify(root, node,
+																 rti, i);
+			}
 		}
 		if (direct_modify)
 			direct_modify_plans = bms_add_member(direct_modify_plans, i);

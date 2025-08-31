@@ -86,6 +86,17 @@ typedef struct LogicalRepWorker
 	/* Indicates whether apply can be performed in parallel. */
 	bool		parallel_apply;
 
+	/*
+	 * Changes made by this transaction and subsequent ones must be preserved.
+	 * This ensures that update_deleted conflicts can be accurately detected
+	 * during the apply phase of logical replication by this worker.
+	 *
+	 * The logical replication launcher manages an internal replication slot
+	 * named "pg_conflict_detection". It asynchronously collects this ID to
+	 * decide when to advance the xmin value of the slot.
+	 */
+	TransactionId oldest_nonremovable_xid;
+
 	/* Stats. */
 	XLogRecPtr	last_lsn;
 	TimestampTz last_send_time;
@@ -245,7 +256,8 @@ extern List *logicalrep_workers_find(Oid subid, bool only_running,
 extern bool logicalrep_worker_launch(LogicalRepWorkerType wtype,
 									 Oid dbid, Oid subid, const char *subname,
 									 Oid userid, Oid relid,
-									 dsm_handle subworker_dsm);
+									 dsm_handle subworker_dsm,
+									 bool retain_dead_tuples);
 extern void logicalrep_worker_stop(Oid subid, Oid relid);
 extern void logicalrep_pa_worker_stop(ParallelApplyWorkerInfo *winfo);
 extern void logicalrep_worker_wakeup(Oid subid, Oid relid);
