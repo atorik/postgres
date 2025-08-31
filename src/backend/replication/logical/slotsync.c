@@ -52,7 +52,6 @@
 #include "access/xlog_internal.h"
 #include "access/xlogrecovery.h"
 #include "catalog/pg_database.h"
-#include "commands/dbcommands.h"
 #include "libpq/pqsignal.h"
 #include "pgstat.h"
 #include "postmaster/interrupt.h"
@@ -1171,7 +1170,7 @@ slotsync_reread_config(void)
  * Interrupt handler for main loop of slot sync worker.
  */
 static void
-ProcessSlotSyncInterrupts(WalReceiverConn *wrconn)
+ProcessSlotSyncInterrupts(void)
 {
 	CHECK_FOR_INTERRUPTS();
 
@@ -1506,7 +1505,7 @@ ReplSlotSyncWorkerMain(const void *startup_data, size_t startup_data_len)
 	{
 		bool		some_slot_updated = false;
 
-		ProcessSlotSyncInterrupts(wrconn);
+		ProcessSlotSyncInterrupts();
 
 		some_slot_updated = synchronize_slots(wrconn);
 

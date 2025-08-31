@@ -280,10 +280,6 @@ elif host_system == 'windows'
     # define before including <time.h> for getting localtime_r() etc. on MinGW
     cppflags += '-D_POSIX_C_SOURCE'
   endif
-  if cc.get_id() == 'msvc'
-    # required for VA_ARGS_NARGS() in c.h; requires VS 2019
-    cppflags += '/Zc:preprocessor'
-  endif
 
   export_file_format = 'win'
   export_file_suffix = 'def'
@@ -549,6 +545,33 @@ dir_doc_extension = dir_doc / 'extension'
 # configuration-time checks (so they are more isolated). If they should be
 # used, they need to be added to test_c_args as well.
 ###############################################################
+
+# Do we need an option to enable C11?
+c11_test = '''
+#if !defined __STDC_VERSION__ || __STDC_VERSION__ < 201112L
+# error "Compiler does not advertise C11 conformance"
+#endif
+'''
+
+if not cc.compiles(c11_test, name: 'C11')
+  c11_ok = false
+  if cc.get_id() == 'msvc'
+    c11_test_args = ['/std:c11']
+  else
+    c11_test_args = ['-std=gnu11', '-std=c11']
+  endif
+  foreach arg : c11_test_args
+    if cc.compiles(c11_test, name: 'C11 with @0@'.format(arg), args: [arg])
+      c11_ok = true
+      cflags += arg
+      break
+    endif
+  endforeach
+  if not c11_ok
+    error('C compiler does not support C11')
+  endif
+endif
+
 
 postgres_inc = [include_directories(postgres_inc_d)]
 test_lib_d = postgres_lib_d
@@ -1703,49 +1726,6 @@ endif
 ###############################################################
 # Compiler tests
 ###############################################################
-
-# Do we need -std=c99 to compile C99 code? We don't want to add -std=c99
-# unnecessarily, because we optionally rely on newer features.
-c99_test = '''
-#include <stdbool.h>
-#include <complex.h>
-#include <tgmath.h>
-#include <inttypes.h>
-
-struct named_init_test {
-  int a;
-  int b;
-};
-
-extern void structfunc(struct named_init_test);
-
-int main(int argc, char **argv)
-{
-  struct named_init_test nit = {
-    .a = 3,
-    .b = 5,
-  };
-
-  for (int loop_var = 0; loop_var < 3; loop_var++)
-  {
-    nit.a += nit.b;
-  }
-
-  structfunc((struct named_init_test){1, 0});
-
-  return nit.a != 0;
-}
-'''
-
-if not cc.compiles(c99_test, name: 'c99', args: test_c_args)
-  if cc.compiles(c99_test, name: 'c99 with -std=c99',
-        args: test_c_args + ['-std=c99'])
-    test_c_args += '-std=c99'
-    cflags += '-std=c99'
-  else
-    error('C compiler does not support C99')
-  endif
-endif
 
 if host_machine.endian() == 'big'
   cdata.set('WORDS_BIGENDIAN', 1)
@@ -3307,6 +3287,7 @@ libpq_deps += [
 ]
 
 libpq_oauth_deps += [
+  thread_dep,
   libcurl,
 ]
 
