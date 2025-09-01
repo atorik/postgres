@@ -32,6 +32,7 @@ OBJS = \
 	define.o \
 	discard.o \
 	dropcmds.o \
+	dynamic_explain.o \
 	event_trigger.o \
 	explain.o \
 	explain_dr.o \

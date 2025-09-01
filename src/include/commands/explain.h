@@ -71,6 +71,8 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 						   const MemoryContextCounters *mem_counters);
 
 extern void ExplainPrintPlan(struct ExplainState *es, QueryDesc *queryDesc);
+extern void ExplainPrintTriggers(struct ExplainState *es, QueryDesc *queryDesc);
+extern void ExplainPrintPlan(struct ExplainState *es, QueryDesc *queryDesc);
 extern void ExplainPrintTriggers(struct ExplainState *es,
 								 QueryDesc *queryDesc);
 
@@ -80,5 +82,8 @@ extern void ExplainPrintJITSummary(struct ExplainState *es,
 extern void ExplainQueryText(struct ExplainState *es, QueryDesc *queryDesc);
 extern void ExplainQueryParameters(struct ExplainState *es,
 								   ParamListInfo params, int maxlen);
+extern void ExplainStringAssemble(struct ExplainState *es, QueryDesc *queryDesc,
+								  int logFormat, bool logTriggers,
+								  int logParameterMaxLength);
 
 #endif							/* EXPLAIN_H */

@@ -22,7 +22,6 @@ struct PlannedStmt;				/* avoid including plannodes.h here */
 
 extern PGDLLIMPORT Portal ActivePortal;
 
-
 extern PortalStrategy ChoosePortalStrategy(List *stmts);
 
 extern List *FetchPortalTargetList(Portal portal);

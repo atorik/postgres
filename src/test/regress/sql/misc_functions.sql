@@ -109,39 +109,64 @@ SELECT test_canonicalize_path('./abc/./def/.');
 SELECT test_canonicalize_path('./abc/././def/.');
 SELECT test_canonicalize_path('./abc/./def/.././ghi/../../../jkl/mno');
 
+-- Test logging functions
 --
--- pg_log_backend_memory_contexts()
---
--- Memory contexts are logged and they are not returned to the function.
+-- The outputs of these functions are logged and they are not returned to
+-- the function.
 -- Furthermore, their contents can vary depending on the timing. However,
 -- we can at least verify that the code doesn't fail, and that the
 -- permissions are set properly.
 --
+
+-- pg_log_backend_memory_contexts()
 
 SELECT pg_log_backend_memory_contexts(pg_backend_pid());
 
 SELECT pg_log_backend_memory_contexts(pid) FROM pg_stat_activity
   WHERE backend_type = 'checkpointer';
 
-CREATE ROLE regress_log_memory;
+CREATE ROLE regress_log_function;
 
-SELECT has_function_privilege('regress_log_memory',
+SELECT has_function_privilege('regress_log_function',
   'pg_log_backend_memory_contexts(integer)', 'EXECUTE'); -- no
 
 GRANT EXECUTE ON FUNCTION pg_log_backend_memory_contexts(integer)
-  TO regress_log_memory;
+  TO regress_log_function;
 
-SELECT has_function_privilege('regress_log_memory',
+SELECT has_function_privilege('regress_log_function',
   'pg_log_backend_memory_contexts(integer)', 'EXECUTE'); -- yes
 
-SET ROLE regress_log_memory;
+SET ROLE regress_log_function;
 SELECT pg_log_backend_memory_contexts(pg_backend_pid());
 RESET ROLE;
 
 REVOKE EXECUTE ON FUNCTION pg_log_backend_memory_contexts(integer)
-  FROM regress_log_memory;
+  FROM regress_log_function;
 
-DROP ROLE regress_log_memory;
+-- pg_log_query_plan()
+-- Note that we're using a slightly more complex query here because
+-- a simple 'SELECT pg_log_query_plan(pg_backend_pid())' would finish
+-- before it reaches the code path that actually outputs the plan.
+
+SELECT result FROM (SELECT pg_log_query_plan(pg_backend_pid())) result;
+
+SELECT has_function_privilege('regress_log_function',
+  'pg_log_query_plan(integer)', 'EXECUTE'); -- no
+
+GRANT EXECUTE ON FUNCTION pg_log_query_plan(integer)
+  TO regress_log_function;
+
+SELECT has_function_privilege('regress_log_function',
+  'pg_log_query_plan(integer)', 'EXECUTE'); -- yes
+
+SET ROLE regress_log_function;
+SELECT pg_log_query_plan(pg_backend_pid());
+RESET ROLE;
+
+REVOKE EXECUTE ON FUNCTION pg_log_query_plan(integer)
+  FROM regress_log_function;
+
+DROP ROLE regress_log_function;
 
 --
 -- Test some built-in SRFs

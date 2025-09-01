@@ -36,6 +36,7 @@
 #include "catalog/pg_enum.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/dynamic_explain.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"
 #include "common/pg_prng.h"
@@ -2917,6 +2918,12 @@ AbortTransaction(void)
 	SnapBuildResetExportedSnapshotState();
 
 	/*
+	 * After abort, some elements of ActiveQueryDesc are freed. To avoid
+	 * accessing them, reset ActiveQueryDesc here.
+	 */
+	ResetLogQueryPlanState();
+
+	/*
 	 * If this xact has started any unfinished parallel operation, clean up
 	 * its workers and exit parallel mode.  Don't warn about leaked resources.
 	 */
@@ -5307,6 +5314,12 @@ AbortSubTransaction(void)
 
 	/* Reset logical streaming state. */
 	ResetLogicalStreamingState();
+
+	/*
+	 * After abort, some elements of ActiveQueryDesc are freed. To avoid
+	 * accessing them, reset ActiveQueryDesc here.
+	 */
+	ResetLogQueryPlanState();
 
 	/*
 	 * No need for SnapBuildResetExportedSnapshotState() here, snapshot

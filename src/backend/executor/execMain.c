@@ -43,6 +43,7 @@
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
+#include "commands/dynamic_explain.h"
 #include "commands/matview.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
@@ -312,6 +313,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	DestReceiver *dest;
 	bool		sendTuples;
 	MemoryContext oldcontext;
+	QueryDesc  *oldActiveQueryDesc;
 
 	/* sanity checks */
 	Assert(queryDesc != NULL);
@@ -323,6 +325,13 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 
 	/* caller must ensure the query's snapshot is active */
 	Assert(GetActiveSnapshot() == estate->es_snapshot);
+
+	/*
+	 * Save ActiveQueryDesc here to enable retrieval of the currently running
+	 * queryDesc for nested queries.
+	 */
+	oldActiveQueryDesc = GetActiveQueryDesc();
+	SetActiveQueryDesc(queryDesc);
 
 	/*
 	 * Switch into per-query memory context
@@ -386,6 +395,14 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 		InstrStopNode(queryDesc->totaltime, estate->es_processed);
 
 	MemoryContextSwitchTo(oldcontext);
+	SetActiveQueryDesc(oldActiveQueryDesc);
+
+	/*
+	 * Ensure LogQueryPlanPending is initialized in case there was no time for
+	 * logging the plan. Othewise plan will be logged at the next query
+	 * execution on the same session.
+	 */
+	LogQueryPlanPending = false;
 }
 
 /* ----------------------------------------------------------------
