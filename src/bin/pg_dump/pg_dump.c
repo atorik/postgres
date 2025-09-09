@@ -1131,6 +1131,23 @@ main(int argc, char **argv)
 		shdepend->dataObj->filtercond = "WHERE classid = 'pg_largeobject'::regclass "
 			"AND dbid = (SELECT oid FROM pg_database "
 			"            WHERE datname = current_database())";
+
+		/*
+		 * If upgrading from v16 or newer, only dump large objects with
+		 * comments/seclabels.  For these upgrades, pg_upgrade can copy/link
+		 * pg_largeobject_metadata's files (which is usually faster) but we
+		 * still need to dump LOs with comments/seclabels here so that the
+		 * subsequent COMMENT and SECURITY LABEL commands work.  pg_upgrade
+		 * can't copy/link the files from older versions because aclitem
+		 * (needed by pg_largeobject_metadata.lomacl) changed its storage
+		 * format in v16.
+		 */
+		if (fout->remoteVersion >= 160000)
+			lo_metadata->dataObj->filtercond = "WHERE oid IN "
+				"(SELECT objoid FROM pg_description "
+				"WHERE classoid = " CppAsString2(LargeObjectRelationId) " "
+				"UNION SELECT objoid FROM pg_seclabel "
+				"WHERE classoid = " CppAsString2(LargeObjectRelationId) ")";
 	}
 
 	/*
@@ -3629,26 +3646,32 @@ dumpDatabase(Archive *fout)
 	/*
 	 * pg_largeobject comes from the old system intact, so set its
 	 * relfrozenxids, relminmxids and relfilenode.
+	 *
+	 * pg_largeobject_metadata also comes from the old system intact for
+	 * upgrades from v16 and newer, so set its relfrozenxids, relminmxids, and
+	 * relfilenode, too.  pg_upgrade can't copy/link the files from older
+	 * versions because aclitem (needed by pg_largeobject_metadata.lomacl)
+	 * changed its storage format in v16.
 	 */
 	if (dopt->binary_upgrade)
 	{
 		PGresult   *lo_res;
 		PQExpBuffer loFrozenQry = createPQExpBuffer();
 		PQExpBuffer loOutQry = createPQExpBuffer();
+		PQExpBuffer lomOutQry = createPQExpBuffer();
 		PQExpBuffer loHorizonQry = createPQExpBuffer();
+		PQExpBuffer lomHorizonQry = createPQExpBuffer();
 		int			ii_relfrozenxid,
 					ii_relfilenode,
 					ii_oid,
 					ii_relminmxid;
 
-		/*
-		 * pg_largeobject
-		 */
 		if (fout->remoteVersion >= 90300)
 			appendPQExpBuffer(loFrozenQry, "SELECT relfrozenxid, relminmxid, relfilenode, oid\n"
 							  "FROM pg_catalog.pg_class\n"
-							  "WHERE oid IN (%u, %u);\n",
-							  LargeObjectRelationId, LargeObjectLOidPNIndexId);
+							  "WHERE oid IN (%u, %u, %u, %u);\n",
+							  LargeObjectRelationId, LargeObjectLOidPNIndexId,
+							  LargeObjectMetadataRelationId, LargeObjectMetadataOidIndexId);
 		else
 			appendPQExpBuffer(loFrozenQry, "SELECT relfrozenxid, 0 AS relminmxid, relfilenode, oid\n"
 							  "FROM pg_catalog.pg_class\n"
@@ -3663,35 +3686,57 @@ dumpDatabase(Archive *fout)
 		ii_oid = PQfnumber(lo_res, "oid");
 
 		appendPQExpBufferStr(loHorizonQry, "\n-- For binary upgrade, set pg_largeobject relfrozenxid and relminmxid\n");
+		appendPQExpBufferStr(lomHorizonQry, "\n-- For binary upgrade, set pg_largeobject_metadata relfrozenxid and relminmxid\n");
 		appendPQExpBufferStr(loOutQry, "\n-- For binary upgrade, preserve pg_largeobject and index relfilenodes\n");
+		appendPQExpBufferStr(lomOutQry, "\n-- For binary upgrade, preserve pg_largeobject_metadata and index relfilenodes\n");
 		for (int i = 0; i < PQntuples(lo_res); ++i)
 		{
 			Oid			oid;
 			RelFileNumber relfilenumber;
+			PQExpBuffer horizonQry;
+			PQExpBuffer outQry;
 
-			appendPQExpBuffer(loHorizonQry, "UPDATE pg_catalog.pg_class\n"
+			oid = atooid(PQgetvalue(lo_res, i, ii_oid));
+			relfilenumber = atooid(PQgetvalue(lo_res, i, ii_relfilenode));
+
+			if (oid == LargeObjectRelationId ||
+				oid == LargeObjectLOidPNIndexId)
+			{
+				horizonQry = loHorizonQry;
+				outQry = loOutQry;
+			}
+			else
+			{
+				horizonQry = lomHorizonQry;
+				outQry = lomOutQry;
+			}
+
+			appendPQExpBuffer(horizonQry, "UPDATE pg_catalog.pg_class\n"
 							  "SET relfrozenxid = '%u', relminmxid = '%u'\n"
 							  "WHERE oid = %u;\n",
 							  atooid(PQgetvalue(lo_res, i, ii_relfrozenxid)),
 							  atooid(PQgetvalue(lo_res, i, ii_relminmxid)),
 							  atooid(PQgetvalue(lo_res, i, ii_oid)));
 
-			oid = atooid(PQgetvalue(lo_res, i, ii_oid));
-			relfilenumber = atooid(PQgetvalue(lo_res, i, ii_relfilenode));
-
-			if (oid == LargeObjectRelationId)
-				appendPQExpBuffer(loOutQry,
+			if (oid == LargeObjectRelationId ||
+				oid == LargeObjectMetadataRelationId)
+				appendPQExpBuffer(outQry,
 								  "SELECT pg_catalog.binary_upgrade_set_next_heap_relfilenode('%u'::pg_catalog.oid);\n",
 								  relfilenumber);
-			else if (oid == LargeObjectLOidPNIndexId)
-				appendPQExpBuffer(loOutQry,
+			else if (oid == LargeObjectLOidPNIndexId ||
+					 oid == LargeObjectMetadataOidIndexId)
+				appendPQExpBuffer(outQry,
 								  "SELECT pg_catalog.binary_upgrade_set_next_index_relfilenode('%u'::pg_catalog.oid);\n",
 								  relfilenumber);
 		}
 
 		appendPQExpBufferStr(loOutQry,
 							 "TRUNCATE pg_catalog.pg_largeobject;\n");
+		appendPQExpBufferStr(lomOutQry,
+							 "TRUNCATE pg_catalog.pg_largeobject_metadata;\n");
+
 		appendPQExpBufferStr(loOutQry, loHorizonQry->data);
+		appendPQExpBufferStr(lomOutQry, lomHorizonQry->data);
 
 		ArchiveEntry(fout, nilCatalogId, createDumpId(),
 					 ARCHIVE_OPTS(.tag = "pg_largeobject",
@@ -3699,11 +3744,20 @@ dumpDatabase(Archive *fout)
 								  .section = SECTION_PRE_DATA,
 								  .createStmt = loOutQry->data));
 
+		if (fout->remoteVersion >= 160000)
+			ArchiveEntry(fout, nilCatalogId, createDumpId(),
+						 ARCHIVE_OPTS(.tag = "pg_largeobject_metadata",
+									  .description = "pg_largeobject_metadata",
+									  .section = SECTION_PRE_DATA,
+									  .createStmt = lomOutQry->data));
+
 		PQclear(lo_res);
 
 		destroyPQExpBuffer(loFrozenQry);
 		destroyPQExpBuffer(loHorizonQry);
+		destroyPQExpBuffer(lomHorizonQry);
 		destroyPQExpBuffer(loOutQry);
+		destroyPQExpBuffer(lomOutQry);
 	}
 
 	PQclear(res);
@@ -5048,6 +5102,7 @@ getSubscriptions(Archive *fout)
 	int			i_subenabled;
 	int			i_subfailover;
 	int			i_subretaindeadtuples;
+	int			i_submaxretention;
 	int			i,
 				ntups;
 
@@ -5127,10 +5182,17 @@ getSubscriptions(Archive *fout)
 
 	if (fout->remoteVersion >= 190000)
 		appendPQExpBufferStr(query,
-							 " s.subretaindeadtuples\n");
+							 " s.subretaindeadtuples,\n");
 	else
 		appendPQExpBufferStr(query,
-							 " false AS subretaindeadtuples\n");
+							 " false AS subretaindeadtuples,\n");
+
+	if (fout->remoteVersion >= 190000)
+		appendPQExpBufferStr(query,
+							 " s.submaxretention\n");
+	else
+		appendPQExpBuffer(query,
+						  " 0 AS submaxretention\n");
 
 	appendPQExpBufferStr(query,
 						 "FROM pg_subscription s\n");
@@ -5165,6 +5227,7 @@ getSubscriptions(Archive *fout)
 	i_subrunasowner = PQfnumber(res, "subrunasowner");
 	i_subfailover = PQfnumber(res, "subfailover");
 	i_subretaindeadtuples = PQfnumber(res, "subretaindeadtuples");
+	i_submaxretention = PQfnumber(res, "submaxretention");
 	i_subconninfo = PQfnumber(res, "subconninfo");
 	i_subslotname = PQfnumber(res, "subslotname");
 	i_subsynccommit = PQfnumber(res, "subsynccommit");
@@ -5200,6 +5263,8 @@ getSubscriptions(Archive *fout)
 			(strcmp(PQgetvalue(res, i, i_subfailover), "t") == 0);
 		subinfo[i].subretaindeadtuples =
 			(strcmp(PQgetvalue(res, i, i_subretaindeadtuples), "t") == 0);
+		subinfo[i].submaxretention =
+			atoi(PQgetvalue(res, i, i_submaxretention));
 		subinfo[i].subconninfo =
 			pg_strdup(PQgetvalue(res, i, i_subconninfo));
 		if (PQgetisnull(res, i, i_subslotname))
@@ -5460,6 +5525,9 @@ dumpSubscription(Archive *fout, const SubscriptionInfo *subinfo)
 
 	if (subinfo->subretaindeadtuples)
 		appendPQExpBufferStr(query, ", retain_dead_tuples = true");
+
+	if (subinfo->submaxretention)
+		appendPQExpBuffer(query, ", max_retention_duration = %d", subinfo->submaxretention);
 
 	if (strcmp(subinfo->subsynccommit, "off") != 0)
 		appendPQExpBuffer(query, ", synchronous_commit = %s", fmtId(subinfo->subsynccommit));
