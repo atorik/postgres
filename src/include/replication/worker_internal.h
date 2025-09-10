@@ -94,6 +94,9 @@ typedef struct LogicalRepWorker
 	 * The logical replication launcher manages an internal replication slot
 	 * named "pg_conflict_detection". It asynchronously collects this ID to
 	 * decide when to advance the xmin value of the slot.
+	 *
+	 * This ID is set to InvalidTransactionId when the apply worker stops
+	 * retaining information needed for conflict detection.
 	 */
 	TransactionId oldest_nonremovable_xid;
 
@@ -269,6 +272,7 @@ extern void ReplicationOriginNameForLogicalRep(Oid suboid, Oid relid,
 											   char *originname, Size szoriginname);
 
 extern bool AllTablesyncsReady(void);
+extern bool HasSubscriptionRelationsCached(void);
 extern void UpdateTwoPhaseState(Oid suboid, char new_state);
 
 extern void process_syncing_tables(XLogRecPtr current_lsn);
