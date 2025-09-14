@@ -431,6 +431,7 @@ typedef struct xl_xact_parsed_abort
 	TimestampTz origin_timestamp;
 } xl_xact_parsed_abort;
 
+typedef struct QueryDesc QueryDesc;
 
 /* ----------------
  *		extern definitions
@@ -457,6 +458,8 @@ extern TimestampTz GetCurrentStatementStartTimestamp(void);
 extern TimestampTz GetCurrentTransactionStopTimestamp(void);
 extern void SetCurrentStatementStartTimestamp(void);
 extern int	GetCurrentTransactionNestLevel(void);
+QueryDesc *GetCurrentQueryDesc(void);
+void SetCurrentQueryDesc(QueryDesc *queryDesc);
 extern bool TransactionIdIsCurrentTransactionId(TransactionId xid);
 extern void CommandCounterIncrement(void);
 extern void ForceSyncCommit(void);

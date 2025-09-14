@@ -638,6 +638,9 @@ ExecSetExecProcNodeRecurse(PlanState *ps)
 		case T_SubqueryScan:
 			ExecSetExecProcNodeRecurse(((SubqueryScanState *) ps)->subplan);
 			break;
+		case T_CteScan:
+			ExecSetExecProcNodeRecurse(((CteScanState *) ps)->cteplanstate);
+			break;
 		case T_CustomScan:
 			CSSChildExecSetExecProcNodeArray((CustomScanState *) ps);
 			break;

@@ -12,6 +12,7 @@
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
+#include "access/xact.h"
 #include "commands/dynamic_explain.h"
 #include "commands/explain.h"
 #include "commands/explain_format.h"
@@ -21,8 +22,6 @@
 #include "storage/procarray.h"
 #include "utils/backend_status.h"
 
-/* Currently executing query's QueryDesc */
-static QueryDesc *ActiveQueryDesc = NULL;
 
 /*
  * Handle receipt of an interrupt indicating logging the plan of the currently
@@ -45,7 +44,7 @@ HandleLogQueryPlanInterrupt(void)
 void
 ResetLogQueryPlanState(void)
 {
-	ActiveQueryDesc = NULL;
+	SetCurrentQueryDesc(NULL);
 	LogQueryPlanPending = false;
 }
 
@@ -58,6 +57,7 @@ LogQueryPlan(void)
 	ExplainState *es;
 	MemoryContext cxt;
 	MemoryContext old_cxt;
+	QueryDesc *queryDesc;
 
 	cxt = AllocSetContextCreate(CurrentMemoryContext,
 								"log_query_plan temporary context",
@@ -77,7 +77,9 @@ LogQueryPlan(void)
 	 * ExecProcNode can be called afterward(i.e., ExecPostprocessPlan). To
 	 * handle the case, check ActiveQueryDesc.
 	 */
-	if (ActiveQueryDesc == NULL)
+	queryDesc = GetCurrentQueryDesc();
+
+	if (queryDesc == NULL)
 	{
 		LogQueryPlanPending = false;
 
@@ -88,13 +90,11 @@ LogQueryPlan(void)
 				errhidecontext(true));
 	}
 
-	ExplainStringAssemble(es, ActiveQueryDesc, es->format, 0, -1);
+	ExplainStringAssemble(es, queryDesc, es->format, 0, -1);
 
 	ereport(LOG_SERVER_ONLY,
 			errmsg("query plan running on backend with PID %d is:\n%s",
-				   MyProcPid, es->str->data),
-			errhidestmt(true),
-			errhidecontext(true));
+				   MyProcPid, es->str->data));
 
 	MemoryContextSwitchTo(old_cxt);
 	MemoryContextDelete(cxt);
@@ -114,7 +114,12 @@ LogQueryPlan(void)
 void
 ProcessLogQueryPlanInterrupt(void)
 {
-	if (ActiveQueryDesc == NULL)
+	QueryDesc *querydesc;
+
+	check_stack_depth();
+	querydesc = GetCurrentQueryDesc();
+
+	if (querydesc == NULL)
 	{
 		ereport(LOG_SERVER_ONLY,
 				errmsg("backend with PID %d is not running a query or a subtransaction is aborted",
@@ -127,25 +132,7 @@ ProcessLogQueryPlanInterrupt(void)
 	}
 
 	/* Wrap ExecProcNodes */
-	ExecSetExecProcNodeRecurse(ActiveQueryDesc->planstate);
-}
-
-/*
- * Returns ActiveQueryDesc.
- */
-QueryDesc *
-GetActiveQueryDesc(void)
-{
-	return ActiveQueryDesc;
-}
-
-/*
- Set ActiveQueryDesc to queryDesc.
- */
-void
-SetActiveQueryDesc(QueryDesc *queryDesc)
-{
-	ActiveQueryDesc = queryDesc;
+	ExecSetExecProcNodeRecurse(querydesc->planstate);
 }
 
 /*

@@ -20,8 +20,6 @@ extern void HandleLogQueryPlanInterrupt(void);
 extern void ResetLogQueryPlanState(void);
 extern void ResetProcessLogQueryPlanInterruptActive(void);
 extern void ProcessLogQueryPlanInterrupt(void);
-extern QueryDesc *GetActiveQueryDesc(void);
-extern void SetActiveQueryDesc(QueryDesc *queryDesc);
 extern TupleTableSlot *ExecProcNodeWithExplain(PlanState *ps);
 extern void LogQueryPlan(void);
 extern Datum pg_log_query_plan(PG_FUNCTION_ARGS);

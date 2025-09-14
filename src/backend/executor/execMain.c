@@ -330,8 +330,8 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	 * Save ActiveQueryDesc here to enable retrieval of the currently running
 	 * queryDesc for nested queries.
 	 */
-	oldActiveQueryDesc = GetActiveQueryDesc();
-	SetActiveQueryDesc(queryDesc);
+	oldActiveQueryDesc = GetCurrentQueryDesc();
+	SetCurrentQueryDesc(queryDesc);
 
 	/*
 	 * Switch into per-query memory context
@@ -395,7 +395,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 		InstrStopNode(queryDesc->totaltime, estate->es_processed);
 
 	MemoryContextSwitchTo(oldcontext);
-	SetActiveQueryDesc(oldActiveQueryDesc);
+	SetCurrentQueryDesc(oldActiveQueryDesc);
 
 	/*
 	 * Ensure LogQueryPlanPending is initialized in case there was no time for
