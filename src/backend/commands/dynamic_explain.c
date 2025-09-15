@@ -12,6 +12,7 @@
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
+
 #include "access/xact.h"
 #include "commands/dynamic_explain.h"
 #include "commands/explain.h"
@@ -44,6 +45,10 @@ HandleLogQueryPlanInterrupt(void)
 void
 ResetLogQueryPlanState(void)
 {
+	/*
+	 * After abort, some elements of current QueryDesc are freed. To avoid
+	 * accessing them, reset it.
+	 */
 	SetCurrentQueryDesc(NULL);
 	LogQueryPlanPending = false;
 }
@@ -73,9 +78,9 @@ LogQueryPlan(void)
 	es->signaled = true;
 
 	/*
-	 * ActiveQueryDesc is valid only during standard_ExecutorRun. However,
+	 * Current QueryDesc is valid only during standard_ExecutorRun. However,
 	 * ExecProcNode can be called afterward(i.e., ExecPostprocessPlan). To
-	 * handle the case, check ActiveQueryDesc.
+	 * handle the case, check whether we have QueryDesc now.
 	 */
 	queryDesc = GetCurrentQueryDesc();
 
@@ -84,17 +89,15 @@ LogQueryPlan(void)
 		LogQueryPlanPending = false;
 
 		ereport(LOG_SERVER_ONLY,
-				errmsg("backend with PID %d is finishing query execution and cannot log the plan.",
-					   MyProcPid),
-				errhidestmt(true),
-				errhidecontext(true));
+				errmsg("backend is not running a query"));
+		return;
 	}
 
 	ExplainStringAssemble(es, queryDesc, es->format, 0, -1);
 
 	ereport(LOG_SERVER_ONLY,
-			errmsg("query plan running on backend with PID %d is:\n%s",
-				   MyProcPid, es->str->data));
+			errmsg("query and its plan running on the backend are:\n%s",
+				   es->str->data));
 
 	MemoryContextSwitchTo(old_cxt);
 	MemoryContextDelete(cxt);
@@ -107,8 +110,8 @@ LogQueryPlan(void)
  *
  * Since executing EXPLAIN-related code at an arbitrary CHECK_FOR_INTERRUPTS()
  * point is potentially unsafe, this function just wraps the nodes of
- * ExecProcNode with ExecProcNodeFirst, which logs corrent query plan if
- * requested. This way ensures that EXPLAIN code is executed only during
+ * ExecProcNode with ExecProcNodeFirst, which logs query plan if requested.
+ * This way ensures that EXPLAIN-related code is executed only during
  * ExecProcNodeFirst, where it is considered safe.
  */
 void
@@ -122,16 +125,13 @@ ProcessLogQueryPlanInterrupt(void)
 	if (querydesc == NULL)
 	{
 		ereport(LOG_SERVER_ONLY,
-				errmsg("backend with PID %d is not running a query or a subtransaction is aborted",
-					   MyProcPid),
-				errhidestmt(true),
-				errhidecontext(true));
+				errmsg("backend is not running a query"));
 
 		LogQueryPlanPending = false;
 		return;
 	}
 
-	/* Wrap ExecProcNodes */
+	/* Wrap ExecProcNodes with ExecProcNodeFirst  */
 	ExecSetExecProcNodeRecurse(querydesc->planstate);
 }
 

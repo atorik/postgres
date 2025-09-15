@@ -313,7 +313,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	DestReceiver *dest;
 	bool		sendTuples;
 	MemoryContext oldcontext;
-	QueryDesc  *oldActiveQueryDesc;
+	QueryDesc  *oldQueryDesc;
 
 	/* sanity checks */
 	Assert(queryDesc != NULL);
@@ -327,10 +327,10 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	Assert(GetActiveSnapshot() == estate->es_snapshot);
 
 	/*
-	 * Save ActiveQueryDesc here to enable retrieval of the currently running
+	 * Save current QueryDesc here to enable retrieval of the currently running
 	 * queryDesc for nested queries.
 	 */
-	oldActiveQueryDesc = GetCurrentQueryDesc();
+	oldQueryDesc = GetCurrentQueryDesc();
 	SetCurrentQueryDesc(queryDesc);
 
 	/*
@@ -395,7 +395,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 		InstrStopNode(queryDesc->totaltime, estate->es_processed);
 
 	MemoryContextSwitchTo(oldcontext);
-	SetCurrentQueryDesc(oldActiveQueryDesc);
+	SetCurrentQueryDesc(oldQueryDesc);
 
 	/*
 	 * Ensure LogQueryPlanPending is initialized in case there was no time for

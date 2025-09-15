@@ -202,6 +202,10 @@
         regardless of <xref linkend="guc-client-min-messages"/>.
        </para>
        <para>
+         Note that depending on the execution state of the query,
+         it may not be possible to log the plan.
+        </para>
+       <para>
         This function is restricted to superusers by default, but other
         users can be granted EXECUTE to run the function.
        </para></entry>

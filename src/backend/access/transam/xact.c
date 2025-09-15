@@ -2939,10 +2939,7 @@ AbortTransaction(void)
 	/* Reset snapshot export state. */
 	SnapBuildResetExportedSnapshotState();
 
-	/*
-	 * After abort, some elements of ActiveQueryDesc are freed. To avoid
-	 * accessing them, reset ActiveQueryDesc here.
-	 */
+	/* Reset state for logging current query plan. */
 	ResetLogQueryPlanState();
 
 	/*
@@ -5337,10 +5334,7 @@ AbortSubTransaction(void)
 	/* Reset logical streaming state. */
 	ResetLogicalStreamingState();
 
-	/*
-	 * After abort, some elements of ActiveQueryDesc are freed. To avoid
-	 * accessing them, reset ActiveQueryDesc here.
-	 */
+	/* Reset state for logging current query plan. */
 	ResetLogQueryPlanState();
 
 	/*
