@@ -114,11 +114,7 @@ LogQueryPlan(void)
 void
 ProcessLogQueryPlanInterrupt(void)
 {
-	QueryDesc  *querydesc;
-
-	check_stack_depth();
-
-	querydesc = GetCurrentQueryDesc();
+	QueryDesc  *querydesc = GetCurrentQueryDesc();
 
 	if (querydesc == NULL)
 	{

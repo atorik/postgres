@@ -598,7 +598,6 @@ CSSChildExecSetExecProcNodeArray(CustomScanState *css)
 void
 ExecSetExecProcNodeRecurse(PlanState *ps)
 {
-	check_stack_depth();
 	ExecSetExecProcNode(ps, ps->ExecProcNodeReal);
 
 	if (ps->lefttree != NULL)
