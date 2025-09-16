@@ -62,7 +62,7 @@ LogQueryPlan(void)
 	ExplainState *es;
 	MemoryContext cxt;
 	MemoryContext old_cxt;
-	QueryDesc *queryDesc;
+	QueryDesc  *queryDesc;
 
 	cxt = AllocSetContextCreate(CurrentMemoryContext,
 								"log_query_plan temporary context",
@@ -114,7 +114,7 @@ LogQueryPlan(void)
 void
 ProcessLogQueryPlanInterrupt(void)
 {
-	QueryDesc *querydesc;
+	QueryDesc  *querydesc;
 
 	check_stack_depth();
 

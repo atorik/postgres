@@ -216,7 +216,7 @@ typedef struct TransactionStateData
 	bool		parallelChildXact;	/* is any parent transaction parallel? */
 	bool		chain;			/* start a new block after this one */
 	bool		topXidLogged;	/* for a subxact: is top-level XID logged? */
-	QueryDesc	*queryDesc;		/* my current QueryDesc */
+	QueryDesc  *queryDesc;		/* my current QueryDesc */
 	struct TransactionStateData *parent;	/* back link to parent */
 } TransactionStateData;
 
@@ -943,6 +943,7 @@ void
 SetCurrentQueryDesc(QueryDesc *queryDesc)
 {
 	TransactionState s = CurrentTransactionState;
+
 	s->queryDesc = queryDesc;
 }
 
