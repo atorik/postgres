@@ -42,6 +42,7 @@
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
+#include "rewrite/rewriteHandler.h"
 #include "rewrite/rewriteManip.h"
 #include "statistics/statistics.h"
 #include "storage/bufmgr.h"
@@ -62,7 +63,7 @@ get_relation_info_hook_type get_relation_info_hook = NULL;
 typedef struct NotnullHashEntry
 {
 	Oid			relid;			/* OID of the relation */
-	Relids		notnullattnums; /* attnums of NOT NULL columns */
+	Bitmapset  *notnullattnums; /* attnums of NOT NULL columns */
 } NotnullHashEntry;
 
 
@@ -683,7 +684,7 @@ get_relation_notnullatts(PlannerInfo *root, Relation relation)
 	Oid			relid = RelationGetRelid(relation);
 	NotnullHashEntry *hentry;
 	bool		found;
-	Relids		notnullattnums = NULL;
+	Bitmapset  *notnullattnums = NULL;
 
 	/* bail out if the relation has no not-null constraints */
 	if (relation->rd_att->constr == NULL ||
@@ -750,7 +751,7 @@ get_relation_notnullatts(PlannerInfo *root, Relation relation)
  *	  Searches the hash table and returns the column not-null constraint
  *	  information for a given relation.
  */
-Relids
+Bitmapset *
 find_relation_notnullatts(PlannerInfo *root, Oid relid)
 {
 	NotnullHashEntry *hentry;
@@ -1481,6 +1482,14 @@ get_relation_constraints(PlannerInfo *root,
 		set_baserel_partition_constraint(relation, rel);
 		result = list_concat(result, rel->partition_qual);
 	}
+
+	/*
+	 * Expand virtual generated columns in the constraint expressions.
+	 */
+	if (result)
+		result = (List *) expand_generated_columns_in_expr((Node *) result,
+														   relation,
+														   varno);
 
 	table_close(relation, NoLock);
 

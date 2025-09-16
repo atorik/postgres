@@ -101,6 +101,7 @@ typedef struct
 	struct InjectionPointsCtl *ActiveInjectionPoints;
 #endif
 	int			NamedLWLockTrancheRequests;
+	NamedLWLockTrancheRequest *NamedLWLockTrancheRequestArray;
 	char	  **LWLockTrancheNames;
 	int		   *LWLockCounter;
 	LWLockPadded *MainLWLockArray;
@@ -228,7 +229,7 @@ PostmasterChildName(BackendType child_type)
  */
 pid_t
 postmaster_child_launch(BackendType child_type, int child_slot,
-						const void *startup_data, size_t startup_data_len,
+						void *startup_data, size_t startup_data_len,
 						ClientSocket *client_sock)
 {
 	pid_t		pid;
@@ -761,6 +762,7 @@ save_backend_variables(BackendParameters *param,
 #endif
 
 	param->NamedLWLockTrancheRequests = NamedLWLockTrancheRequests;
+	param->NamedLWLockTrancheRequestArray = NamedLWLockTrancheRequestArray;
 	param->LWLockTrancheNames = LWLockTrancheNames;
 	param->LWLockCounter = LWLockCounter;
 	param->MainLWLockArray = MainLWLockArray;
@@ -1022,6 +1024,7 @@ restore_backend_variables(BackendParameters *param)
 #endif
 
 	NamedLWLockTrancheRequests = param->NamedLWLockTrancheRequests;
+	NamedLWLockTrancheRequestArray = param->NamedLWLockTrancheRequestArray;
 	LWLockTrancheNames = param->LWLockTrancheNames;
 	LWLockCounter = param->LWLockCounter;
 	MainLWLockArray = param->MainLWLockArray;

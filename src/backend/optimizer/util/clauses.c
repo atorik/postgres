@@ -1115,6 +1115,8 @@ contain_nonstrict_functions_walker(Node *node, void *context)
 		return true;
 	if (IsA(node, BooleanTest))
 		return true;
+	if (IsA(node, JsonConstructorExpr))
+		return true;
 
 	/* Check other function-containing nodes */
 	if (check_functions_in_node(node, contain_nonstrict_functions_checker,
@@ -4203,7 +4205,7 @@ simplify_function(Oid funcid, Oid result_type, int32 result_typmod,
 bool
 var_is_nonnullable(PlannerInfo *root, Var *var, bool use_rel_info)
 {
-	Relids		notnullattnums = NULL;
+	Bitmapset  *notnullattnums = NULL;
 
 	Assert(IsA(var, Var));
 
