@@ -87,9 +87,6 @@ LogQueryPlan(void)
 	if (queryDesc == NULL)
 	{
 		LogQueryPlanPending = false;
-
-		ereport(LOG_SERVER_ONLY,
-				errmsg("backend is not running a query"));
 		return;
 	}
 
@@ -120,13 +117,11 @@ ProcessLogQueryPlanInterrupt(void)
 	QueryDesc *querydesc;
 
 	check_stack_depth();
+
 	querydesc = GetCurrentQueryDesc();
 
 	if (querydesc == NULL)
 	{
-		ereport(LOG_SERVER_ONLY,
-				errmsg("backend is not running a query"));
-
 		LogQueryPlanPending = false;
 		return;
 	}
