@@ -112,10 +112,6 @@ ProcessLogQueryPlanInterrupt(void)
 	/* Cannot log query plan outside a transaction */
 	if(!IsTransactionState())
 	{
-	/* TO BE DELETED */
-		ereport(LOG_SERVER_ONLY,
-				(errmsg("query plan not available outside a transaction")));
-
 		isProcessingLogQueryPlan = false;
 		LogQueryPlanPending = false;
 		return;
