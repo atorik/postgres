@@ -3082,8 +3082,8 @@ CleanupTransaction(void)
 	nParallelCurrentXids = 0;
 
 	/*
-	 * done with abort processing, set current transaction state and
-	 * QueryDesc back to default
+	 * done with abort processing, set current transaction state and QueryDesc
+	 * back to default
 	 */
 	s->state = TRANS_DEFAULT;
 	s->queryDesc = NULL;

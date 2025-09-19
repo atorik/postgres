@@ -110,7 +110,7 @@ ProcessLogQueryPlanInterrupt(void)
 	isProcessingLogQueryPlan = true;
 
 	/* Cannot log query plan outside a transaction */
-	if(!IsTransactionState())
+	if (!IsTransactionState())
 	{
 		isProcessingLogQueryPlan = false;
 		LogQueryPlanPending = false;
