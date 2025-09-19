@@ -17,8 +17,6 @@
 #include "commands/explain_state.h"
 
 extern void HandleLogQueryPlanInterrupt(void);
-extern void ResetLogQueryPlanState(void);
-extern void ResetProcessLogQueryPlanInterruptActive(void);
 extern void ProcessLogQueryPlanInterrupt(void);
 extern TupleTableSlot *ExecProcNodeWithExplain(PlanState *ps);
 extern void LogQueryPlan(void);

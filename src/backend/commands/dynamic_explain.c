@@ -23,6 +23,7 @@
 #include "storage/procarray.h"
 #include "utils/backend_status.h"
 
+static bool isProcessingLogQueryPlan = false;
 
 /*
  * Handle receipt of an interrupt indicating logging the plan of the currently
@@ -37,20 +38,6 @@ HandleLogQueryPlanInterrupt(void)
 	InterruptPending = true;
 	LogQueryPlanPending = true;
 	/* latch will be set by procsignal_sigusr1_handler */
-}
-
-/*
- * Clear pg_log_query_plan() related state during (sub)transaction abort.
- */
-void
-ResetLogQueryPlanState(void)
-{
-	/*
-	 * After abort, some elements of current QueryDesc are freed. To avoid
-	 * accessing them, reset it.
-	 */
-	SetCurrentQueryDesc(NULL);
-	LogQueryPlanPending = false;
 }
 
 /*
@@ -114,16 +101,41 @@ LogQueryPlan(void)
 void
 ProcessLogQueryPlanInterrupt(void)
 {
-	QueryDesc  *querydesc = GetCurrentQueryDesc();
+	QueryDesc  *querydesc;
 
-	if (querydesc == NULL)
+	/* Prevent re-entrant */
+	if (isProcessingLogQueryPlan)
+		return;
+
+	isProcessingLogQueryPlan = true;
+
+	/* Cannot log query plan outside a transaction */
+	if(!IsTransactionState())
 	{
+	/* TO BE DELETED */
+		ereport(LOG_SERVER_ONLY,
+				(errmsg("query plan not available outside a transaction")));
+
+		isProcessingLogQueryPlan = false;
 		LogQueryPlanPending = false;
 		return;
 	}
 
-	/* Wrap ExecProcNodes with ExecProcNodeFirst  */
+	querydesc = GetCurrentQueryDesc();
+
+	/* If current query has already finished, we can do nothing but exit */
+	if (querydesc == NULL)
+	{
+		LogQueryPlanPending = false;
+		isProcessingLogQueryPlan = false;
+
+		return;
+	}
+
+	/* Wrap ExecProcNodes with ExecProcNodeFirst */
 	ExecSetExecProcNodeRecurse(querydesc->planstate);
+
+	isProcessingLogQueryPlan = false;
 }
 
 /*
