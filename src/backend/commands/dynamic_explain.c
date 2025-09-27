@@ -81,8 +81,8 @@ LogQueryPlan(void)
 	ExplainStringAssemble(es, queryDesc, es->format, 0, -1);
 
 	ereport(LOG_SERVER_ONLY,
-			errmsg("query and its plan running on the backend are:\n%s",
-				   es->str->data));
+			errmsg("query and its plan running on backend with PID %d are:\n%s",
+				   MyProcPid, es->str->data));
 
 	MemoryContextSwitchTo(old_cxt);
 	MemoryContextDelete(cxt);
@@ -131,6 +131,7 @@ ProcessLogQueryPlanInterrupt(void)
 	}
 	PG_END_TRY();
 }
+
 /*
  * Signal a backend process to log the query plan of the running query.
  *
