@@ -23,7 +23,8 @@
 #include "storage/procarray.h"
 #include "utils/backend_status.h"
 
-static bool isProcessingLogQueryPlan = false;
+/* Is plan node wrapping for query plan logging currently in progress? */
+static bool WrapNodesInProgress = false;
 
 /*
  * Handle receipt of an interrupt indicating logging the plan of the currently
@@ -101,39 +102,35 @@ LogQueryPlan(void)
 void
 ProcessLogQueryPlanInterrupt(void)
 {
-	QueryDesc  *querydesc;
-
-	/* Prevent re-entrant */
-	if (isProcessingLogQueryPlan)
-		return;
-
-	isProcessingLogQueryPlan = true;
-
-	/* Cannot log query plan outside a transaction */
-	if (!IsTransactionState())
-	{
-		isProcessingLogQueryPlan = false;
-		LogQueryPlanPending = false;
-		return;
-	}
-
-	querydesc = GetCurrentQueryDesc();
+	QueryDesc *querydesc = GetCurrentQueryDesc();
 
 	/* If current query has already finished, we can do nothing but exit */
 	if (querydesc == NULL)
 	{
 		LogQueryPlanPending = false;
-		isProcessingLogQueryPlan = false;
-
 		return;
 	}
 
-	/* Wrap ExecProcNodes with ExecProcNodeFirst */
-	ExecSetExecProcNodeRecurse(querydesc->planstate);
+	/* Prevent re-entrant */
+	if (WrapNodesInProgress)
+		return;
 
-	isProcessingLogQueryPlan = false;
+	WrapNodesInProgress = true;
+
+	PG_TRY();
+	{
+		/*
+		 * Wrap ExecProcNodes with ExecProcNodeFirst, which logs query plan
+		 * when LogQueryPlanPending is true.
+		 */
+		ExecSetExecProcNodeRecurse(querydesc->planstate);
+	}
+	PG_FINALLY();
+	{
+		WrapNodesInProgress = false;
+	}
+	PG_END_TRY();
 }
-
 /*
  * Signal a backend process to log the query plan of the running query.
  *

@@ -2940,6 +2940,9 @@ AbortTransaction(void)
 	/* Reset snapshot export state. */
 	SnapBuildResetExportedSnapshotState();
 
+	/* Reset current query plan state used for logging. */
+	SetCurrentQueryDesc(NULL);
+
 	/*
 	 * If this xact has started any unfinished parallel operation, clean up
 	 * its workers and exit parallel mode.  Don't warn about leaked resources.
@@ -3082,11 +3085,10 @@ CleanupTransaction(void)
 	nParallelCurrentXids = 0;
 
 	/*
-	 * done with abort processing, set current transaction state and QueryDesc
-	 * back to default
+	 * done with abort processing, set current transaction state back to
+	 * default
 	 */
 	s->state = TRANS_DEFAULT;
-	s->queryDesc = NULL;
 }
 
 /*
@@ -5332,6 +5334,14 @@ AbortSubTransaction(void)
 
 	/* Reset logical streaming state. */
 	ResetLogicalStreamingState();
+
+	/*
+	 * Reset current query plan state used for logging.
+	 * Note that even after this reset, it's still possible to obtain the parent
+	 * transaction's query plans, since they are preserved in
+	 * standard_ExecutorRun().
+	 */
+	SetCurrentQueryDesc(NULL);
 
 	/*
 	 * No need for SnapBuildResetExportedSnapshotState() here, snapshot
