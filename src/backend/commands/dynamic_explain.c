@@ -111,7 +111,11 @@ ProcessLogQueryPlanInterrupt(void)
 		return;
 	}
 
-	/* Prevent re-entrant */
+	/*
+	 * Exit immediately if wrapping plan is already in progress. This prevents
+	 * recursive calls, which could occur if logging is requested repeatedly and
+	 * rapidly, potentially leading to infinite recursion and crash.
+	 */
 	if (WrapNodesInProgress)
 		return;
 
