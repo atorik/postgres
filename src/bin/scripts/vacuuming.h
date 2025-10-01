@@ -17,6 +17,13 @@
 #include "fe_utils/connect_utils.h"
 #include "fe_utils/simple_list.h"
 
+typedef enum
+{
+	MODE_VACUUM,
+	MODE_ANALYZE,
+	MODE_ANALYZE_IN_STAGES
+} RunMode;
+
 /* For analyze-in-stages mode */
 #define ANALYZE_NO_STAGE	-1
 #define ANALYZE_NUM_STAGES	3
@@ -24,7 +31,8 @@
 /* vacuum options controlled by user flags */
 typedef struct vacuumingOptions
 {
-	bool		analyze_only;
+	RunMode		mode;
+	bits32		objfilter;
 	bool		verbose;
 	bool		and_analyze;
 	bool		full;
@@ -45,50 +53,19 @@ typedef struct vacuumingOptions
 	bool		missing_stats_only;
 } vacuumingOptions;
 
-/* object filter options */
-typedef enum
-{
-	OBJFILTER_NONE = 0,			/* no filter used */
-	OBJFILTER_ALL_DBS = (1 << 0),	/* -a | --all */
-	OBJFILTER_DATABASE = (1 << 1),	/* -d | --dbname */
-	OBJFILTER_TABLE = (1 << 2), /* -t | --table */
-	OBJFILTER_SCHEMA = (1 << 3),	/* -n | --schema */
-	OBJFILTER_SCHEMA_EXCLUDE = (1 << 4),	/* -N | --exclude-schema */
-} VacObjFilter;
+/* Valid values for vacuumingOptions->objfilter */
+#define OBJFILTER_ALL_DBS			0x01	/* --all */
+#define OBJFILTER_DATABASE			0x02	/* --dbname */
+#define OBJFILTER_TABLE				0x04	/* --table */
+#define OBJFILTER_SCHEMA			0x08	/* --schema */
+#define OBJFILTER_SCHEMA_EXCLUDE	0x10	/* --exclude-schema */
 
-extern VacObjFilter objfilter;
-
-extern void vacuuming_main(ConnParams *cparams, const char *dbname,
+extern int	vacuuming_main(ConnParams *cparams, const char *dbname,
 						   const char *maintenance_db, vacuumingOptions *vacopts,
-						   SimpleStringList *objects, bool analyze_in_stages,
-						   int tbl_count, int concurrentCons,
+						   SimpleStringList *objects,
+						   unsigned int tbl_count,
+						   int concurrentCons,
 						   const char *progname, bool echo, bool quiet);
-
-extern SimpleStringList *retrieve_objects(PGconn *conn,
-										  vacuumingOptions *vacopts,
-										  SimpleStringList *objects,
-										  bool echo);
-
-extern void vacuum_one_database(ConnParams *cparams,
-								vacuumingOptions *vacopts,
-								int stage,
-								SimpleStringList *objects,
-								SimpleStringList **found_objs,
-								int concurrentCons,
-								const char *progname, bool echo, bool quiet);
-
-extern void vacuum_all_databases(ConnParams *cparams,
-								 vacuumingOptions *vacopts,
-								 bool analyze_in_stages,
-								 SimpleStringList *objects,
-								 int concurrentCons,
-								 const char *progname, bool echo, bool quiet);
-
-extern void prepare_vacuum_command(PQExpBuffer sql, int serverVersion,
-								   vacuumingOptions *vacopts, const char *table);
-
-extern void run_vacuum_command(PGconn *conn, const char *sql, bool echo,
-							   const char *table);
 
 extern char *escape_quotes(const char *src);
 

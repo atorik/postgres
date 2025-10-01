@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  * vacuuming.c
- *		Common routines for vacuumdb
+ *		Helper routines for vacuumdb
  *
  * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -11,8 +11,6 @@
  */
 
 #include "postgres_fe.h"
-
-#include <limits.h>
 
 #include "catalog/pg_attribute_d.h"
 #include "catalog/pg_class_d.h"
@@ -25,34 +23,54 @@
 #include "fe_utils/string_utils.h"
 #include "vacuuming.h"
 
-VacObjFilter objfilter = OBJFILTER_NONE;
 
+static int	vacuum_one_database(ConnParams *cparams,
+								vacuumingOptions *vacopts,
+								int stage,
+								SimpleStringList *objects,
+								SimpleStringList **found_objs,
+								int concurrentCons,
+								const char *progname, bool echo, bool quiet);
+static int	vacuum_all_databases(ConnParams *cparams,
+								 vacuumingOptions *vacopts,
+								 SimpleStringList *objects,
+								 int concurrentCons,
+								 const char *progname, bool echo, bool quiet);
+static SimpleStringList *retrieve_objects(PGconn *conn,
+										  vacuumingOptions *vacopts,
+										  SimpleStringList *objects,
+										  bool echo);
+static void prepare_vacuum_command(PGconn *conn, PQExpBuffer sql,
+								   vacuumingOptions *vacopts, const char *table);
+static void run_vacuum_command(PGconn *conn, const char *sql, bool echo,
+							   const char *table);
 
 /*
- * Executes vacuum/analyze as indicated, or dies in case of failure.
+ * Executes vacuum/analyze as indicated.  Returns 0 if the plan is carried
+ * to completion, or -1 in case of certain errors (which should hopefully
+ * been already reported.)  Other errors are reported via pg_fatal().
  */
-void
+int
 vacuuming_main(ConnParams *cparams, const char *dbname,
 			   const char *maintenance_db, vacuumingOptions *vacopts,
-			   SimpleStringList *objects, bool analyze_in_stages,
-			   int tbl_count, int concurrentCons,
+			   SimpleStringList *objects,
+			   unsigned int tbl_count, int concurrentCons,
 			   const char *progname, bool echo, bool quiet)
 {
 	setup_cancel_handler(NULL);
 
 	/* Avoid opening extra connections. */
-	if (tbl_count && (concurrentCons > tbl_count))
+	if (tbl_count > 0 && (concurrentCons > tbl_count))
 		concurrentCons = tbl_count;
 
-	if (objfilter & OBJFILTER_ALL_DBS)
+	if (vacopts->objfilter & OBJFILTER_ALL_DBS)
 	{
 		cparams->dbname = maintenance_db;
 
-		vacuum_all_databases(cparams, vacopts,
-							 analyze_in_stages,
-							 objects,
-							 concurrentCons,
-							 progname, echo, quiet);
+		return vacuum_all_databases(cparams, vacopts,
+									objects,
+									concurrentCons,
+									progname, echo, quiet);
 	}
 	else
 	{
@@ -68,30 +86,34 @@ vacuuming_main(ConnParams *cparams, const char *dbname,
 
 		cparams->dbname = dbname;
 
-		if (analyze_in_stages)
+		if (vacopts->mode == MODE_ANALYZE_IN_STAGES)
 		{
-			int			stage;
 			SimpleStringList *found_objs = NULL;
 
-			for (stage = 0; stage < ANALYZE_NUM_STAGES; stage++)
+			for (int stage = 0; stage < ANALYZE_NUM_STAGES; stage++)
 			{
-				vacuum_one_database(cparams, vacopts,
-									stage,
-									objects,
-									vacopts->missing_stats_only ? &found_objs : NULL,
-									concurrentCons,
-									progname, echo, quiet);
+				int			ret;
+
+				ret = vacuum_one_database(cparams, vacopts,
+										  stage,
+										  objects,
+										  vacopts->missing_stats_only ? &found_objs : NULL,
+										  concurrentCons,
+										  progname, echo, quiet);
+				if (ret != 0)
+					return ret;
 			}
+
+			return EXIT_SUCCESS;
 		}
 		else
-			vacuum_one_database(cparams, vacopts,
-								ANALYZE_NO_STAGE,
-								objects, NULL,
-								concurrentCons,
-								progname, echo, quiet);
+			return vacuum_one_database(cparams, vacopts,
+									   ANALYZE_NO_STAGE,
+									   objects, NULL,
+									   concurrentCons,
+									   progname, echo, quiet);
 	}
 }
-
 
 /*
  * vacuum_one_database
@@ -133,7 +155,7 @@ vacuuming_main(ConnParams *cparams, const char *dbname,
  * If concurrentCons is > 1, multiple connections are used to vacuum tables
  * in parallel.
  */
-void
+static int
 vacuum_one_database(ConnParams *cparams,
 					vacuumingOptions *vacopts,
 					int stage,
@@ -147,9 +169,9 @@ vacuum_one_database(ConnParams *cparams,
 	SimpleStringListCell *cell;
 	ParallelSlotArray *sa;
 	int			ntups = 0;
-	bool		failed = false;
 	const char *initcmd;
-	SimpleStringList *ret = NULL;
+	SimpleStringList *retobjs = NULL;
+	int			ret = EXIT_SUCCESS;
 	const char *stage_commands[] = {
 		"SET default_statistics_target=1; SET vacuum_cost_delay=0;",
 		"SET default_statistics_target=10; RESET vacuum_cost_delay;",
@@ -255,7 +277,7 @@ vacuum_one_database(ConnParams *cparams,
 
 	if (!quiet)
 	{
-		if (stage != ANALYZE_NO_STAGE)
+		if (vacopts->mode == MODE_ANALYZE_IN_STAGES)
 			printf(_("%s: processing database \"%s\": %s\n"),
 				   progname, PQdb(conn), _(stage_messages[stage]));
 		else
@@ -270,25 +292,25 @@ vacuum_one_database(ConnParams *cparams,
 	 * return variable if provided.
 	 */
 	if (found_objs && *found_objs)
-		ret = *found_objs;
+		retobjs = *found_objs;
 	else
 	{
-		ret = retrieve_objects(conn, vacopts, objects, echo);
+		retobjs = retrieve_objects(conn, vacopts, objects, echo);
 		if (found_objs)
-			*found_objs = ret;
+			*found_objs = retobjs;
 	}
 
 	/*
 	 * Count the number of objects in the catalog query result.  If there are
 	 * none, we are done.
 	 */
-	for (cell = ret ? ret->head : NULL; cell; cell = cell->next)
+	for (cell = retobjs ? retobjs->head : NULL; cell; cell = cell->next)
 		ntups++;
 
 	if (ntups == 0)
 	{
 		PQfinish(conn);
-		return;
+		return EXIT_SUCCESS;
 	}
 
 	/*
@@ -305,13 +327,13 @@ vacuum_one_database(ConnParams *cparams,
 	 * caller requested that mode.  We have to prepare the initial connection
 	 * ourselves before setting up the slots.
 	 */
-	if (stage == ANALYZE_NO_STAGE)
-		initcmd = NULL;
-	else
+	if (vacopts->mode == MODE_ANALYZE_IN_STAGES)
 	{
 		initcmd = stage_commands[stage];
 		executeCommand(conn, initcmd, echo);
 	}
+	else
+		initcmd = NULL;
 
 	/*
 	 * Setup the database connections. We reuse the connection we already have
@@ -323,7 +345,7 @@ vacuum_one_database(ConnParams *cparams,
 
 	initPQExpBuffer(&sql);
 
-	cell = ret->head;
+	cell = retobjs->head;
 	do
 	{
 		const char *tabname = cell->val;
@@ -331,18 +353,18 @@ vacuum_one_database(ConnParams *cparams,
 
 		if (CancelRequested)
 		{
-			failed = true;
+			ret = EXIT_FAILURE;
 			goto finish;
 		}
 
 		free_slot = ParallelSlotsGetIdle(sa, NULL);
 		if (!free_slot)
 		{
-			failed = true;
+			ret = EXIT_FAILURE;
 			goto finish;
 		}
 
-		prepare_vacuum_command(&sql, PQserverVersion(free_slot->connection),
+		prepare_vacuum_command(free_slot->connection, &sql,
 							   vacopts, tabname);
 
 		/*
@@ -358,20 +380,19 @@ vacuum_one_database(ConnParams *cparams,
 
 	if (!ParallelSlotsWaitCompletion(sa))
 	{
-		failed = true;
+		ret = EXIT_FAILURE;
 		goto finish;
 	}
 
 	/* If we used SKIP_DATABASE_STATS, mop up with ONLY_DATABASE_STATS */
-	if (vacopts->skip_database_stats &&
-		stage == ANALYZE_NO_STAGE)
+	if (vacopts->mode == MODE_VACUUM && vacopts->skip_database_stats)
 	{
 		const char *cmd = "VACUUM (ONLY_DATABASE_STATS);";
 		ParallelSlot *free_slot = ParallelSlotsGetIdle(sa, NULL);
 
 		if (!free_slot)
 		{
-			failed = true;
+			ret = EXIT_FAILURE;
 			goto finish;
 		}
 
@@ -379,17 +400,93 @@ vacuum_one_database(ConnParams *cparams,
 		run_vacuum_command(free_slot->connection, cmd, echo, NULL);
 
 		if (!ParallelSlotsWaitCompletion(sa))
-			failed = true;
+			ret = EXIT_FAILURE; /* error already reported by handler */
 	}
 
 finish:
 	ParallelSlotsTerminate(sa);
 	pg_free(sa);
-
 	termPQExpBuffer(&sql);
 
-	if (failed)
-		exit(1);
+	return ret;
+}
+
+/*
+ * Vacuum/analyze all connectable databases.
+ *
+ * In analyze-in-stages mode, we process all databases in one stage before
+ * moving on to the next stage.  That ensure minimal stats are available
+ * quickly everywhere before generating more detailed ones.
+ */
+static int
+vacuum_all_databases(ConnParams *cparams,
+					 vacuumingOptions *vacopts,
+					 SimpleStringList *objects,
+					 int concurrentCons,
+					 const char *progname, bool echo, bool quiet)
+{
+	PGconn	   *conn;
+	PGresult   *result;
+
+	conn = connectMaintenanceDatabase(cparams, progname, echo);
+	result = executeQuery(conn,
+						  "SELECT datname FROM pg_database WHERE datallowconn AND datconnlimit <> -2 ORDER BY 1;",
+						  echo);
+	PQfinish(conn);
+
+	if (vacopts->mode == MODE_ANALYZE_IN_STAGES)
+	{
+		SimpleStringList **found_objs = NULL;
+
+		if (vacopts->missing_stats_only)
+			found_objs = palloc0(PQntuples(result) * sizeof(SimpleStringList *));
+
+		/*
+		 * When analyzing all databases in stages, we analyze them all in the
+		 * fastest stage first, so that initial statistics become available
+		 * for all of them as soon as possible.
+		 *
+		 * This means we establish several times as many connections, but
+		 * that's a secondary consideration.
+		 */
+		for (int stage = 0; stage < ANALYZE_NUM_STAGES; stage++)
+		{
+			for (int i = 0; i < PQntuples(result); i++)
+			{
+				int			ret;
+
+				cparams->override_dbname = PQgetvalue(result, i, 0);
+				ret = vacuum_one_database(cparams, vacopts, stage,
+										  objects,
+										  vacopts->missing_stats_only ? &found_objs[i] : NULL,
+										  concurrentCons,
+										  progname, echo, quiet);
+				if (ret != EXIT_SUCCESS)
+					return ret;
+			}
+		}
+	}
+	else
+	{
+		for (int i = 0; i < PQntuples(result); i++)
+		{
+			int			ret;
+
+			cparams->override_dbname = PQgetvalue(result, i, 0);
+			ret = vacuum_one_database(cparams, vacopts,
+									  ANALYZE_NO_STAGE,
+									  objects,
+									  NULL,
+									  concurrentCons,
+									  progname, echo, quiet);
+			if (ret != EXIT_SUCCESS)
+				return ret;
+		}
+	}
+
+	PQclear(result);
+
+	return EXIT_SUCCESS;
 }
 
 /*
@@ -404,7 +501,7 @@ finish:
  * generated qualified identifiers and to filter for the tables provided via
  * --table.  If a listed table does not exist, the catalog query will fail.
  */
-SimpleStringList *
+static SimpleStringList *
 retrieve_objects(PGconn *conn, vacuumingOptions *vacopts,
 				 SimpleStringList *objects, bool echo)
 {
@@ -431,13 +528,13 @@ retrieve_objects(PGconn *conn, vacuumingOptions *vacopts,
 		else
 			appendPQExpBufferStr(&catalog_query, ",\n  (");
 
-		if (objfilter & (OBJFILTER_SCHEMA | OBJFILTER_SCHEMA_EXCLUDE))
+		if (vacopts->objfilter & (OBJFILTER_SCHEMA | OBJFILTER_SCHEMA_EXCLUDE))
 		{
 			appendStringLiteralConn(&catalog_query, cell->val, conn);
 			appendPQExpBufferStr(&catalog_query, "::pg_catalog.regnamespace, ");
 		}
 
-		if (objfilter & OBJFILTER_TABLE)
+		if (vacopts->objfilter & OBJFILTER_TABLE)
 		{
 			/*
 			 * Split relation and column names given by the user, this is used
@@ -491,7 +588,7 @@ retrieve_objects(PGconn *conn, vacuumingOptions *vacopts,
 							 " ON listed_objects.object_oid"
 							 " OPERATOR(pg_catalog.=) ");
 
-		if (objfilter & OBJFILTER_TABLE)
+		if (vacopts->objfilter & OBJFILTER_TABLE)
 			appendPQExpBufferStr(&catalog_query, "c.oid\n");
 		else
 			appendPQExpBufferStr(&catalog_query, "ns.oid\n");
@@ -510,7 +607,7 @@ retrieve_objects(PGconn *conn, vacuumingOptions *vacopts,
 	 */
 	if (objects_listed)
 	{
-		if (objfilter & OBJFILTER_SCHEMA_EXCLUDE)
+		if (vacopts->objfilter & OBJFILTER_SCHEMA_EXCLUDE)
 			appendPQExpBufferStr(&catalog_query,
 								 " AND listed_objects.object_oid IS NULL\n");
 		else
@@ -524,17 +621,17 @@ retrieve_objects(PGconn *conn, vacuumingOptions *vacopts,
 	 * Instead, let the server decide whether a given relation can be
 	 * processed in which case the user will know about it.
 	 */
-	if ((objfilter & OBJFILTER_TABLE) == 0)
+	if ((vacopts->objfilter & OBJFILTER_TABLE) == 0)
 	{
 		/*
 		 * vacuumdb should generally follow the behavior of the underlying
-		 * VACUUM and ANALYZE commands. If analyze_only is true, process
-		 * regular tables, materialized views, and partitioned tables, just
-		 * like ANALYZE (with no specific target tables) does. Otherwise,
-		 * process only regular tables and materialized views, since VACUUM
-		 * skips partitioned tables when no target tables are specified.
+		 * VACUUM and ANALYZE commands.  In MODE_ANALYZE mode, process regular
+		 * tables, materialized views, and partitioned tables, just like
+		 * ANALYZE (with no specific target tables) does. Otherwise, process
+		 * only regular tables and materialized views, since VACUUM skips
+		 * partitioned tables when no target tables are specified.
 		 */
-		if (vacopts->analyze_only)
+		if (vacopts->mode == MODE_ANALYZE)
 			appendPQExpBufferStr(&catalog_query,
 								 " AND c.relkind OPERATOR(pg_catalog.=) ANY (array["
 								 CppAsString2(RELKIND_RELATION) ", "
@@ -688,96 +785,25 @@ retrieve_objects(PGconn *conn, vacuumingOptions *vacopts,
 }
 
 /*
- * Vacuum/analyze all connectable databases.
- *
- * In analyze-in-stages mode, we process all databases in one stage before
- * moving on to the next stage.  That ensure minimal stats are available
- * quickly everywhere before generating more detailed ones.
- */
-void
-vacuum_all_databases(ConnParams *cparams,
-					 vacuumingOptions *vacopts,
-					 bool analyze_in_stages,
-					 SimpleStringList *objects,
-					 int concurrentCons,
-					 const char *progname, bool echo, bool quiet)
-{
-	PGconn	   *conn;
-	PGresult   *result;
-	int			stage;
-	int			i;
-
-	conn = connectMaintenanceDatabase(cparams, progname, echo);
-	result = executeQuery(conn,
-						  "SELECT datname FROM pg_database WHERE datallowconn AND datconnlimit <> -2 ORDER BY 1;",
-						  echo);
-	PQfinish(conn);
-
-	if (analyze_in_stages)
-	{
-		SimpleStringList **found_objs = NULL;
-
-		if (vacopts->missing_stats_only)
-			found_objs = palloc0(PQntuples(result) * sizeof(SimpleStringList *));
-
-		/*
-		 * When analyzing all databases in stages, we analyze them all in the
-		 * fastest stage first, so that initial statistics become available
-		 * for all of them as soon as possible.
-		 *
-		 * This means we establish several times as many connections, but
-		 * that's a secondary consideration.
-		 */
-		for (stage = 0; stage < ANALYZE_NUM_STAGES; stage++)
-		{
-			for (i = 0; i < PQntuples(result); i++)
-			{
-				cparams->override_dbname = PQgetvalue(result, i, 0);
-
-				vacuum_one_database(cparams, vacopts,
-									stage,
-									objects,
-									vacopts->missing_stats_only ? &found_objs[i] : NULL,
-									concurrentCons,
-									progname, echo, quiet);
-			}
-		}
-	}
-	else
-	{
-		for (i = 0; i < PQntuples(result); i++)
-		{
-			cparams->override_dbname = PQgetvalue(result, i, 0);
-
-			vacuum_one_database(cparams, vacopts,
-								ANALYZE_NO_STAGE,
-								objects, NULL,
-								concurrentCons,
-								progname, echo, quiet);
-		}
-	}
-
-	PQclear(result);
-}
-
-/*
  * Construct a vacuum/analyze command to run based on the given
  * options, in the given string buffer, which may contain previous garbage.
  *
  * The table name used must be already properly quoted.  The command generated
  * depends on the server version involved and it is semicolon-terminated.
  */
-void
-prepare_vacuum_command(PQExpBuffer sql, int serverVersion,
+static void
+prepare_vacuum_command(PGconn *conn, PQExpBuffer sql,
 					   vacuumingOptions *vacopts, const char *table)
 {
+	int			serverVersion = PQserverVersion(conn);
 	const char *paren = " (";
 	const char *comma = ", ";
 	const char *sep = paren;
 
 	resetPQExpBuffer(sql);
 
-	if (vacopts->analyze_only)
+	if (vacopts->mode == MODE_ANALYZE ||
+		vacopts->mode == MODE_ANALYZE_IN_STAGES)
 	{
 		appendPQExpBufferStr(sql, "ANALYZE");
 
@@ -937,7 +963,7 @@ prepare_vacuum_command(PQExpBuffer sql, int serverVersion,
  *
  * Any errors during command execution are reported to stderr.
  */
-void
+static void
 run_vacuum_command(PGconn *conn, const char *sql, bool echo,
 				   const char *table)
 {

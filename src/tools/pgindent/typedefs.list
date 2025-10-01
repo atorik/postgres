@@ -2568,6 +2568,7 @@ RestrictInfo
 Result
 ResultRelInfo
 ResultState
+ResultType
 RetainDeadTuplesData
 RetainDeadTuplesPhase
 ReturnSetInfo
@@ -2603,6 +2604,7 @@ RtlNtStatusToDosError_t
 RuleInfo
 RuleLock
 RuleStmt
+RunMode
 RunningTransactions
 RunningTransactionsData
 SASLStatus
@@ -2683,6 +2685,7 @@ SecLabelStmt
 SeenRelsEntry
 SelectLimit
 SelectStmt
+SelectStmtPassthrough
 Selectivity
 SelfJoinCandidate
 SemTPadded

@@ -20,7 +20,8 @@
 #include "vacuuming.h"
 
 static void help(const char *progname);
-static void check_objfilter(void);
+static void check_objfilter(bits32 objfilter);
+
 
 int
 main(int argc, char *argv[])
@@ -70,13 +71,14 @@ main(int argc, char *argv[])
 	bool		echo = false;
 	bool		quiet = false;
 	vacuumingOptions vacopts;
-	bool		analyze_in_stages = false;
 	SimpleStringList objects = {NULL, NULL};
 	int			concurrentCons = 1;
-	int			tbl_count = 0;
+	unsigned int tbl_count = 0;
+	int			ret;
 
 	/* initialize options */
 	memset(&vacopts, 0, sizeof(vacopts));
+	vacopts.objfilter = 0;		/* no filter */
 	vacopts.parallel_workers = -1;
 	vacopts.buffer_usage_limit = NULL;
 	vacopts.no_index_cleanup = false;
@@ -93,7 +95,7 @@ main(int argc, char *argv[])
 	progname = get_progname(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pgscripts"));
 
-	handle_help_version_opts(argc, argv, progname, help);
+	handle_help_version_opts(argc, argv, "vacuumdb", help);
 
 	while ((c = getopt_long(argc, argv, "ad:efFh:j:n:N:p:P:qt:U:vwWzZ",
 							long_options, &optindex)) != -1)
@@ -101,10 +103,10 @@ main(int argc, char *argv[])
 		switch (c)
 		{
 			case 'a':
-				objfilter |= OBJFILTER_ALL_DBS;
+				vacopts.objfilter |= OBJFILTER_ALL_DBS;
 				break;
 			case 'd':
-				objfilter |= OBJFILTER_DATABASE;
+				vacopts.objfilter |= OBJFILTER_DATABASE;
 				dbname = pg_strdup(optarg);
 				break;
 			case 'e':
@@ -125,11 +127,11 @@ main(int argc, char *argv[])
 					exit(1);
 				break;
 			case 'n':
-				objfilter |= OBJFILTER_SCHEMA;
+				vacopts.objfilter |= OBJFILTER_SCHEMA;
 				simple_string_list_append(&objects, optarg);
 				break;
 			case 'N':
-				objfilter |= OBJFILTER_SCHEMA_EXCLUDE;
+				vacopts.objfilter |= OBJFILTER_SCHEMA_EXCLUDE;
 				simple_string_list_append(&objects, optarg);
 				break;
 			case 'p':
@@ -144,7 +146,7 @@ main(int argc, char *argv[])
 				quiet = true;
 				break;
 			case 't':
-				objfilter |= OBJFILTER_TABLE;
+				vacopts.objfilter |= OBJFILTER_TABLE;
 				simple_string_list_append(&objects, optarg);
 				tbl_count++;
 				break;
@@ -164,13 +166,15 @@ main(int argc, char *argv[])
 				vacopts.and_analyze = true;
 				break;
 			case 'Z':
-				vacopts.analyze_only = true;
+				/* if analyze-in-stages is given, don't override it */
+				if (vacopts.mode != MODE_ANALYZE_IN_STAGES)
+					vacopts.mode = MODE_ANALYZE;
 				break;
 			case 2:
 				maintenance_db = pg_strdup(optarg);
 				break;
 			case 3:
-				analyze_in_stages = vacopts.analyze_only = true;
+				vacopts.mode = MODE_ANALYZE_IN_STAGES;
 				break;
 			case 4:
 				vacopts.disable_page_skipping = true;
@@ -222,7 +226,7 @@ main(int argc, char *argv[])
 	 */
 	if (optind < argc && dbname == NULL)
 	{
-		objfilter |= OBJFILTER_DATABASE;
+		vacopts.objfilter |= OBJFILTER_DATABASE;
 		dbname = argv[optind];
 		optind++;
 	}
@@ -239,9 +243,10 @@ main(int argc, char *argv[])
 	 * Validate the combination of filters specified in the command-line
 	 * options.
 	 */
-	check_objfilter();
+	check_objfilter(vacopts.objfilter);
 
-	if (vacopts.analyze_only)
+	if (vacopts.mode == MODE_ANALYZE ||
+		vacopts.mode == MODE_ANALYZE_IN_STAGES)
 	{
 		if (vacopts.full)
 			pg_fatal("cannot use the \"%s\" option when performing only analyze",
@@ -273,7 +278,8 @@ main(int argc, char *argv[])
 	/* Prohibit full and analyze_only options with parallel option */
 	if (vacopts.parallel_workers >= 0)
 	{
-		if (vacopts.analyze_only)
+		if (vacopts.mode == MODE_ANALYZE ||
+			vacopts.mode == MODE_ANALYZE_IN_STAGES)
 			pg_fatal("cannot use the \"%s\" option when performing only analyze",
 					 "parallel");
 		if (vacopts.full)
@@ -298,21 +304,23 @@ main(int argc, char *argv[])
 	 * Prohibit --missing-stats-only without --analyze-only or
 	 * --analyze-in-stages.
 	 */
-	if (vacopts.missing_stats_only && !vacopts.analyze_only)
+	if (vacopts.missing_stats_only && (vacopts.mode != MODE_ANALYZE &&
+									   vacopts.mode != MODE_ANALYZE_IN_STAGES))
 		pg_fatal("cannot use the \"%s\" option without \"%s\" or \"%s\"",
 				 "missing-stats-only", "analyze-only", "analyze-in-stages");
 
-	vacuuming_main(&cparams, dbname, maintenance_db, &vacopts, &objects,
-				   analyze_in_stages, tbl_count, concurrentCons,
-				   progname, echo, quiet);
-	exit(0);
+	ret = vacuuming_main(&cparams, dbname, maintenance_db, &vacopts,
+						 &objects, tbl_count,
+						 concurrentCons,
+						 progname, echo, quiet);
+	exit(ret);
 }
 
 /*
  * Verify that the filters used at command line are compatible.
  */
 void
-check_objfilter(void)
+check_objfilter(bits32 objfilter)
 {
 	if ((objfilter & OBJFILTER_ALL_DBS) &&
 		(objfilter & OBJFILTER_DATABASE))

@@ -83,6 +83,14 @@ DROP STATISTICS ab1_a_b_stats;
 ALTER STATISTICS ab1_a_b_stats RENAME TO ab1_a_b_stats_new;
 RESET SESSION AUTHORIZATION;
 DROP ROLE regress_stats_ext;
+CREATE STATISTICS pg_temp.stats_ext_temp ON a, b FROM ab1;
+SELECT regexp_replace(pg_describe_object(tableoid, oid, 0),
+                      'pg_temp_[0-9]*', 'pg_temp_REDACTED') AS descr,
+       pg_statistics_obj_is_visible(oid) AS visible
+  FROM pg_statistic_ext
+ WHERE stxname = 'stats_ext_temp';
+DROP STATISTICS stats_ext_temp;  -- shall fail
+DROP STATISTICS pg_temp.stats_ext_temp;
 
 CREATE STATISTICS IF NOT EXISTS ab1_a_b_stats ON a, b FROM ab1;
 DROP STATISTICS ab1_a_b_stats;
@@ -1811,4 +1819,18 @@ SELECT FROM sb_1 LEFT JOIN sb_2
 RESET enable_nestloop;
 RESET enable_mergejoin;
 
+-- Check that we can use statistics on a bool-valued function.
+CREATE FUNCTION extstat_small(x numeric) RETURNS bool
+STRICT IMMUTABLE LANGUAGE plpgsql
+AS $$ BEGIN RETURN x < 1; END $$;
+
+SELECT * FROM check_estimated_rows('SELECT * FROM sb_2 WHERE extstat_small(y)');
+
+CREATE STATISTICS extstat_sb_2_small ON extstat_small(y) FROM sb_2;
+ANALYZE sb_2;
+
+SELECT * FROM check_estimated_rows('SELECT * FROM sb_2 WHERE extstat_small(y)');
+
+-- Tidy up
 DROP TABLE sb_1, sb_2 CASCADE;
+DROP FUNCTION extstat_small(x numeric);
