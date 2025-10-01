@@ -166,8 +166,7 @@ SELECT has_function_privilege('regress_log_plan',
   'pg_log_query_plan(integer)', 'EXECUTE'); -- yes
 
 SET ROLE regress_log_plan;
-WITH t AS MATERIALIZED (SELECT pg_log_query_plan(pg_backend_pid()))
-    SELECT * FROM t;
+SELECT pg_log_query_plan(pg_backend_pid());
 RESET ROLE;
 
 REVOKE EXECUTE ON FUNCTION pg_log_query_plan(integer)
