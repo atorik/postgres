@@ -596,7 +596,10 @@
       </para>
       <para>
        Approximate average size (in bytes) of the transition state
-       data, or zero to use a default estimate
+       data. A positive value provides an estimate; zero means to
+       use a default estimate. A negative value indicates the state
+       data can grow unboundedly in size, such as when the aggregate
+       accumulates input rows (e.g., array_agg, string_agg).
       </para></entry>
      </row>
 
@@ -6367,6 +6370,16 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
       </para>
       <para>
        If true, this publication automatically includes all tables
+       in the database, including any that will be created in the future.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>puballsequences</structfield> <type>bool</type>
+      </para>
+      <para>
+       If true, this publication automatically includes all sequences
        in the database, including any that will be created in the future.
       </para></entry>
      </row>

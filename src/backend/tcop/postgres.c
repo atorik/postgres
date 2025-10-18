@@ -36,8 +36,9 @@
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "commands/async.h"
-#include "commands/event_trigger.h"
 #include "commands/dynamic_explain.h"
+#include "commands/event_trigger.h"
+#include "commands/explain_state.h"
 #include "commands/prepare.h"
 #include "common/pg_prng.h"
 #include "jit/jit.h"
@@ -885,7 +886,7 @@ pg_rewrite_query(Query *query)
  */
 PlannedStmt *
 pg_plan_query(Query *querytree, const char *query_string, int cursorOptions,
-			  ParamListInfo boundParams)
+			  ParamListInfo boundParams, ExplainState *es)
 {
 	PlannedStmt *plan;
 
@@ -902,7 +903,7 @@ pg_plan_query(Query *querytree, const char *query_string, int cursorOptions,
 		ResetUsage();
 
 	/* call the optimizer */
-	plan = planner(querytree, query_string, cursorOptions, boundParams);
+	plan = planner(querytree, query_string, cursorOptions, boundParams, es);
 
 	if (log_planner_stats)
 		ShowUsage("PLANNER STATISTICS");
@@ -998,7 +999,7 @@ pg_plan_queries(List *querytrees, const char *query_string, int cursorOptions,
 		else
 		{
 			stmt = pg_plan_query(query, query_string, cursorOptions,
-								 boundParams);
+								 boundParams, NULL);
 		}
 
 		stmt_list = lappend(stmt_list, stmt);

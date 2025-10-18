@@ -201,6 +201,15 @@ my %pgdump_runs = (
 			'--statistics',
 			'postgres',
 		],
+		# Give coverage for manually compressed blobs.toc files during
+		# restore.
+		compress_cmd => {
+			program => $ENV{'LZ4'},
+			args => [
+				'-z', '-f', '-m', '--rm',
+				"$tempdir/compression_lz4_dir/blobs_*.toc",
+			],
+		},
 		# Verify that data files were compressed
 		glob_patterns => [
 			"$tempdir/compression_lz4_dir/toc.dat",
@@ -3428,6 +3437,27 @@ my %tests = (
 		  'CREATE PUBLICATION pub5 WITH (publish_generated_columns = stored);',
 		regexp => qr/^
 			\QCREATE PUBLICATION pub5 WITH (publish = 'insert, update, delete, truncate', publish_generated_columns = stored);\E
+			/xm,
+		like => { %full_runs, section_post_data => 1, },
+	},
+
+	'CREATE PUBLICATION pub6' => {
+		create_order => 50,
+		create_sql => 'CREATE PUBLICATION pub6
+						 FOR ALL SEQUENCES;',
+		regexp => qr/^
+			\QCREATE PUBLICATION pub6 FOR ALL SEQUENCES WITH (publish = 'insert, update, delete, truncate');\E
+			/xm,
+		like => { %full_runs, section_post_data => 1, },
+	},
+
+	'CREATE PUBLICATION pub7' => {
+		create_order => 50,
+		create_sql => 'CREATE PUBLICATION pub7
+						 FOR ALL SEQUENCES, ALL TABLES
+						 WITH (publish = \'\');',
+		regexp => qr/^
+			\QCREATE PUBLICATION pub7 FOR ALL TABLES, ALL SEQUENCES WITH (publish = '');\E
 			/xm,
 		like => { %full_runs, section_post_data => 1, },
 	},

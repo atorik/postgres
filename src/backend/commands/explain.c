@@ -351,7 +351,7 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	INSTR_TIME_SET_CURRENT(planstart);
 
 	/* plan the query */
-	plan = pg_plan_query(query, queryString, cursorOptions, params);
+	plan = pg_plan_query(query, queryString, cursorOptions, params, es);
 
 	INSTR_TIME_SET_CURRENT(planduration);
 	INSTR_TIME_SUBTRACT(planduration, planstart);
@@ -4935,6 +4935,7 @@ ExplainSubPlans(List *plans, List *ancestors,
 	{
 		SubPlanState *sps = (SubPlanState *) lfirst(lst);
 		SubPlan    *sp = sps->subplan;
+		char	   *cooked_plan_name;
 
 		/*
 		 * There can be multiple SubPlan nodes referencing the same physical
@@ -4958,8 +4959,20 @@ ExplainSubPlans(List *plans, List *ancestors,
 		 */
 		ancestors = lcons(sp, ancestors);
 
+		/*
+		 * The plan has a name like exists_1 or rowcompare_2, but here we want
+		 * to prefix that with CTE, InitPlan, or SubPlan, as appropriate, for
+		 * display purposes.
+		 */
+		if (sp->subLinkType == CTE_SUBLINK)
+			cooked_plan_name = psprintf("CTE %s", sp->plan_name);
+		else if (sp->isInitPlan)
+			cooked_plan_name = psprintf("InitPlan %s", sp->plan_name);
+		else
+			cooked_plan_name = psprintf("SubPlan %s", sp->plan_name);
+
 		ExplainNode(sps->planstate, ancestors,
-					relationship, sp->plan_name, es);
+					relationship, cooked_plan_name, es);
 
 		ancestors = list_delete_first(ancestors);
 	}

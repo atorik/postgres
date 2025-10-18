@@ -34,6 +34,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_parameter_acl.h"
+#include "catalog/pg_type.h"
 #include "guc_internal.h"
 #include "libpq/pqformat.h"
 #include "libpq/protocol.h"
@@ -6848,7 +6849,7 @@ call_bool_check_hook(struct config_bool *conf, bool *newval, void **extra,
 				 errdetail_internal("%s", GUC_check_errdetail_string) : 0,
 				 GUC_check_errhint_string ?
 				 errhint("%s", GUC_check_errhint_string) : 0));
-		/* Flush any strings created in ErrorContext */
+		/* Flush strings created in ErrorContext (ereport might not have) */
 		FlushErrorState();
 		return false;
 	}
@@ -6882,7 +6883,7 @@ call_int_check_hook(struct config_int *conf, int *newval, void **extra,
 				 errdetail_internal("%s", GUC_check_errdetail_string) : 0,
 				 GUC_check_errhint_string ?
 				 errhint("%s", GUC_check_errhint_string) : 0));
-		/* Flush any strings created in ErrorContext */
+		/* Flush strings created in ErrorContext (ereport might not have) */
 		FlushErrorState();
 		return false;
 	}
@@ -6916,7 +6917,7 @@ call_real_check_hook(struct config_real *conf, double *newval, void **extra,
 				 errdetail_internal("%s", GUC_check_errdetail_string) : 0,
 				 GUC_check_errhint_string ?
 				 errhint("%s", GUC_check_errhint_string) : 0));
-		/* Flush any strings created in ErrorContext */
+		/* Flush strings created in ErrorContext (ereport might not have) */
 		FlushErrorState();
 		return false;
 	}
@@ -6959,7 +6960,7 @@ call_string_check_hook(struct config_string *conf, char **newval, void **extra,
 					 errdetail_internal("%s", GUC_check_errdetail_string) : 0,
 					 GUC_check_errhint_string ?
 					 errhint("%s", GUC_check_errhint_string) : 0));
-			/* Flush any strings created in ErrorContext */
+			/* Flush strings created in ErrorContext (ereport might not have) */
 			FlushErrorState();
 			result = false;
 		}
@@ -7001,7 +7002,7 @@ call_enum_check_hook(struct config_enum *conf, int *newval, void **extra,
 				 errdetail_internal("%s", GUC_check_errdetail_string) : 0,
 				 GUC_check_errhint_string ?
 				 errhint("%s", GUC_check_errhint_string) : 0));
-		/* Flush any strings created in ErrorContext */
+		/* Flush strings created in ErrorContext (ereport might not have) */
 		FlushErrorState();
 		return false;
 	}
