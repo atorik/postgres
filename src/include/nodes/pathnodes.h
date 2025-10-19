@@ -593,9 +593,6 @@ struct PlannerInfo
 	bool	   *isAltSubplan pg_node_attr(read_write_ignore);
 	bool	   *isUsedSubplan pg_node_attr(read_write_ignore);
 
-	/* Does this query modify any partition key columns? */
-	bool		partColsUpdated;
-
 	/* PartitionPruneInfos added in this query's plan. */
 	List	   *partPruneInfos;
 
@@ -1178,8 +1175,8 @@ typedef struct RelOptInfo
  * "group_clauses" and "group_exprs" are lists of SortGroupClauses and the
  * corresponding grouping expressions.
  *
- * "apply_at" tracks the set of relids at which partial aggregation is applied
- * in the paths of this grouped relation.
+ * "apply_agg_at" tracks the set of relids at which partial aggregation is
+ * applied in the paths of this grouped relation.
  *
  * "grouped_rows" is the estimated number of result tuples of the grouped
  * relation.
@@ -1206,7 +1203,7 @@ typedef struct RelAggInfo
 	List	   *group_exprs;
 
 	/* the set of relids partial aggregation is applied at */
-	Relids		apply_at;
+	Relids		apply_agg_at;
 
 	/* estimated number of result tuples */
 	Cardinality grouped_rows;
@@ -2609,7 +2606,6 @@ typedef struct ModifyTablePath
 	bool		canSetTag;		/* do we set the command tag/es_processed? */
 	Index		nominalRelation;	/* Parent RT index for use of EXPLAIN */
 	Index		rootRelation;	/* Root RT index, if partitioned/inherited */
-	bool		partColsUpdated;	/* some part key in hierarchy updated? */
 	List	   *resultRelations;	/* integer list of RT indexes */
 	List	   *updateColnosLists;	/* per-target-table update_colnos lists */
 	List	   *withCheckOptionLists;	/* per-target-table WCO lists */
