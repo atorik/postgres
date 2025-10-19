@@ -22,6 +22,7 @@
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/backend_status.h"
+#include "utils/injection_point.h"
 
 /* Is plan node wrapping for query plan logging currently in progress? */
 static bool WrapNodesInProgress = false;
@@ -36,6 +37,9 @@ static bool WrapNodesInProgress = false;
 void
 HandleLogQueryPlanInterrupt(void)
 {
+#ifdef USE_INJECTION_POINTS
+	INJECTION_POINT("log-query-interrupt", NULL);
+#endif
 	InterruptPending = true;
 	LogQueryPlanPending = true;
 	/* latch will be set by procsignal_sigusr1_handler */
