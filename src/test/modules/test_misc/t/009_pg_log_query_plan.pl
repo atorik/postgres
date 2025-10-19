@@ -9,7 +9,20 @@ use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
-# 概要, motivation
+# Test that pg_log_query_plan() can actually log the query plan of
+# a backend executing a query.
+
+# This test requires careful timing cordination:
+#  1) The target backend must be executing a query when
+#     pg_log_query_plan() sends the signal.
+#  2) We must confirm that the target backend actually received the
+#     signal that requests logging of the plan since signals are not
+#     guaranteed to be delivered instantly.
+#
+# We use an advisory lock to control (1) to ensure the backend is
+# blocked while executing a query and an injection point to control 
+# (2) to pause the plan logging handler until the target backend receive
+# the signal.
 
 if ($ENV{enable_injection_points} ne 'yes')
 {
@@ -41,25 +54,16 @@ my $session1_pid = $psql_session1->query_safe("select pg_backend_pid()");
 
 $psql_session1->query_safe(
 	qq[
-    SELECT injection_points_set_local();
-    SELECT injection_points_attach('log-query-interrupt', 'wait');
+	SELECT injection_points_set_local();
+	SELECT injection_points_attach('log-query-interrupt', 'wait');
 ]);
 
-#$psql_session2->query_until(
-#	qr/hold_advisory_lock/, q(
-#	\echo hold_advisory_lock
-#	BEGIN;
-#	SELECT pg_advisory_xact_lock(1);
-#));
-
+# Use an advisory lock to make session1 blocked during query execution.
 $psql_session2->query_safe(
-	q(
-	\echo hold_advisory_lock
+	qq[
 	BEGIN;
 	SELECT pg_advisory_xact_lock(1);
-));
-
-#$psql_session1->query_safe("BEGIN;");
+]);
 
 $psql_session1->query_until(
 	qr/wait_advisory_lock/, q(
@@ -68,41 +72,30 @@ $psql_session1->query_until(
 	SELECT pg_advisory_xact_lock(1);
 ));
 
-# Wait until the session1 is waiting on the advisory lock.
+# Confirm session1 is actually waiting on the advisory lock.
 $node->wait_for_event('client backend', 'advisory');
 
-#$psql_session2->query_until(
-#	qr/log_query_plan/, qq(
-#	\\echo log_query_plan
-#	SELECT pg_log_query_plan($session1_pid);
-#	COMMIT;
-#));
+# Now that session1 is confirmed to be executing (and blocked), request
+# that the server log its query plan.
+# Then commit the session 2 to release the advisory lock.
 $psql_session2->query_safe(
 	qq[
 	SELECT pg_log_query_plan($session1_pid);
 	COMMIT;
 ]);
 
-
-#$psql_session2->query_safe("COMMIT;");
-#$psql_session2->query_until(
-#	qr/commit/, q(
-#	\\echo commit
-#	commit;
-#));
-
-# Wait until the session1 is waiting on the injection point
+# Ensure that the signal from pg_log_query_plan() is actually
+# rececived by waiting on the injection point.
 $node->wait_for_event('client backend', 'log-query-interrupt');
 
 my $log_offset = -s $node->logfile;
 
-# Detach injection point.
+# Detach the injection point to start logging plan.
 $psql_session2->query_safe(
 	qq[
     SELECT injection_points_wakeup('log-query-interrupt');
     SELECT injection_points_detach('log-query-interrupt');
 ]);
-
 
 # Check that the plan was logged.
 $node->wait_for_log('query and its plan running on backend with PID',
@@ -110,8 +103,7 @@ $node->wait_for_log('query and its plan running on backend with PID',
 
 $psql_session1->query_safe("COMMIT;");
 
-# Continue the paused session.
-
 ok($psql_session1->quit);
 ok($psql_session2->quit);
+
 done_testing();
