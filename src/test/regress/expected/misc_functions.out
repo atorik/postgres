@@ -369,16 +369,12 @@ DROP ROLE regress_log_memory;
 -- pg_log_query_plan()
 --
 -- Plans are logged and they are not returned to the function.
--- Furthermore, their contents can vary depending on the optimizer. However,
--- we can at least verify that the code doesn't fail, and that the
--- permissions are set properly.
-WITH t AS MATERIALIZED (SELECT pg_log_query_plan(pg_backend_pid()))
-    SELECT * FROM t;
- pg_log_query_plan 
--------------------
- t
-(1 row)
-
+-- Furthermore, their contents can vary depending on the optimizer.
+-- Here we just verifies that the permissions are set properly.
+--
+-- The test that verifies the backend's query plan is actually
+-- logged is implemented in
+-- src/test/modules/test_misc/t/009_pg_log_query_plan.pl.
 CREATE ROLE regress_log_plan;
 SELECT has_function_privilege('regress_log_plan',
   'pg_log_query_plan(integer)', 'EXECUTE'); -- no
