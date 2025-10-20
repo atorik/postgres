@@ -12,16 +12,14 @@ use Test::More;
 # Test that pg_log_query_plan() actually logs the query plan of
 # another backend executing a query.
 
-# This test requires careful timing cordination:
+# This test requires timing cordinations:
 #  1) The target backend must be executing a query when
 #     pg_log_query_plan() sends the signal.
 #  2) We must confirm that the target backend actually received the
 #     signal that requests logging of the plan.
 #
-# We use an advisory lock to control (1) to ensure the backend is
-# blocked while executing a query and an injection point to control 
-# (2) to pause the plan logging handler until the target backend receive
-# the signal.
+# We use an advisory lock and an injection point to control them
+# respectively.
 
 if ($ENV{enable_injection_points} ne 'yes')
 {
@@ -50,7 +48,6 @@ my $session1_pid = $psql_session1->query_safe("select pg_backend_pid()");
 
 # Set injection point in the logging plan request handler to ensure
 # that session1 received the signal of pg_log_query_plan().
-
 $psql_session1->query_safe(
 	qq[
 	SELECT injection_points_set_local();
@@ -74,8 +71,7 @@ $psql_session1->query_until(
 # Confirm that session1 is actually waiting on the advisory lock.
 $node->wait_for_event('client backend', 'advisory');
 
-# Now that session1 is confirmed to be executing and blocked, run
-# pg_log_query_plan().
+# Run pg_log_query_plan().
 # Then commit the session 2 to release the advisory lock.
 $psql_session2->query_safe(
 	qq[
@@ -83,20 +79,19 @@ $psql_session2->query_safe(
 	COMMIT;
 ]);
 
-# Ensure that the signal from pg_log_query_plan() is actually
+# Ensure that the signal of pg_log_query_plan() is actually
 # rececived by confirming session1 is waiting on the injection point.
 $node->wait_for_event('client backend', 'log-query-interrupt');
 
 my $log_offset = -s $node->logfile;
 
-# Detach the injection point to start logging.
+# Detach the injection point to start logging the plan.
 $psql_session2->query_safe(
 	qq[
     SELECT injection_points_wakeup('log-query-interrupt');
     SELECT injection_points_detach('log-query-interrupt');
 ]);
 
-# Check that the plan was logged.
 $node->wait_for_log('query and its plan running on backend with PID',
 	$log_offset);
 
