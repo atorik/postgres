@@ -35,9 +35,8 @@ sub switch_server_cert
 	$ssl_server->switch_server_cert(@_);
 }
 
-# Determine whether this build uses OpenSSL or LibreSSL. As a heuristic, the
-# HAVE_SSL_CTX_SET_CERT_CB macro isn't defined for LibreSSL.
-my $libressl = not check_pg_config("#define HAVE_SSL_CTX_SET_CERT_CB 1");
+# Determine whether this build uses OpenSSL or LibreSSL.
+my $libressl = $ssl_server->is_libressl;
 
 #### Some configuration
 
@@ -174,6 +173,13 @@ SKIP:
 	ok( (@status = stat("$tempdir/key.txt")),
 		"keylog file exists and returned status");
 	ok(@status && !($status[2] & 0006), "keylog file is not world readable");
+
+	# Connect should work with an incorrect sslkeylogfile, with the error to
+	# open the logfile printed to stderr
+	$node->connect_ok(
+		"$common_connstr sslrootcert=ssl/root+server_ca.crt sslkeylogfile=$tempdir/invalid/key.txt sslmode=require",
+		"connect with server root cert and incorrect sslkeylogfile path",
+		expected_stderr => qr/could not open/);
 }
 
 # The server should not accept non-SSL connections.
@@ -742,32 +748,28 @@ TODO:
 
 # pg_stat_ssl
 
-my $serialno = `$ENV{OPENSSL} x509 -serial -noout -in ssl/client.crt`;
-if ($? == 0)
-{
-	# OpenSSL prints serial numbers in hexadecimal and converting the serial
-	# from hex requires a 64-bit capable Perl as the serialnumber is based on
-	# the current timestamp. On 32-bit fall back to checking for it being an
-	# integer like how we do when grabbing the serial fails.
-	if ($Config{ivsize} == 8)
-	{
-		no warnings qw(portable);
+# If the openssl program isn't available, or fails to run, fall back to a
+# generic integer match rather than skipping the test.
+my $serialno = '\d+';
 
-		$serialno =~ s/^serial=//;
-		$serialno =~ s/\s+//g;
-		$serialno = hex($serialno);
-	}
-	else
-	{
-		$serialno = '\d+';
-	}
-}
-else
+if ($ENV{OPENSSL} ne '')
 {
-	# OpenSSL isn't functioning on the user's PATH. This probably isn't worth
-	# skipping the test over, so just fall back to a generic integer match.
-	warn "couldn't run \"$ENV{OPENSSL} x509\" to get client cert serialno";
-	$serialno = '\d+';
+	my $serialstr = `$ENV{OPENSSL} x509 -serial -noout -in ssl/client.crt`;
+	if ($? == 0)
+	{
+		# OpenSSL prints serial numbers in hexadecimal and converting the serial
+		# from hex requires a 64-bit capable Perl as the serialnumber is based on
+		# the current timestamp. On 32-bit fall back to checking for it being an
+		# integer like how we do when grabbing the serial fails.
+		if ($Config{ivsize} == 8)
+		{
+			no warnings qw(portable);
+
+			$serialstr =~ s/^serial=//;
+			$serialstr =~ s/\s+//g;
+			$serialno = hex($serialstr);
+		}
+	}
 }
 
 command_like(
@@ -901,7 +903,11 @@ $node->connect_fails(
 	expected_stderr => qr/SSL error: tlsv1 alert unknown ca/,
 	log_like => [
 		qr{Client certificate verification failed at depth 1: unable to get local issuer certificate},
-		qr{Failed certificate data \(unverified\): subject "/CN=Test CA for PostgreSQL SSL regression test client certs", serial number \d+, issuer "/CN=Test root CA for PostgreSQL SSL regression test suite"},
+		# As of 5/2025, LibreSSL reports a different cert as being at fault;
+		# it's wrong, but seems to be their bug not ours
+		!$libressl
+		? qr{Failed certificate data \(unverified\): subject "/CN=Test CA for PostgreSQL SSL regression test client certs", serial number \d+, issuer "/CN=Test root CA for PostgreSQL SSL regression test suite"}
+		: qr{Failed certificate data \(unverified\): subject "/CN=ssltestuser", serial number \d+, issuer "/CN=Test CA for PostgreSQL SSL regression test client certs"},
 	]);
 
 # test server-side CRL directory

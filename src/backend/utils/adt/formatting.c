@@ -1565,6 +1565,8 @@ get_th(char *num, int type)
 	int			len = strlen(num),
 				last;
 
+	Assert(len > 0);
+
 	last = *(num + (len - 1));
 	if (!isdigit((unsigned char) last))
 		ereport(ERROR,
@@ -3590,14 +3592,15 @@ DCH_from_char(FormatNode *node, const char *in, TmFromChar *out,
 					if (matched < 2)
 						ereturn(escontext,,
 								(errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-								 errmsg("invalid input string for \"Y,YYY\"")));
+								 errmsg("invalid value \"%s\" for \"%s\"",
+										s, "Y,YYY")));
 
 					/* years += (millennia * 1000); */
 					if (pg_mul_s32_overflow(millennia, 1000, &millennia) ||
 						pg_add_s32_overflow(years, millennia, &years))
 						ereturn(escontext,,
 								(errcode(ERRCODE_DATETIME_FIELD_OVERFLOW),
-								 errmsg("value for \"Y,YYY\" in source string is out of range")));
+								 errmsg("value for \"%s\" in source string is out of range", "Y,YYY")));
 
 					if (!from_char_set_int(&out->year, years, n, escontext))
 						return;
@@ -6386,12 +6389,12 @@ numeric_to_char(PG_FUNCTION_ARGS)
 	if (IS_ROMAN(&Num))
 	{
 		int32		intvalue;
-		bool		err;
+		ErrorSaveContext escontext = {T_ErrorSaveContext};
 
 		/* Round and convert to int */
-		intvalue = numeric_int4_opt_error(value, &err);
+		intvalue = numeric_int4_safe(value, (Node *) &escontext);
 		/* On overflow, just use PG_INT32_MAX; int_to_roman will cope */
-		if (err)
+		if (escontext.error_occurred)
 			intvalue = PG_INT32_MAX;
 		numstr = int_to_roman(intvalue);
 	}

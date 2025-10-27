@@ -140,7 +140,7 @@
      An example of what this file might look like is:
 <programlisting>
 # This is a comment
-log_connections = yes
+log_connections = all
 log_destination = 'syslog'
 search_path = '"$user", public'
 shared_buffers = 128MB
@@ -337,7 +337,7 @@ UPDATE pg_settings SET setting = reset_val WHERE name = 'configuration_parameter
        <option>-c name=value</option> command-line parameter, or its equivalent
        <option>--name=value</option> variation.  For example,
 <programlisting>
-postgres -c log_connections=yes --log-destination='syslog'
+postgres -c log_connections=all --log-destination='syslog'
 </programlisting>
        Settings provided in this way override those set via
        <filename>postgresql.conf</filename> or <command>ALTER SYSTEM</command>,
@@ -1151,6 +1151,22 @@ include_dir 'conf.d'
         encrypted with SCRAM-SHA-256 as the iteration count is fixed at the
         time of encryption. In order to make use of a changed value, a new
         password must be set.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-md5-password-warnings" xreflabel="md5_password_warnings">
+      <term><varname>md5_password_warnings</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>md5_password_warnings</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Controls whether a <literal>WARNING</literal> about MD5 password
+        deprecation is produced when a <command>CREATE ROLE</command> or
+        <command>ALTER ROLE</command> statement sets an MD5-encrypted password.
+        The default value is <literal>on</literal>.
        </para>
       </listitem>
      </varlistentry>
@@ -2347,7 +2363,7 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
-     <varlistentry id="guc_file_copy_method" xreflabel="file_copy_method">
+     <varlistentry id="guc-file-copy-method" xreflabel="file_copy_method">
       <term><varname>file_copy_method</varname> (<type>enum</type>)
       <indexterm>
        <primary><varname>file_copy_method</varname> configuration parameter</primary>
@@ -2763,6 +2779,7 @@ include_dir 'conf.d'
            </para>
           </listitem>
          </itemizedlist>
+         The default is <literal>worker</literal>.
         </para>
         <para>
          This parameter can only be set at server start.
@@ -2771,7 +2788,7 @@ include_dir 'conf.d'
       </varlistentry>
 
       <varlistentry id="guc-io-workers" xreflabel="io_workers">
-       <term><varname>io_workers</varname> (<type>int</type>)
+       <term><varname>io_workers</varname> (<type>integer</type>)
        <indexterm>
         <primary><varname>io_workers</varname> configuration parameter</primary>
        </indexterm>
@@ -2877,7 +2894,8 @@ include_dir 'conf.d'
          Sets the maximum number of parallel workers that can be
          started by a single utility command.  Currently, the parallel
          utility commands that support the use of parallel workers are
-         <command>CREATE INDEX</command> when building a B-tree or BRIN index,
+         <command>CREATE INDEX</command> when building a B-tree,
+         GIN, or BRIN index,
          and <command>VACUUM</command> without <literal>FULL</literal>
          option.  Parallel workers are taken from the pool of processes
          established by <xref linkend="guc-max-worker-processes"/>, limited
@@ -3381,8 +3399,9 @@ include_dir 'conf.d'
         This parameter enables compression of WAL using the specified
         compression method.
         When enabled, the <productname>PostgreSQL</productname>
-        server compresses full page images written to WAL when
-        <xref linkend="guc-full-page-writes"/> is on or during a base backup.
+        server compresses full page images written to WAL (e.g. when
+        <xref linkend="guc-full-page-writes"/> is on, during a base backup,
+        etc.).
         A compressed page image will be decompressed during WAL replay.
         The supported methods are <literal>pglz</literal>,
         <literal>lz4</literal> (if <productname>PostgreSQL</productname>
@@ -4600,10 +4619,12 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
       </term>
       <listitem>
        <para>
-        Invalidate replication slots that have remained idle longer than this
-        duration. If this value is specified without units, it is taken as
-        minutes. A value of zero (the default) disables the idle timeout
-        invalidation mechanism. This parameter can only be set in the
+        Invalidate replication slots that have remained inactive (not used by
+        a <link linkend="protocol-replication">replication connection</link>)
+        for longer than this duration.
+        If this value is specified without units, it is taken as seconds.
+        A value of zero (the default) disables the idle timeout
+        invalidation mechanism.  This parameter can only be set in the
         <filename>postgresql.conf</filename> file or on the server command
         line.
        </para>
@@ -4945,6 +4966,8 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
           new setting.
           This setting has no effect if <varname>primary_conninfo</varname> is not
           set or the server is not in standby mode.
+          The name cannot be <literal>pg_conflict_detection</literal> as it is
+          reserved for the conflict detection slot.
          </para>
         </listitem>
        </varlistentry>
@@ -5452,6 +5475,21 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-enable-eager-aggregate" xreflabel="enable_eager_aggregate">
+      <term><varname>enable_eager_aggregate</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>enable_eager_aggregate</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Enables or disables the query planner's ability to partially push
+        aggregation past a join, and finalize it once all the relations are
+        joined. The default is <literal>on</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-enable-gathermerge" xreflabel="enable_gathermerge">
       <term><varname>enable_gathermerge</varname> (<type>boolean</type>)
       <indexterm>
@@ -5748,7 +5786,7 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
-     <varlistentry id="guc-enable_self_join_elimination" xreflabel="enable_self_join_elimination">
+     <varlistentry id="guc-enable-self-join-elimination" xreflabel="enable_self_join_elimination">
       <term><varname>enable_self_join_elimination</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>enable_self_join_elimination</varname> configuration parameter</primary>
@@ -6068,6 +6106,22 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
         The default is 4 gigabytes (<literal>4GB</literal>).
         (If <symbol>BLCKSZ</symbol> is not 8kB, the default value scales
         proportionally to it.)
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-min-eager-agg-group-size" xreflabel="min_eager_agg_group_size">
+      <term><varname>min_eager_agg_group_size</varname> (<type>floating point</type>)
+      <indexterm>
+       <primary><varname>min_eager_agg_group_size</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the minimum average group size required to consider applying
+        eager aggregation. This helps avoid the overhead of eager
+        aggregation when it does not offer significant row count reduction.
+        The default is <literal>8</literal>.
        </para>
       </listitem>
      </varlistentry>
@@ -7360,6 +7414,11 @@ local0.*    /var/log/postgresql
      </varlistentry>
 
      <varlistentry id="guc-debug-print-parse">
+      <term><varname>debug_print_raw_parse</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>debug_print_raw_parse</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
       <term><varname>debug_print_parse</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>debug_print_parse</varname> configuration parameter</primary>
@@ -7378,8 +7437,8 @@ local0.*    /var/log/postgresql
       <listitem>
        <para>
         These parameters enable various debugging output to be emitted.
-        When set, they print the resulting parse tree, the query rewriter
-        output, or the execution plan for each executed query.
+        When set, they print the resulting raw parse tree, the parse tree, the query
+        rewriter output, or the execution plan for each executed query.
         These messages are emitted at <literal>LOG</literal> message level, so by
         default they will appear in the server log but will not be sent to the
         client.  You can change that by adjusting
@@ -7399,7 +7458,8 @@ local0.*    /var/log/postgresql
       <listitem>
        <para>
         When set, <varname>debug_pretty_print</varname> indents the messages
-        produced by <varname>debug_print_parse</varname>,
+        produced by <varname>debug_print_raw_parse</varname>,
+        <varname>debug_print_parse</varname>,
         <varname>debug_print_rewritten</varname>, or
         <varname>debug_print_plan</varname>.  This results in more readable
         but much longer output than the <quote>compact</quote> format used when
@@ -7417,17 +7477,44 @@ local0.*    /var/log/postgresql
       </term>
       <listitem>
        <para>
-        Causes each action executed by autovacuum to be logged if it ran for at
+        Causes vacuum action executed by autovacuum to be logged if it ran for at
         least the specified amount of time.  Setting this to zero logs
-        all autovacuum actions. <literal>-1</literal> disables logging autovacuum
-        actions. If this value is specified without units, it is taken as milliseconds.
-        For example, if you set this to
-        <literal>250ms</literal> then all automatic vacuums and analyzes that run
+        all vacuum actions by autovacuum. <literal>-1</literal> disables logging
+        vacuum actions by autovacuum. If this value is specified without units,
+        it is taken as milliseconds. For example, if you set this to
+        <literal>250ms</literal> then all automatic vacuums that run
         250ms or longer will be logged.  In addition, when this parameter is
         set to any value other than <literal>-1</literal>, a message will be
-        logged if an autovacuum action is skipped due to a conflicting lock or a
+        logged if a vacuum action by autovacuum is skipped due to a conflicting lock or a
         concurrently dropped relation. The default is <literal>10min</literal>.
-        Enabling this parameter can be helpful in tracking autovacuum activity.
+        Enabling this parameter can be helpful in tracking vacuum activity by autovacuum.
+        This parameter can only be set in the <filename>postgresql.conf</filename>
+        file or on the server command line; but the setting can be overridden for
+        individual tables by changing table storage parameters.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-log-autoanalyze-min-duration" xreflabel="log_autoanalyze_min_duration">
+      <term><varname>log_autoanalyze_min_duration</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>log_autoanalyze_min_duration</varname></primary>
+       <secondary>configuration parameter</secondary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Causes analyze action executed by autovacuum to be logged if it ran for at
+        least the specified amount of time.  Setting this to zero logs
+        all analyze actions by autovacuum. <literal>-1</literal> disables logging
+        analyze actions by autovacuum. If this value is specified without units,
+        it is taken as milliseconds. For example, if you set this to
+        <literal>250ms</literal> then all automatic analyzes that run
+        250ms or longer will be logged.  In addition, when this parameter is
+        set to any value other than <literal>-1</literal>, a message will be
+        logged if an analyze action by autovacuum is skipped due to a conflicting lock or a
+        concurrently dropped relation. The default is <literal>10min</literal>.
+        Enabling this parameter can be helpful in tracking analyze activity by autovacuum.
         This parameter can only be set in the <filename>postgresql.conf</filename>
         file or on the server command line; but the setting can be overridden for
         individual tables by changing table storage parameters.
@@ -7511,12 +7598,12 @@ local0.*    /var/log/postgresql
            <entry><literal>setup_durations</literal></entry>
            <entry>
             Logs the time spent establishing the connection and setting up the
-            backend at the time the connection is ready to execute its first
-            query. The log message includes the total setup duration, starting
-            from the postmaster accepting the incoming connection and ending
-            when the connection is ready for query. It also includes the time
-            it took to fork the new backend and the time it took to
-            authenticate the user.
+            backend until the connection is ready to execute its first
+            query. The log message includes three durations:  the total
+            setup duration (starting from the postmaster accepting the
+            incoming connection and ending when the connection is ready
+            for query), the time it took to fork the new backend, and
+            the time it took to authenticate the user.
            </entry>
           </row>
 
@@ -7900,17 +7987,17 @@ log_line_prefix = '%m [%p] %q%u@%d/%a '
         Controls whether a log message is produced when a session waits
         longer than <xref linkend="guc-deadlock-timeout"/> to acquire a
         lock.  This is useful in determining if lock waits are causing
-        poor performance.  The default is <literal>off</literal>.
+        poor performance.  The default is <literal>on</literal>.
         Only superusers and users with the appropriate <literal>SET</literal>
         privilege can change this setting.
        </para>
       </listitem>
      </varlistentry>
 
-     <varlistentry id="guc-log-lock-failure" xreflabel="log_lock_failure">
-      <term><varname>log_lock_failure</varname> (<type>boolean</type>)
+     <varlistentry id="guc-log-lock-failures" xreflabel="log_lock_failures">
+      <term><varname>log_lock_failures</varname> (<type>boolean</type>)
       <indexterm>
-       <primary><varname>log_lock_failure</varname> configuration parameter</primary>
+       <primary><varname>log_lock_failures</varname> configuration parameter</primary>
       </indexterm>
       </term>
       <listitem>
@@ -8114,22 +8201,6 @@ log_line_prefix = '%m [%p] %q%u@%d/%a '
         See <xref linkend="datatype-timezones"/> for more information.
         This parameter can only be set in the <filename>postgresql.conf</filename>
         file or on the server command line.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry id="guc-md5-password-warnings" xreflabel="md5_password_warnings">
-      <term><varname>md5_password_warnings</varname> (<type>boolean</type>)
-      <indexterm>
-       <primary><varname>md5_password_warnings</varname> configuration parameter</primary>
-      </indexterm>
-      </term>
-      <listitem>
-       <para>
-        Controls whether a <literal>WARNING</literal> about MD5 password
-        deprecation is produced when a <command>CREATE ROLE</command> or
-        <command>ALTER ROLE</command> statement sets an MD5-encrypted password.
-        The default value is <literal>on</literal>.
        </para>
       </listitem>
      </varlistentry>
@@ -8600,7 +8671,8 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
         timing information is displayed in
         <link linkend="vacuum-progress-reporting"><structname>pg_stat_progress_vacuum</structname></link>,
         <link linkend="analyze-progress-reporting"><structname>pg_stat_progress_analyze</structname></link>,
-        in the output of <xref linkend="sql-vacuum"/> when the
+        in the output of <xref linkend="sql-vacuum"/> and
+        <xref linkend="sql-analyze"/> when the
         <literal>VERBOSE</literal> option is used, and by autovacuum for
         auto-vacuums and auto-analyzes when
         <xref linkend="guc-log-autovacuum-min-duration"/> is set.
@@ -9338,7 +9410,8 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       <varlistentry id="guc-vacuum-truncate" xreflabel="vacuum_truncate">
        <term><varname>vacuum_truncate</varname> (<type>boolean</type>)
        <indexterm>
-        <primary><varname>vacuum_truncate</varname> configuration parameter</primary>
+        <primary><varname>vacuum_truncate</varname></primary>
+        <secondary>configuration parameter</secondary>
        </indexterm>
        </term>
        <listitem>
@@ -9542,7 +9615,8 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
      <varlistentry id="guc-vacuum-max-eager-freeze-failure-rate" xreflabel="vacuum_max_eager_freeze_failure_rate">
       <term><varname>vacuum_max_eager_freeze_failure_rate</varname> (<type>floating point</type>)
       <indexterm>
-       <primary><varname>vacuum_max_eager_freeze_failure_rate</varname> configuration parameter</primary>
+       <primary><varname>vacuum_max_eager_freeze_failure_rate</varname></primary>
+       <secondary>configuration parameter</secondary>
       </indexterm>
       </term>
       <listitem>
@@ -11047,6 +11121,12 @@ extension_control_path = 'C:\tools\postgresql;H:\my_project\share;$system'
         The default value for this parameter is
         <literal>'$system'</literal>. If the value is set to an empty
         string, the default <literal>'$system'</literal> is also assumed.
+       </para>
+
+       <para>
+        If extensions with equal names are present in multiple directories in
+        the configured path, only the instance found first in the path will be
+        used.
        </para>
 
        <para>

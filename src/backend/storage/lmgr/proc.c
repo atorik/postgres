@@ -50,7 +50,6 @@
 #include "storage/procsignal.h"
 #include "storage/spin.h"
 #include "storage/standby.h"
-#include "utils/memutils.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 
@@ -61,7 +60,7 @@ int			LockTimeout = 0;
 int			IdleInTransactionSessionTimeout = 0;
 int			TransactionTimeout = 0;
 int			IdleSessionTimeout = 0;
-bool		log_lock_waits = false;
+bool		log_lock_waits = true;
 
 /* Pointer to this process's PGPROC struct, if any */
 PGPROC	   *MyProc = NULL;

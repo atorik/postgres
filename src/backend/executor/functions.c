@@ -34,6 +34,7 @@
 #include "utils/funccache.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/plancache.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
@@ -142,6 +143,7 @@ typedef struct SQLFunctionCache
 {
 	SQLFunctionHashEntry *func; /* associated SQLFunctionHashEntry */
 
+	bool		active;			/* are we executing this cache entry? */
 	bool		lazyEvalOK;		/* true if lazyEval is safe */
 	bool		shutdown_reg;	/* true if registered shutdown callback */
 	bool		lazyEval;		/* true if using lazyEval for result query */
@@ -553,6 +555,28 @@ init_sql_fcache(FunctionCallInfo fcinfo, bool lazyEvalOK)
 		fcache->mcb.arg = fcache;
 		MemoryContextRegisterResetCallback(finfo->fn_mcxt, &fcache->mcb);
 		finfo->fn_extra = fcache;
+	}
+
+	/*
+	 * If the SQLFunctionCache is marked as active, we must have errored out
+	 * of a prior execution.  Reset state.  (It might seem that we could also
+	 * reach this during recursive invocation of a SQL function, but we won't
+	 * because that case won't involve re-use of the same FmgrInfo.)
+	 */
+	if (fcache->active)
+	{
+		/*
+		 * In general, this stanza should clear all the same fields that
+		 * ShutdownSQLFunction would.  Note we must clear fcache->cplan
+		 * without doing ReleaseCachedPlan, because error cleanup from the
+		 * prior execution would have taken care of releasing that plan.
+		 * Likewise, if tstore is still set then it is pointing at garbage.
+		 */
+		fcache->cplan = NULL;
+		fcache->eslist = NULL;
+		fcache->tstore = NULL;
+		fcache->shutdown_reg = false;
+		fcache->active = false;
 	}
 
 	/*
@@ -1338,7 +1362,6 @@ postquel_start(execution_state *es, SQLFunctionCachePtr fcache)
 		dest = None_Receiver;
 
 	es->qd = CreateQueryDesc(es->stmt,
-							 NULL,
 							 fcache->func->src,
 							 GetActiveSnapshot(),
 							 InvalidSnapshot,
@@ -1363,8 +1386,7 @@ postquel_start(execution_state *es, SQLFunctionCachePtr fcache)
 			eflags = EXEC_FLAG_SKIP_TRIGGERS;
 		else
 			eflags = 0;			/* default run-to-completion flags */
-		if (!ExecutorStart(es->qd, eflags))
-			elog(ERROR, "ExecutorStart() failed unexpectedly");
+		ExecutorStart(es->qd, eflags);
 	}
 
 	es->status = F_EXEC_RUN;
@@ -1597,6 +1619,9 @@ fmgr_sql(PG_FUNCTION_ARGS)
 	 * Initialize fcache if starting a fresh execution.
 	 */
 	fcache = init_sql_fcache(fcinfo, lazyEvalOK);
+
+	/* Mark fcache as active */
+	fcache->active = true;
 
 	/* Remember info that we might need later to construct tuplestore */
 	fcache->tscontext = tscontext;
@@ -1853,6 +1878,9 @@ fmgr_sql(PG_FUNCTION_ARGS)
 	 */
 	if (es == NULL)
 		fcache->eslist = NULL;
+
+	/* Mark fcache as inactive */
+	fcache->active = false;
 
 	error_context_stack = sqlerrcontext.previous;
 
@@ -2455,7 +2483,7 @@ tlist_coercion_finished:
 		rte = makeNode(RangeTblEntry);
 		rte->rtekind = RTE_SUBQUERY;
 		rte->subquery = parse;
-		rte->eref = rte->alias = makeAlias("*SELECT*", colnames);
+		rte->eref = makeAlias("unnamed_subquery", colnames);
 		rte->lateral = false;
 		rte->inh = false;
 		rte->inFromCl = true;

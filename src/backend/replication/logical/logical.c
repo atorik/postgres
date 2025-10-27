@@ -29,6 +29,7 @@
 #include "postgres.h"
 
 #include "access/xact.h"
+#include "access/xlog_internal.h"
 #include "access/xlogutils.h"
 #include "fmgr.h"
 #include "miscadmin.h"
@@ -41,6 +42,7 @@
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/builtins.h"
+#include "utils/injection_point.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
 
@@ -565,7 +567,7 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 		 * kinds of client errors; so the client may wish to check that
 		 * confirmed_flush_lsn matches its expectations.
 		 */
-		elog(LOG, "%X/%X has been already streamed, forwarding to %X/%X",
+		elog(LOG, "%X/%08X has been already streamed, forwarding to %X/%08X",
 			 LSN_FORMAT_ARGS(start_lsn),
 			 LSN_FORMAT_ARGS(slot->data.confirmed_flush));
 
@@ -608,7 +610,7 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 	ereport(LOG,
 			(errmsg("starting logical decoding for slot \"%s\"",
 					NameStr(slot->data.name)),
-			 errdetail("Streaming transactions committing after %X/%X, reading WAL from %X/%X.",
+			 errdetail("Streaming transactions committing after %X/%08X, reading WAL from %X/%08X.",
 					   LSN_FORMAT_ARGS(slot->data.confirmed_flush),
 					   LSN_FORMAT_ARGS(slot->data.restart_lsn))));
 
@@ -635,7 +637,7 @@ DecodingContextFindStartpoint(LogicalDecodingContext *ctx)
 	/* Initialize from where to start reading WAL. */
 	XLogBeginRead(ctx->reader, slot->data.restart_lsn);
 
-	elog(DEBUG1, "searching for logical decoding starting point, starting at %X/%X",
+	elog(DEBUG1, "searching for logical decoding starting point, starting at %X/%08X",
 		 LSN_FORMAT_ARGS(slot->data.restart_lsn));
 
 	/* Wait for a consistent starting point */
@@ -756,7 +758,7 @@ output_plugin_error_callback(void *arg)
 
 	/* not all callbacks have an associated LSN  */
 	if (state->report_location != InvalidXLogRecPtr)
-		errcontext("slot \"%s\", output plugin \"%s\", in the %s callback, associated LSN %X/%X",
+		errcontext("slot \"%s\", output plugin \"%s\", in the %s callback, associated LSN %X/%08X",
 				   NameStr(state->ctx->slot->data.name),
 				   NameStr(state->ctx->slot->data.plugin),
 				   state->callback_name,
@@ -1723,7 +1725,7 @@ LogicalIncreaseXminForSlot(XLogRecPtr current_lsn, TransactionId xmin)
 	SpinLockRelease(&slot->mutex);
 
 	if (got_new_xmin)
-		elog(DEBUG1, "got new catalog xmin %u at %X/%X", xmin,
+		elog(DEBUG1, "got new catalog xmin %u at %X/%08X", xmin,
 			 LSN_FORMAT_ARGS(current_lsn));
 
 	/* candidate already valid with the current flush position, apply */
@@ -1783,7 +1785,7 @@ LogicalIncreaseRestartDecodingForSlot(XLogRecPtr current_lsn, XLogRecPtr restart
 		slot->candidate_restart_lsn = restart_lsn;
 		SpinLockRelease(&slot->mutex);
 
-		elog(DEBUG1, "got new restart lsn %X/%X at %X/%X",
+		elog(DEBUG1, "got new restart lsn %X/%08X at %X/%08X",
 			 LSN_FORMAT_ARGS(restart_lsn),
 			 LSN_FORMAT_ARGS(current_lsn));
 	}
@@ -1798,7 +1800,7 @@ LogicalIncreaseRestartDecodingForSlot(XLogRecPtr current_lsn, XLogRecPtr restart
 		confirmed_flush = slot->data.confirmed_flush;
 		SpinLockRelease(&slot->mutex);
 
-		elog(DEBUG1, "failed to increase restart lsn: proposed %X/%X, after %X/%X, current candidate %X/%X, current after %X/%X, flushed up to %X/%X",
+		elog(DEBUG1, "failed to increase restart lsn: proposed %X/%08X, after %X/%08X, current candidate %X/%08X, current after %X/%08X, flushed up to %X/%08X",
 			 LSN_FORMAT_ARGS(restart_lsn),
 			 LSN_FORMAT_ARGS(current_lsn),
 			 LSN_FORMAT_ARGS(candidate_restart_lsn),
@@ -1825,10 +1827,26 @@ LogicalConfirmReceivedLocation(XLogRecPtr lsn)
 	{
 		bool		updated_xmin = false;
 		bool		updated_restart = false;
+		XLogRecPtr	restart_lsn pg_attribute_unused();
 
 		SpinLockAcquire(&MyReplicationSlot->mutex);
 
-		MyReplicationSlot->data.confirmed_flush = lsn;
+		/* remember the old restart lsn */
+		restart_lsn = MyReplicationSlot->data.restart_lsn;
+
+		/*
+		 * Prevent moving the confirmed_flush backwards, as this could lead to
+		 * data duplication issues caused by replicating already replicated
+		 * changes.
+		 *
+		 * This can happen when a client acknowledges an LSN it doesn't have
+		 * to do anything for, and thus didn't store persistently. After a
+		 * restart, the client can send the prior LSN that it stored
+		 * persistently as an acknowledgement, but we need to ignore such an
+		 * LSN. See similar case handling in CreateDecodingContext.
+		 */
+		if (lsn > MyReplicationSlot->data.confirmed_flush)
+			MyReplicationSlot->data.confirmed_flush = lsn;
 
 		/* if we're past the location required for bumping xmin, do so */
 		if (MyReplicationSlot->candidate_xmin_lsn != InvalidXLogRecPtr &&
@@ -1869,6 +1887,18 @@ LogicalConfirmReceivedLocation(XLogRecPtr lsn)
 		/* first write new xmin to disk, so we know what's up after a crash */
 		if (updated_xmin || updated_restart)
 		{
+#ifdef USE_INJECTION_POINTS
+			XLogSegNo	seg1,
+						seg2;
+
+			XLByteToSeg(restart_lsn, seg1, wal_segment_size);
+			XLByteToSeg(MyReplicationSlot->data.restart_lsn, seg2, wal_segment_size);
+
+			/* trigger injection point, but only if segment changes */
+			if (seg1 != seg2)
+				INJECTION_POINT("logical-replication-slot-advance-segment", NULL);
+#endif
+
 			ReplicationSlotMarkDirty();
 			ReplicationSlotSave();
 			elog(DEBUG1, "updated xmin: %u restart: %u", updated_xmin, updated_restart);
@@ -1893,7 +1923,14 @@ LogicalConfirmReceivedLocation(XLogRecPtr lsn)
 	else
 	{
 		SpinLockAcquire(&MyReplicationSlot->mutex);
-		MyReplicationSlot->data.confirmed_flush = lsn;
+
+		/*
+		 * Prevent moving the confirmed_flush backwards. See comments above
+		 * for the details.
+		 */
+		if (lsn > MyReplicationSlot->data.confirmed_flush)
+			MyReplicationSlot->data.confirmed_flush = lsn;
+
 		SpinLockRelease(&MyReplicationSlot->mutex);
 	}
 }
@@ -1918,10 +1955,11 @@ UpdateDecodingStats(LogicalDecodingContext *ctx)
 	PgStat_StatReplSlotEntry repSlotStat;
 
 	/* Nothing to do if we don't have any replication stats to be sent. */
-	if (rb->spillBytes <= 0 && rb->streamBytes <= 0 && rb->totalBytes <= 0)
+	if (rb->spillBytes <= 0 && rb->streamBytes <= 0 && rb->totalBytes <= 0 &&
+		rb->memExceededCount <= 0)
 		return;
 
-	elog(DEBUG2, "UpdateDecodingStats: updating stats %p %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64,
+	elog(DEBUG2, "UpdateDecodingStats: updating stats %p %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64,
 		 rb,
 		 rb->spillTxns,
 		 rb->spillCount,
@@ -1929,6 +1967,7 @@ UpdateDecodingStats(LogicalDecodingContext *ctx)
 		 rb->streamTxns,
 		 rb->streamCount,
 		 rb->streamBytes,
+		 rb->memExceededCount,
 		 rb->totalTxns,
 		 rb->totalBytes);
 
@@ -1938,6 +1977,7 @@ UpdateDecodingStats(LogicalDecodingContext *ctx)
 	repSlotStat.stream_txns = rb->streamTxns;
 	repSlotStat.stream_count = rb->streamCount;
 	repSlotStat.stream_bytes = rb->streamBytes;
+	repSlotStat.mem_exceeded_count = rb->memExceededCount;
 	repSlotStat.total_txns = rb->totalTxns;
 	repSlotStat.total_bytes = rb->totalBytes;
 
@@ -1949,6 +1989,7 @@ UpdateDecodingStats(LogicalDecodingContext *ctx)
 	rb->streamTxns = 0;
 	rb->streamCount = 0;
 	rb->streamBytes = 0;
+	rb->memExceededCount = 0;
 	rb->totalTxns = 0;
 	rb->totalBytes = 0;
 }
@@ -2045,7 +2086,7 @@ LogicalSlotAdvanceAndCheckSnapState(XLogRecPtr moveto,
 									bool *found_consistent_snapshot)
 {
 	LogicalDecodingContext *ctx;
-	ResourceOwner old_resowner = CurrentResourceOwner;
+	ResourceOwner old_resowner PG_USED_FOR_ASSERTS_ONLY = CurrentResourceOwner;
 	XLogRecPtr	retlsn;
 
 	Assert(moveto != InvalidXLogRecPtr);
@@ -2104,20 +2145,23 @@ LogicalSlotAdvanceAndCheckSnapState(XLogRecPtr moveto,
 			 * might still have critical updates to do.
 			 */
 			if (record)
+			{
 				LogicalDecodingProcessRecord(ctx, ctx->reader);
+
+				/*
+				 * We used to have bugs where logical decoding would fail to
+				 * preserve the resource owner.  That's important here, so
+				 * verify that that doesn't happen anymore.  XXX this could be
+				 * removed once it's been battle-tested.
+				 */
+				Assert(CurrentResourceOwner == old_resowner);
+			}
 
 			CHECK_FOR_INTERRUPTS();
 		}
 
 		if (found_consistent_snapshot && DecodingContextReady(ctx))
 			*found_consistent_snapshot = true;
-
-		/*
-		 * Logical decoding could have clobbered CurrentResourceOwner during
-		 * transaction management, so restore the executor's value.  (This is
-		 * a kluge, but it's not worth cleaning up right now.)
-		 */
-		CurrentResourceOwner = old_resowner;
 
 		if (ctx->reader->EndRecPtr != InvalidXLogRecPtr)
 		{

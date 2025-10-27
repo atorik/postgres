@@ -46,12 +46,9 @@
 #include "storage/aio_subsys.h"
 #include "utils/guc.h"
 #include "utils/guc_hooks.h"
+#include "utils/injection_point.h"
 #include "utils/resowner.h"
 #include "utils/wait_event_types.h"
-
-#ifdef USE_INJECTION_POINTS
-#include "utils/injection_point.h"
-#endif
 
 
 static inline void pgaio_io_update_state(PgAioHandle *ioh, PgAioHandleState new_state);
@@ -94,17 +91,6 @@ static const IoMethodOps *const pgaio_method_ops_table[] = {
 
 /* callbacks for the configured io_method, set by assign_io_method */
 const IoMethodOps *pgaio_method_ops;
-
-
-/*
- * Currently there's no infrastructure to pass arguments to injection points,
- * so we instead set this up for the duration of the injection point
- * invocation. See pgaio_io_call_inj().
- */
-#ifdef USE_INJECTION_POINTS
-static PgAioHandle *pgaio_inj_cur_handle;
-#endif
-
 
 
 /* --------------------------------------------------------------------------------
@@ -198,6 +184,8 @@ pgaio_io_acquire(struct ResourceOwnerData *resowner, PgAioReturn *ret)
 PgAioHandle *
 pgaio_io_acquire_nb(struct ResourceOwnerData *resowner, PgAioReturn *ret)
 {
+	PgAioHandle *ioh = NULL;
+
 	if (pgaio_my_backend->num_staged_ios >= PGAIO_SUBMIT_BATCH_SIZE)
 	{
 		Assert(pgaio_my_backend->num_staged_ios == PGAIO_SUBMIT_BATCH_SIZE);
@@ -207,10 +195,17 @@ pgaio_io_acquire_nb(struct ResourceOwnerData *resowner, PgAioReturn *ret)
 	if (pgaio_my_backend->handed_out_io)
 		elog(ERROR, "API violation: Only one IO can be handed out");
 
+	/*
+	 * Probably not needed today, as interrupts should not process this IO,
+	 * but...
+	 */
+	HOLD_INTERRUPTS();
+
 	if (!dclist_is_empty(&pgaio_my_backend->idle_ios))
 	{
 		dlist_node *ion = dclist_pop_head_node(&pgaio_my_backend->idle_ios);
-		PgAioHandle *ioh = dclist_container(PgAioHandle, node, ion);
+
+		ioh = dclist_container(PgAioHandle, node, ion);
 
 		Assert(ioh->state == PGAIO_HS_IDLE);
 		Assert(ioh->owner_procno == MyProcNumber);
@@ -226,11 +221,11 @@ pgaio_io_acquire_nb(struct ResourceOwnerData *resowner, PgAioReturn *ret)
 			ioh->report_return = ret;
 			ret->result.status = PGAIO_RS_UNKNOWN;
 		}
-
-		return ioh;
 	}
 
-	return NULL;
+	RESUME_INTERRUPTS();
+
+	return ioh;
 }
 
 /*
@@ -247,6 +242,12 @@ pgaio_io_release(PgAioHandle *ioh)
 		Assert(ioh->resowner);
 
 		pgaio_my_backend->handed_out_io = NULL;
+
+		/*
+		 * Note that no interrupts are processed between the handed_out_io
+		 * check and the call to reclaim - that's important as otherwise an
+		 * interrupt could have already reclaimed the handle.
+		 */
 		pgaio_io_reclaim(ioh);
 	}
 	else
@@ -265,10 +266,16 @@ pgaio_io_release_resowner(dlist_node *ioh_node, bool on_error)
 
 	Assert(ioh->resowner);
 
+	/*
+	 * Otherwise an interrupt, in the middle of releasing the IO, could end up
+	 * trying to wait for the IO, leading to state confusion.
+	 */
+	HOLD_INTERRUPTS();
+
 	ResourceOwnerForgetAioHandle(ioh->resowner, &ioh->resowner_node);
 	ioh->resowner = NULL;
 
-	switch (ioh->state)
+	switch ((PgAioHandleState) ioh->state)
 	{
 		case PGAIO_HS_IDLE:
 			elog(ERROR, "unexpected");
@@ -305,6 +312,8 @@ pgaio_io_release_resowner(dlist_node *ioh_node, bool on_error)
 	 */
 	if (ioh->report_return)
 		ioh->report_return = NULL;
+
+	RESUME_INTERRUPTS();
 }
 
 /*
@@ -373,6 +382,13 @@ pgaio_io_get_wref(PgAioHandle *ioh, PgAioWaitRef *iow)
 static inline void
 pgaio_io_update_state(PgAioHandle *ioh, PgAioHandleState new_state)
 {
+	/*
+	 * All callers need to have held interrupts in some form, otherwise
+	 * interrupt processing could wait for the IO to complete, while in an
+	 * intermediary state.
+	 */
+	Assert(!INTERRUPTS_CAN_BE_PROCESSED());
+
 	pgaio_debug_io(DEBUG5, ioh,
 				   "updating state to %s",
 				   pgaio_io_state_get_name(new_state));
@@ -409,6 +425,13 @@ pgaio_io_stage(PgAioHandle *ioh, PgAioOp op)
 	Assert(ioh->state == PGAIO_HS_HANDED_OUT);
 	Assert(pgaio_my_backend->handed_out_io == ioh);
 	Assert(pgaio_io_has_target(ioh));
+
+	/*
+	 * Otherwise an interrupt, in the middle of staging and possibly executing
+	 * the IO, could end up trying to wait for the IO, leading to state
+	 * confusion.
+	 */
+	HOLD_INTERRUPTS();
 
 	ioh->op = op;
 	ioh->result = 0;
@@ -449,6 +472,8 @@ pgaio_io_stage(PgAioHandle *ioh, PgAioOp op)
 		pgaio_io_prepare_submit(ioh);
 		pgaio_io_perform_synchronously(ioh);
 	}
+
+	RESUME_INTERRUPTS();
 }
 
 bool
@@ -507,7 +532,7 @@ pgaio_io_process_completion(PgAioHandle *ioh, int result)
 
 	pgaio_io_update_state(ioh, PGAIO_HS_COMPLETED_IO);
 
-	pgaio_io_call_inj(ioh, "aio-process-completion-before-shared");
+	INJECTION_POINT("aio-process-completion-before-shared", ioh);
 
 	pgaio_io_call_complete_shared(ioh);
 
@@ -531,6 +556,13 @@ bool
 pgaio_io_was_recycled(PgAioHandle *ioh, uint64 ref_generation, PgAioHandleState *state)
 {
 	*state = ioh->state;
+
+	/*
+	 * Ensure that we don't see an earlier state of the handle than ioh->state
+	 * due to compiler or CPU reordering. This protects both ->generation as
+	 * directly used here, and other fields in the handle accessed in the
+	 * caller if the handle was not reused.
+	 */
 	pg_read_barrier();
 
 	return ioh->generation != ref_generation;
@@ -558,8 +590,8 @@ pgaio_io_wait(PgAioHandle *ioh, uint64 ref_generation)
 			&& state != PGAIO_HS_COMPLETED_SHARED
 			&& state != PGAIO_HS_COMPLETED_LOCAL)
 		{
-			elog(PANIC, "waiting for own IO in wrong state: %d",
-				 state);
+			elog(PANIC, "waiting for own IO %d in wrong state: %s",
+				 pgaio_io_get_id(ioh), pgaio_io_get_state_name(ioh));
 		}
 	}
 
@@ -568,7 +600,7 @@ pgaio_io_wait(PgAioHandle *ioh, uint64 ref_generation)
 		if (pgaio_io_was_recycled(ioh, ref_generation, &state))
 			return;
 
-		switch (state)
+		switch ((PgAioHandleState) state)
 		{
 			case PGAIO_HS_IDLE:
 			case PGAIO_HS_HANDED_OUT:
@@ -613,7 +645,13 @@ pgaio_io_wait(PgAioHandle *ioh, uint64 ref_generation)
 
 			case PGAIO_HS_COMPLETED_SHARED:
 			case PGAIO_HS_COMPLETED_LOCAL:
-				/* see above */
+
+				/*
+				 * Note that no interrupts are processed between
+				 * pgaio_io_was_recycled() and this check - that's important
+				 * as otherwise an interrupt could have already reclaimed the
+				 * handle.
+				 */
 				if (am_owner)
 					pgaio_io_reclaim(ioh);
 				return;
@@ -624,6 +662,11 @@ pgaio_io_wait(PgAioHandle *ioh, uint64 ref_generation)
 /*
  * Make IO handle ready to be reused after IO has completed or after the
  * handle has been released without being used.
+ *
+ * Note that callers need to be careful about only calling this in the right
+ * state and that no interrupts can be processed between the state check and
+ * the call to pgaio_io_reclaim(). Otherwise interrupt processing could
+ * already have reclaimed the handle.
  */
 static void
 pgaio_io_reclaim(PgAioHandle *ioh)
@@ -631,6 +674,9 @@ pgaio_io_reclaim(PgAioHandle *ioh)
 	/* This is only ok if it's our IO */
 	Assert(ioh->owner_procno == MyProcNumber);
 	Assert(ioh->state != PGAIO_HS_IDLE);
+
+	/* see comment in function header */
+	HOLD_INTERRUPTS();
 
 	/*
 	 * It's a bit ugly, but right now the easiest place to put the execution
@@ -699,6 +745,8 @@ pgaio_io_reclaim(PgAioHandle *ioh)
 	 * efficient in cases where only a few IOs are used.
 	 */
 	dclist_push_head(&pgaio_my_backend->idle_ios, &ioh->node);
+
+	RESUME_INTERRUPTS();
 }
 
 /*
@@ -711,10 +759,10 @@ pgaio_io_wait_for_free(void)
 {
 	int			reclaimed = 0;
 
-	pgaio_debug(DEBUG2, "waiting for free IO with %d pending, %d in-flight, %d idle IOs",
+	pgaio_debug(DEBUG2, "waiting for free IO with %d pending, %u in-flight, %u idle IOs",
 				pgaio_my_backend->num_staged_ios,
 				dclist_count(&pgaio_my_backend->in_flight_ios),
-				dclist_is_empty(&pgaio_my_backend->idle_ios));
+				dclist_count(&pgaio_my_backend->idle_ios));
 
 	/*
 	 * First check if any of our IOs actually have completed - when using
@@ -728,6 +776,16 @@ pgaio_io_wait_for_free(void)
 
 		if (ioh->state == PGAIO_HS_COMPLETED_SHARED)
 		{
+			/*
+			 * Note that no interrupts are processed between the state check
+			 * and the call to reclaim - that's important as otherwise an
+			 * interrupt could have already reclaimed the handle.
+			 *
+			 * Need to ensure that there's no reordering, in the more common
+			 * paths, where we wait for IO, that's done by
+			 * pgaio_io_was_recycled().
+			 */
+			pg_read_barrier();
 			pgaio_io_reclaim(ioh);
 			reclaimed++;
 		}
@@ -744,13 +802,17 @@ pgaio_io_wait_for_free(void)
 	if (pgaio_my_backend->num_staged_ios > 0)
 		pgaio_submit_staged();
 
+	/* possibly some IOs finished during submission */
+	if (!dclist_is_empty(&pgaio_my_backend->idle_ios))
+		return;
+
 	if (dclist_count(&pgaio_my_backend->in_flight_ios) == 0)
 		ereport(ERROR,
 				errmsg_internal("no free IOs despite no in-flight IOs"),
-				errdetail_internal("%d pending, %d in-flight, %d idle IOs",
+				errdetail_internal("%d pending, %u in-flight, %u idle IOs",
 								   pgaio_my_backend->num_staged_ios,
 								   dclist_count(&pgaio_my_backend->in_flight_ios),
-								   dclist_is_empty(&pgaio_my_backend->idle_ios)));
+								   dclist_count(&pgaio_my_backend->idle_ios)));
 
 	/*
 	 * Wait for the oldest in-flight IO to complete.
@@ -761,8 +823,9 @@ pgaio_io_wait_for_free(void)
 	{
 		PgAioHandle *ioh = dclist_head_element(PgAioHandle, node,
 											   &pgaio_my_backend->in_flight_ios);
+		uint64		generation = ioh->generation;
 
-		switch (ioh->state)
+		switch ((PgAioHandleState) ioh->state)
 		{
 				/* should not be in in-flight list */
 			case PGAIO_HS_IDLE:
@@ -777,20 +840,36 @@ pgaio_io_wait_for_free(void)
 			case PGAIO_HS_COMPLETED_IO:
 			case PGAIO_HS_SUBMITTED:
 				pgaio_debug_io(DEBUG2, ioh,
-							   "waiting for free io with %d in flight",
+							   "waiting for free io with %u in flight",
 							   dclist_count(&pgaio_my_backend->in_flight_ios));
 
 				/*
 				 * In a more general case this would be racy, because the
 				 * generation could increase after we read ioh->state above.
 				 * But we are only looking at IOs by the current backend and
-				 * the IO can only be recycled by this backend.
+				 * the IO can only be recycled by this backend.  Even this is
+				 * only OK because we get the handle's generation before
+				 * potentially processing interrupts, e.g. as part of
+				 * pgaio_debug_io().
 				 */
-				pgaio_io_wait(ioh, ioh->generation);
+				pgaio_io_wait(ioh, generation);
 				break;
 
 			case PGAIO_HS_COMPLETED_SHARED:
-				/* it's possible that another backend just finished this IO */
+
+				/*
+				 * It's possible that another backend just finished this IO.
+				 *
+				 * Note that no interrupts are processed between the state
+				 * check and the call to reclaim - that's important as
+				 * otherwise an interrupt could have already reclaimed the
+				 * handle.
+				 *
+				 * Need to ensure that there's no reordering, in the more
+				 * common paths, where we wait for IO, that's done by
+				 * pgaio_io_was_recycled().
+				 */
+				pg_read_barrier();
 				pgaio_io_reclaim(ioh);
 				break;
 		}
@@ -826,7 +905,7 @@ static const char *
 pgaio_io_state_get_name(PgAioHandleState s)
 {
 #define PGAIO_HS_TOSTR_CASE(sym) case PGAIO_HS_##sym: return #sym
-	switch (s)
+	switch ((PgAioHandleState) s)
 	{
 			PGAIO_HS_TOSTR_CASE(IDLE);
 			PGAIO_HS_TOSTR_CASE(HANDED_OUT);
@@ -851,7 +930,7 @@ pgaio_io_get_state_name(PgAioHandle *ioh)
 const char *
 pgaio_result_status_string(PgAioResultStatus rs)
 {
-	switch (rs)
+	switch ((PgAioResultStatus) rs)
 	{
 		case PGAIO_RS_UNKNOWN:
 			return "UNKNOWN";
@@ -940,6 +1019,11 @@ pgaio_wref_check_done(PgAioWaitRef *iow)
 	if (state == PGAIO_HS_COMPLETED_SHARED ||
 		state == PGAIO_HS_COMPLETED_LOCAL)
 	{
+		/*
+		 * Note that no interrupts are processed between
+		 * pgaio_io_was_recycled() and this check - that's important as
+		 * otherwise an interrupt could have already reclaimed the handle.
+		 */
 		if (am_owner)
 			pgaio_io_reclaim(ioh);
 		return true;
@@ -1167,10 +1251,13 @@ pgaio_closing_fd(int fd)
 		{
 			dlist_iter	iter;
 			PgAioHandle *ioh = NULL;
+			uint64		generation;
 
 			dclist_foreach(iter, &pgaio_my_backend->in_flight_ios)
 			{
 				ioh = dclist_container(PgAioHandle, node, iter.cur);
+
+				generation = ioh->generation;
 
 				if (pgaio_io_uses_fd(ioh, fd))
 					break;
@@ -1182,11 +1269,11 @@ pgaio_closing_fd(int fd)
 				break;
 
 			pgaio_debug_io(DEBUG2, ioh,
-						   "waiting for IO before FD %d gets closed, %d in-flight IOs",
+						   "waiting for IO before FD %d gets closed, %u in-flight IOs",
 						   fd, dclist_count(&pgaio_my_backend->in_flight_ios));
 
 			/* see comment in pgaio_io_wait_for_free() about raciness */
-			pgaio_io_wait(ioh, ioh->generation);
+			pgaio_io_wait(ioh, generation);
 		}
 	}
 }
@@ -1215,13 +1302,14 @@ pgaio_shutdown(int code, Datum arg)
 	while (!dclist_is_empty(&pgaio_my_backend->in_flight_ios))
 	{
 		PgAioHandle *ioh = dclist_head_element(PgAioHandle, node, &pgaio_my_backend->in_flight_ios);
+		uint64		generation = ioh->generation;
 
 		pgaio_debug_io(DEBUG2, ioh,
-					   "waiting for IO to complete during shutdown, %d in-flight IOs",
+					   "waiting for IO to complete during shutdown, %u in-flight IOs",
 					   dclist_count(&pgaio_my_backend->in_flight_ios));
 
 		/* see comment in pgaio_io_wait_for_free() about raciness */
-		pgaio_io_wait(ioh, ioh->generation);
+		pgaio_io_wait(ioh, generation);
 	}
 
 	pgaio_my_backend = NULL;
@@ -1255,43 +1343,3 @@ check_io_max_concurrency(int *newval, void **extra, GucSource source)
 
 	return true;
 }
-
-
-
-/* --------------------------------------------------------------------------------
- * Injection point support
- * --------------------------------------------------------------------------------
- */
-
-#ifdef USE_INJECTION_POINTS
-
-/*
- * Call injection point with support for pgaio_inj_io_get().
- */
-void
-pgaio_io_call_inj(PgAioHandle *ioh, const char *injection_point)
-{
-	pgaio_inj_cur_handle = ioh;
-
-	PG_TRY();
-	{
-		InjectionPointCached(injection_point);
-	}
-	PG_FINALLY();
-	{
-		pgaio_inj_cur_handle = NULL;
-	}
-	PG_END_TRY();
-}
-
-/*
- * Return IO associated with injection point invocation. This is only needed
- * as injection points currently don't support arguments.
- */
-PgAioHandle *
-pgaio_inj_io_get(void)
-{
-	return pgaio_inj_cur_handle;
-}
-
-#endif

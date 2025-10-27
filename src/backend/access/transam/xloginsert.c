@@ -258,7 +258,8 @@ XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags)
 	 */
 #ifdef USE_ASSERT_CHECKING
 	if (!(flags & REGBUF_NO_CHANGE))
-		Assert(BufferIsExclusiveLocked(buffer) && BufferIsDirty(buffer));
+		Assert(BufferIsLockedByMeInMode(buffer, BUFFER_LOCK_EXCLUSIVE) &&
+			   BufferIsDirty(buffer));
 #endif
 
 	if (block_id >= max_registered_block_id)
@@ -527,6 +528,18 @@ XLogInsert(RmgrId rmid, uint8 info)
 	XLogResetInsertion();
 
 	return EndPos;
+}
+
+/*
+ * Simple wrapper to XLogInsert to insert a WAL record with elementary
+ * contents (only an int64 is supported as value currently).
+ */
+XLogRecPtr
+XLogSimpleInsertInt64(RmgrId rmid, uint8 info, int64 value)
+{
+	XLogBeginInsert();
+	XLogRegisterData(&value, sizeof(value));
+	return XLogInsert(rmid, info);
 }
 
 /*

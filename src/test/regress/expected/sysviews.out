@@ -151,6 +151,7 @@ select name, setting from pg_settings where name like 'enable%';
  enable_async_append            | on
  enable_bitmapscan              | on
  enable_distinct_reordering     | on
+ enable_eager_aggregate         | on
  enable_gathermerge             | on
  enable_group_by_reordering     | on
  enable_hashagg                 | on
@@ -172,7 +173,7 @@ select name, setting from pg_settings where name like 'enable%';
  enable_seqscan                 | on
  enable_sort                    | on
  enable_tidscan                 | on
-(24 rows)
+(25 rows)
 
 -- There are always wait event descriptions for various types.  InjectionPoint
 -- may be present or absent, depending on history since last postmaster start.
@@ -232,22 +233,3 @@ select * from pg_timezone_abbrevs where abbrev = 'LMT';
  LMT    | @ 7 hours 52 mins 58 secs ago | f
 (1 row)
 
-DO $$
-DECLARE
-    bg_writer_pid int;
-    r RECORD;
-BEGIN
-        SELECT pid from pg_stat_activity where backend_type='background writer'
-	 INTO bg_writer_pid;
-
-        select type, name, ident
-        from pg_get_process_memory_contexts(bg_writer_pid, false, 20)
-	 where path = '{1}' into r;
-	RAISE NOTICE '%', r;
-        select type, name, ident
-        from pg_get_process_memory_contexts(pg_backend_pid(), false, 20)
-	 where path = '{1}' into r;
-	RAISE NOTICE '%', r;
-END $$;
-NOTICE:  (AllocSet,TopMemoryContext,)
-NOTICE:  (AllocSet,TopMemoryContext,)

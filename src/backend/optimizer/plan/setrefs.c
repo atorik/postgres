@@ -307,6 +307,10 @@ set_plan_references(PlannerInfo *root, Plan *plan)
 		PlanRowMark *rc = lfirst_node(PlanRowMark, lc);
 		PlanRowMark *newrc;
 
+		/* sanity check on existing row marks */
+		Assert(root->simple_rel_array[rc->rti] != NULL &&
+			   root->simple_rte_array[rc->rti] != NULL);
+
 		/* flat copy is enough since all fields are scalars */
 		newrc = (PlanRowMark *) palloc(sizeof(PlanRowMark));
 		memcpy(newrc, rc, sizeof(PlanRowMark));
@@ -1030,16 +1034,35 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 					 * expected to occur here, it seems safer to special-case
 					 * it here and keep the assertions that ROWID_VARs
 					 * shouldn't be seen by fix_scan_expr.
+					 *
+					 * We also must handle the case where set operations have
+					 * been short-circuited resulting in a dummy Result node.
+					 * prepunion.c uses varno==0 for the set op targetlist.
+					 * See generate_setop_tlist() and generate_setop_tlist().
+					 * Here we rewrite these to use varno==1, which is the
+					 * varno of the first set-op child.  Without this, EXPLAIN
+					 * will have trouble displaying targetlists of dummy set
+					 * operations.
 					 */
 					foreach(l, splan->plan.targetlist)
 					{
 						TargetEntry *tle = (TargetEntry *) lfirst(l);
 						Var		   *var = (Var *) tle->expr;
 
-						if (var && IsA(var, Var) && var->varno == ROWID_VAR)
-							tle->expr = (Expr *) makeNullConst(var->vartype,
-															   var->vartypmod,
-															   var->varcollid);
+						if (var && IsA(var, Var))
+						{
+							if (var->varno == ROWID_VAR)
+								tle->expr = (Expr *) makeNullConst(var->vartype,
+																   var->vartypmod,
+																   var->varcollid);
+							else if (var->varno == 0)
+								tle->expr = (Expr *) makeVar(1,
+															 var->varattno,
+															 var->vartype,
+															 var->vartypmod,
+															 var->varcollid,
+															 var->varlevelsup);
+						}
 					}
 
 					splan->plan.targetlist =
@@ -1052,6 +1075,8 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 				/* resconstantqual can't contain any subplan variable refs */
 				splan->resconstantqual =
 					fix_scan_expr(root, splan->resconstantqual, rtoffset, 1);
+				/* adjust the relids set */
+				splan->relids = offset_relid_set(splan->relids, rtoffset);
 			}
 			break;
 		case T_ProjectSet:
@@ -1097,9 +1122,10 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 
 					/*
 					 * Set up the visible plan targetlist as being the same as
-					 * the first RETURNING list. This is for the use of
-					 * EXPLAIN; the executor won't pay any attention to the
-					 * targetlist.  We postpone this step until here so that
+					 * the first RETURNING list.  This is mostly for the use
+					 * of EXPLAIN; the executor won't execute that targetlist,
+					 * although it does use it to prepare the node's result
+					 * tuple slot.  We postpone this step until here so that
 					 * we don't have to do set_returning_clause_references()
 					 * twice on identical targetlists.
 					 */
@@ -1248,9 +1274,6 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 						lappend_int(root->glob->resultRelations,
 									splan->rootRelation);
 				}
-				root->glob->firstResultRels =
-					lappend_int(root->glob->firstResultRels,
-								linitial_int(splan->resultRelations));
 			}
 			break;
 		case T_Append:

@@ -42,7 +42,6 @@
 #include "storage/condition_variable.h"
 #include "utils/hsearch.h"
 #include "utils/queryenvironment.h"
-#include "utils/plancache.h"
 #include "utils/reltrigger.h"
 #include "utils/sharedtuplestore.h"
 #include "utils/snapshot.h"
@@ -50,15 +49,13 @@
 #include "utils/tuplesort.h"
 #include "utils/tuplestore.h"
 
-struct PlanState;				/* forward references in this file */
-struct ParallelHashJoinState;
-struct ExecRowMark;
-struct ExprState;
-struct ExprContext;
-struct RangeTblEntry;			/* avoid including parsenodes.h here */
-struct ExprEvalStep;			/* avoid including execExpr.h everywhere */
-struct CopyMultiInsertBuffer;
-struct LogicalTapeSet;
+/*
+ * forward references in this file
+ */
+typedef struct PlanState PlanState;
+typedef struct ExecRowMark ExecRowMark;
+typedef struct ExprState ExprState;
+typedef struct ExprContext ExprContext;
 
 
 /* ----------------
@@ -68,8 +65,8 @@ struct LogicalTapeSet;
  * It contains instructions (in ->steps) to evaluate the expression.
  * ----------------
  */
-typedef Datum (*ExprStateEvalFunc) (struct ExprState *expression,
-									struct ExprContext *econtext,
+typedef Datum (*ExprStateEvalFunc) (ExprState *expression,
+									ExprContext *econtext,
 									bool *isNull);
 
 /* Bits in ExprState->flags (see also execExpr.h for private flag bits): */
@@ -132,7 +129,7 @@ typedef struct ExprState
 	int			steps_alloc;	/* allocated length of steps array */
 
 #define FIELDNO_EXPRSTATE_PARENT 11
-	struct PlanState *parent;	/* parent PlanState node, if any */
+	PlanState  *parent;			/* parent PlanState node, if any */
 	ParamListInfo ext_params;	/* for compiling PARAM_EXTERN nodes */
 
 	Datum	   *innermost_caseval;
@@ -158,34 +155,6 @@ typedef struct ExprState
  *		entries for a particular index.  Used for both index_build and
  *		retail creation of index entries.
  *
- *		NumIndexAttrs		total number of columns in this index
- *		NumIndexKeyAttrs	number of key columns in index
- *		IndexAttrNumbers	underlying-rel attribute numbers used as keys
- *							(zeroes indicate expressions). It also contains
- * 							info about included columns.
- *		Expressions			expr trees for expression entries, or NIL if none
- *		ExpressionsState	exec state for expressions, or NIL if none
- *		Predicate			partial-index predicate, or NIL if none
- *		PredicateState		exec state for predicate, or NIL if none
- *		ExclusionOps		Per-column exclusion operators, or NULL if none
- *		ExclusionProcs		Underlying function OIDs for ExclusionOps
- *		ExclusionStrats		Opclass strategy numbers for ExclusionOps
- *		UniqueOps			These are like Exclusion*, but for unique indexes
- *		UniqueProcs
- *		UniqueStrats
- *		Unique				is it a unique index?
- *		OpclassOptions		opclass-specific options, or NULL if none
- *		ReadyForInserts		is it valid for inserts?
- *		CheckedUnchanged	IndexUnchanged status determined yet?
- *		IndexUnchanged		aminsert hint, cached for retail inserts
- *		Concurrent			are we doing a concurrent index build?
- *		BrokenHotChain		did we detect any broken HOT chains?
- *		Summarizing			is it a summarizing index?
- *		ParallelWorkers		# of workers requested (excludes leader)
- *		Am					Oid of index AM
- *		AmCache				private cache area for index AM
- *		Context				memory context holding this IndexInfo
- *
  * ii_Concurrent, ii_BrokenHotChain, and ii_ParallelWorkers are used only
  * during index build; they're conventionally zeroed otherwise.
  * ----------------
@@ -193,31 +162,67 @@ typedef struct ExprState
 typedef struct IndexInfo
 {
 	NodeTag		type;
-	int			ii_NumIndexAttrs;	/* total number of columns in index */
-	int			ii_NumIndexKeyAttrs;	/* number of key columns in index */
+
+	/* total number of columns in index */
+	int			ii_NumIndexAttrs;
+	/* number of key columns in index */
+	int			ii_NumIndexKeyAttrs;
+
+	/*
+	 * Underlying-rel attribute numbers used as keys (zeroes indicate
+	 * expressions). It also contains info about included columns.
+	 */
 	AttrNumber	ii_IndexAttrNumbers[INDEX_MAX_KEYS];
+
+	/* expr trees for expression entries, or NIL if none */
 	List	   *ii_Expressions; /* list of Expr */
+	/* exec state for expressions, or NIL if none */
 	List	   *ii_ExpressionsState;	/* list of ExprState */
+
+	/* partial-index predicate, or NIL if none */
 	List	   *ii_Predicate;	/* list of Expr */
+	/* exec state for expressions, or NIL if none */
 	ExprState  *ii_PredicateState;
+
+	/* Per-column exclusion operators, or NULL if none */
 	Oid		   *ii_ExclusionOps;	/* array with one entry per column */
+	/* Underlying function OIDs for ExclusionOps */
 	Oid		   *ii_ExclusionProcs;	/* array with one entry per column */
+	/* Opclass strategy numbers for ExclusionOps */
 	uint16	   *ii_ExclusionStrats; /* array with one entry per column */
+
+	/* These are like Exclusion*, but for unique indexes */
 	Oid		   *ii_UniqueOps;	/* array with one entry per column */
 	Oid		   *ii_UniqueProcs; /* array with one entry per column */
 	uint16	   *ii_UniqueStrats;	/* array with one entry per column */
+
+	/* is it a unique index? */
 	bool		ii_Unique;
+	/* is NULLS NOT DISTINCT? */
 	bool		ii_NullsNotDistinct;
+	/* is it valid for inserts? */
 	bool		ii_ReadyForInserts;
+	/* IndexUnchanged status determined yet? */
 	bool		ii_CheckedUnchanged;
+	/* aminsert hint, cached for retail inserts */
 	bool		ii_IndexUnchanged;
+	/* are we doing a concurrent index build? */
 	bool		ii_Concurrent;
+	/* did we detect any broken HOT chains? */
 	bool		ii_BrokenHotChain;
+	/* is it a summarizing index? */
 	bool		ii_Summarizing;
+	/* is it a WITHOUT OVERLAPS index? */
 	bool		ii_WithoutOverlaps;
+	/* # of workers requested (excludes leader) */
 	int			ii_ParallelWorkers;
+
+	/* Oid of index AM */
 	Oid			ii_Am;
+	/* private cache area for index AM */
 	void	   *ii_AmCache;
+
+	/* memory context holding this IndexInfo */
 	MemoryContext ii_Context;
 } IndexInfo;
 
@@ -602,15 +607,13 @@ typedef struct ResultRelInfo
 	bool		ri_RootToChildMapValid;
 
 	/*
-	 * Information needed by tuple routing target relations
+	 * Other information needed by child result relations
 	 *
-	 * RootResultRelInfo gives the target relation mentioned in the query, if
-	 * it's a partitioned table. It is not set if the target relation
-	 * mentioned in the query is an inherited table, nor when tuple routing is
-	 * not needed.
+	 * ri_RootResultRelInfo gives the target relation mentioned in the query.
+	 * Used as the root for tuple routing and/or transition capture.
 	 *
-	 * PartitionTupleSlot is non-NULL if RootToChild conversion is needed and
-	 * the relation is a partition.
+	 * ri_PartitionTupleSlot is non-NULL if the relation is a partition to
+	 * route tuples into and ri_RootToChildMap conversion is needed.
 	 */
 	struct ResultRelInfo *ri_RootResultRelInfo;
 	TupleTableSlot *ri_PartitionTupleSlot;
@@ -633,8 +636,8 @@ typedef struct ResultRelInfo
  */
 typedef struct AsyncRequest
 {
-	struct PlanState *requestor;	/* Node that wants a tuple */
-	struct PlanState *requestee;	/* Node from which a tuple is wanted */
+	PlanState  *requestor;		/* Node that wants a tuple */
+	PlanState  *requestee;		/* Node from which a tuple is wanted */
 	int			request_index;	/* Scratch space for requestor */
 	bool		callback_pending;	/* Callback is needed */
 	bool		request_complete;	/* Request complete, result valid */
@@ -660,11 +663,10 @@ typedef struct EState
 	Index		es_range_table_size;	/* size of the range table arrays */
 	Relation   *es_relations;	/* Array of per-range-table-entry Relation
 								 * pointers, or NULL if not yet opened */
-	struct ExecRowMark **es_rowmarks;	/* Array of per-range-table-entry
-										 * ExecRowMarks, or NULL if none */
+	ExecRowMark **es_rowmarks;	/* Array of per-range-table-entry
+								 * ExecRowMarks, or NULL if none */
 	List	   *es_rteperminfos;	/* List of RTEPermissionInfo */
 	PlannedStmt *es_plannedstmt;	/* link to top of plan tree */
-	CachedPlan *es_cachedplan;	/* CachedPlan providing the plan tree */
 	List	   *es_part_prune_infos;	/* List of PartitionPruneInfo */
 	List	   *es_part_prune_states;	/* List of PartitionPruneState */
 	List	   *es_part_prune_results;	/* List of Bitmapset */
@@ -717,7 +719,6 @@ typedef struct EState
 	int			es_top_eflags;	/* eflags passed to ExecutorStart */
 	int			es_instrument;	/* OR of InstrumentOption flags */
 	bool		es_finished;	/* true when ExecutorFinish is done */
-	bool		es_aborted;		/* true when execution was aborted */
 
 	List	   *es_exprcontexts;	/* List of ExprContexts within EState */
 
@@ -1003,8 +1004,8 @@ typedef struct SubPlanState
 {
 	NodeTag		type;
 	SubPlan    *subplan;		/* expression plan node */
-	struct PlanState *planstate;	/* subselect plan's state tree */
-	struct PlanState *parent;	/* parent plan node's state tree */
+	PlanState  *planstate;		/* subselect plan's state tree */
+	PlanState  *parent;			/* parent plan node's state tree */
 	ExprState  *testexpr;		/* state of combining expression */
 	HeapTuple	curTuple;		/* copy of most recent tuple from subplan */
 	Datum		curArray;		/* most recent array from ARRAY() subplan */
@@ -1017,7 +1018,6 @@ typedef struct SubPlanState
 	bool		havehashrows;	/* true if hashtable is not empty */
 	bool		havenullrows;	/* true if hashnulls is not empty */
 	MemoryContext hashtablecxt; /* memory context containing hash tables */
-	MemoryContext hashtempcxt;	/* temp memory context for hash tables */
 	ExprContext *innerecontext; /* econtext for computing inner tuples */
 	int			numCols;		/* number of columns being hashed */
 	/* each of the remaining fields is an array of length numCols: */
@@ -1141,7 +1141,7 @@ typedef struct JsonExprState
  * if no more tuples are available.
  * ----------------
  */
-typedef TupleTableSlot *(*ExecProcNodeMtd) (struct PlanState *pstate);
+typedef TupleTableSlot *(*ExecProcNodeMtd) (PlanState *pstate);
 
 /* ----------------
  *		PlanState node
@@ -1178,8 +1178,8 @@ typedef struct PlanState
 	 * subPlan list, which does not exist in the plan tree).
 	 */
 	ExprState  *qual;			/* boolean qual condition */
-	struct PlanState *lefttree; /* input plan tree(s) */
-	struct PlanState *righttree;
+	PlanState  *lefttree;		/* input plan tree(s) */
+	PlanState  *righttree;
 
 	List	   *initPlan;		/* Init SubPlanState nodes (un-correlated expr
 								 * subselects) */
@@ -1656,14 +1656,14 @@ typedef struct SampleScanState
  */
 typedef struct
 {
-	struct ScanKeyData *scan_key;	/* scankey to put value into */
+	ScanKeyData *scan_key;		/* scankey to put value into */
 	ExprState  *key_expr;		/* expr to evaluate to get value */
 	bool		key_toastable;	/* is expr's result a toastable datatype? */
 } IndexRuntimeKeyInfo;
 
 typedef struct
 {
-	struct ScanKeyData *scan_key;	/* scankey to put value into */
+	ScanKeyData *scan_key;		/* scankey to put value into */
 	ExprState  *array_expr;		/* expr to evaluate to get array value */
 	int			next_elem;		/* next array element to use */
 	int			num_elems;		/* number of elems in current array value */
@@ -1704,9 +1704,9 @@ typedef struct IndexScanState
 	ScanState	ss;				/* its first field is NodeTag */
 	ExprState  *indexqualorig;
 	List	   *indexorderbyorig;
-	struct ScanKeyData *iss_ScanKeys;
+	ScanKeyData *iss_ScanKeys;
 	int			iss_NumScanKeys;
-	struct ScanKeyData *iss_OrderByKeys;
+	ScanKeyData *iss_OrderByKeys;
 	int			iss_NumOrderByKeys;
 	IndexRuntimeKeyInfo *iss_RuntimeKeys;
 	int			iss_NumRuntimeKeys;
@@ -1755,9 +1755,9 @@ typedef struct IndexOnlyScanState
 {
 	ScanState	ss;				/* its first field is NodeTag */
 	ExprState  *recheckqual;
-	struct ScanKeyData *ioss_ScanKeys;
+	ScanKeyData *ioss_ScanKeys;
 	int			ioss_NumScanKeys;
-	struct ScanKeyData *ioss_OrderByKeys;
+	ScanKeyData *ioss_OrderByKeys;
 	int			ioss_NumOrderByKeys;
 	IndexRuntimeKeyInfo *ioss_RuntimeKeys;
 	int			ioss_NumRuntimeKeys;
@@ -1796,7 +1796,7 @@ typedef struct BitmapIndexScanState
 {
 	ScanState	ss;				/* its first field is NodeTag */
 	TIDBitmap  *biss_result;
-	struct ScanKeyData *biss_ScanKeys;
+	ScanKeyData *biss_ScanKeys;
 	int			biss_NumScanKeys;
 	IndexRuntimeKeyInfo *biss_RuntimeKeys;
 	int			biss_NumRuntimeKeys;

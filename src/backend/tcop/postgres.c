@@ -37,6 +37,7 @@
 #include "catalog/pg_type.h"
 #include "commands/async.h"
 #include "commands/event_trigger.h"
+#include "commands/explain_state.h"
 #include "commands/prepare.h"
 #include "common/pg_prng.h"
 #include "jit/jit.h"
@@ -649,6 +650,10 @@ pg_parse_query(const char *query_string)
 
 	TRACE_POSTGRESQL_QUERY_PARSE_DONE(query_string);
 
+	if (Debug_print_raw_parse)
+		elog_node_display(LOG, "raw parse tree", raw_parsetree_list,
+						  Debug_pretty_print);
+
 	return raw_parsetree_list;
 }
 
@@ -880,7 +885,7 @@ pg_rewrite_query(Query *query)
  */
 PlannedStmt *
 pg_plan_query(Query *querytree, const char *query_string, int cursorOptions,
-			  ParamListInfo boundParams)
+			  ParamListInfo boundParams, ExplainState *es)
 {
 	PlannedStmt *plan;
 
@@ -897,7 +902,7 @@ pg_plan_query(Query *querytree, const char *query_string, int cursorOptions,
 		ResetUsage();
 
 	/* call the optimizer */
-	plan = planner(querytree, query_string, cursorOptions, boundParams);
+	plan = planner(querytree, query_string, cursorOptions, boundParams, es);
 
 	if (log_planner_stats)
 		ShowUsage("PLANNER STATISTICS");
@@ -988,11 +993,12 @@ pg_plan_queries(List *querytrees, const char *query_string, int cursorOptions,
 			stmt->stmt_location = query->stmt_location;
 			stmt->stmt_len = query->stmt_len;
 			stmt->queryId = query->queryId;
+			stmt->planOrigin = PLAN_STMT_INTERNAL;
 		}
 		else
 		{
 			stmt = pg_plan_query(query, query_string, cursorOptions,
-								 boundParams);
+								 boundParams, NULL);
 		}
 
 		stmt_list = lappend(stmt_list, stmt);
@@ -1226,7 +1232,6 @@ exec_simple_query(const char *query_string)
 						  query_string,
 						  commandTag,
 						  plantree_list,
-						  NULL,
 						  NULL);
 
 		/*
@@ -1683,7 +1688,7 @@ exec_bind_message(StringInfo input_message)
 	{
 		Query	   *query = lfirst_node(Query, lc);
 
-		if (query->queryId != UINT64CONST(0))
+		if (query->queryId != INT64CONST(0))
 		{
 			pgstat_report_query_id(query->queryId, false);
 			break;
@@ -2028,15 +2033,14 @@ exec_bind_message(StringInfo input_message)
 					  query_string,
 					  psrc->commandTag,
 					  cplan->stmt_list,
-					  cplan,
-					  psrc);
+					  cplan);
 
 	/* Portal is defined, set the plan ID based on its contents. */
 	foreach(lc, portal->stmts)
 	{
 		PlannedStmt *plan = lfirst_node(PlannedStmt, lc);
 
-		if (plan->planId != UINT64CONST(0))
+		if (plan->planId != INT64CONST(0))
 		{
 			pgstat_report_plan_id(plan->planId, false);
 			break;
@@ -2176,7 +2180,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 	{
 		PlannedStmt *stmt = lfirst_node(PlannedStmt, lc);
 
-		if (stmt->queryId != UINT64CONST(0))
+		if (stmt->queryId != INT64CONST(0))
 		{
 			pgstat_report_query_id(stmt->queryId, false);
 			break;
@@ -2187,7 +2191,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 	{
 		PlannedStmt *stmt = lfirst_node(PlannedStmt, lc);
 
-		if (stmt->planId != UINT64CONST(0))
+		if (stmt->planId != INT64CONST(0))
 		{
 			pgstat_report_plan_id(stmt->planId, false);
 			break;
@@ -3482,7 +3486,7 @@ ProcessInterrupts(void)
 		IdleInTransactionSessionTimeoutPending = false;
 		if (IdleInTransactionSessionTimeout > 0)
 		{
-			INJECTION_POINT("idle-in-transaction-session-timeout");
+			INJECTION_POINT("idle-in-transaction-session-timeout", NULL);
 			ereport(FATAL,
 					(errcode(ERRCODE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT),
 					 errmsg("terminating connection due to idle-in-transaction timeout")));
@@ -3495,7 +3499,7 @@ ProcessInterrupts(void)
 		TransactionTimeoutPending = false;
 		if (TransactionTimeout > 0)
 		{
-			INJECTION_POINT("transaction-timeout");
+			INJECTION_POINT("transaction-timeout", NULL);
 			ereport(FATAL,
 					(errcode(ERRCODE_TRANSACTION_TIMEOUT),
 					 errmsg("terminating connection due to transaction timeout")));
@@ -3508,7 +3512,7 @@ ProcessInterrupts(void)
 		IdleSessionTimeoutPending = false;
 		if (IdleSessionTimeout > 0)
 		{
-			INJECTION_POINT("idle-session-timeout");
+			INJECTION_POINT("idle-session-timeout", NULL);
 			ereport(FATAL,
 					(errcode(ERRCODE_IDLE_SESSION_TIMEOUT),
 					 errmsg("terminating connection due to idle-session timeout")));
@@ -3534,9 +3538,6 @@ ProcessInterrupts(void)
 
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
-
-	if (PublishMemoryContextPending)
-		ProcessGetMemoryContextInterrupt();
 
 	if (ParallelApplyMessagePending)
 		ProcessParallelApplyMessages();
@@ -3695,13 +3696,16 @@ set_debug_options(int debug_flag, GucContext context, GucSource source)
 
 	if (debug_flag >= 1 && context == PGC_POSTMASTER)
 	{
-		SetConfigOption("log_connections", "true", context, source);
+		SetConfigOption("log_connections", "all", context, source);
 		SetConfigOption("log_disconnections", "true", context, source);
 	}
 	if (debug_flag >= 2)
 		SetConfigOption("log_statement", "all", context, source);
 	if (debug_flag >= 3)
+	{
+		SetConfigOption("debug_print_raw_parse", "true", context, source);
 		SetConfigOption("debug_print_parse", "true", context, source);
+	}
 	if (debug_flag >= 4)
 		SetConfigOption("debug_print_plan", "true", context, source);
 	if (debug_flag >= 5)

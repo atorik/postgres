@@ -213,7 +213,7 @@ namehashfast(Datum datum)
 {
 	char	   *key = NameStr(*DatumGetName(datum));
 
-	return hash_any((unsigned char *) key, strlen(key));
+	return hash_bytes((unsigned char *) key, strlen(key));
 }
 
 static bool
@@ -317,6 +317,7 @@ GetCCHashEqFuncs(Oid keytype, CCHashFN *hashfunc, RegProcedure *eqfunc, CCFastEq
 		case REGDICTIONARYOID:
 		case REGROLEOID:
 		case REGNAMESPACEOID:
+		case REGDATABASEOID:
 			*hashfunc = int4hashfast;
 			*fasteqfunc = int4eqfast;
 			*eqfunc = F_OIDEQ;
@@ -1926,7 +1927,7 @@ SearchCatCacheList(CatCache *cache,
 			/* Injection point to help testing the recursive invalidation case */
 			if (first_iter)
 			{
-				INJECTION_POINT("catcache-list-miss-systable-scan-started");
+				INJECTION_POINT("catcache-list-miss-systable-scan-started", NULL);
 				first_iter = false;
 			}
 
@@ -2285,14 +2286,11 @@ CatCacheFreeKeys(TupleDesc tupdesc, int nkeys, int *attnos, Datum *keys)
 	for (i = 0; i < nkeys; i++)
 	{
 		int			attnum = attnos[i];
-		Form_pg_attribute att;
 
 		/* system attribute are not supported in caches */
 		Assert(attnum > 0);
 
-		att = TupleDescAttr(tupdesc, attnum - 1);
-
-		if (!att->attbyval)
+		if (!TupleDescCompactAttr(tupdesc, attnum - 1)->attbyval)
 			pfree(DatumGetPointer(keys[i]));
 	}
 }
@@ -2389,7 +2387,7 @@ PrepareToInvalidateCacheTuple(Relation relation,
 	 */
 	Assert(RelationIsValid(relation));
 	Assert(HeapTupleIsValid(tuple));
-	Assert(PointerIsValid(function));
+	Assert(function);
 	Assert(CacheHdr != NULL);
 
 	reloid = RelationGetRelid(relation);

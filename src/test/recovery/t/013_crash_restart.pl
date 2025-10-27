@@ -27,7 +27,7 @@ $node->start();
 $node->safe_psql(
 	'postgres',
 	q[ALTER SYSTEM SET restart_after_crash = 1;
-				   ALTER SYSTEM SET log_connections = 1;
+				   ALTER SYSTEM SET log_connections = receipt;
 				   SELECT pg_reload_conf();]);
 
 # Run psql, keeping session alive, so we have an alive backend to kill.
@@ -227,6 +227,13 @@ is( $node->safe_psql(
 	),
 	'before-orderly-restart',
 	'can still write after crash restart');
+
+# Confirm that the logical replication launcher, a background worker
+# without the never-restart flag, has also restarted successfully.
+is($node->poll_query_until('postgres',
+	"SELECT count(*) = 1 FROM pg_stat_activity WHERE backend_type = 'logical replication launcher'"),
+	'1',
+	'logical replication launcher restarted after crash');
 
 # Just to be sure, check that an orderly restart now still works
 $node->restart();

@@ -464,7 +464,7 @@ tuple_lock_retry:
 									return TM_WouldBlock;
 								break;
 							case LockWaitError:
-								if (!ConditionalXactLockTableWait(SnapshotDirty.xmax, log_lock_failure))
+								if (!ConditionalXactLockTableWait(SnapshotDirty.xmax, log_lock_failures))
 									ereport(ERROR,
 											(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
 											 errmsg("could not obtain lock on row in relation \"%s\"",
@@ -2280,7 +2280,7 @@ heapam_scan_sample_next_tuple(TableScanDesc scan, SampleScanState *scanstate,
 	if (!pagemode)
 		LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_SHARE);
 
-	page = (Page) BufferGetPage(hscan->rs_cbuf);
+	page = BufferGetPage(hscan->rs_cbuf);
 	all_visible = PageIsAllVisible(page) &&
 		!scan->rs_snapshot->takenDuringRecovery;
 	maxoffset = PageGetMaxOffsetNumber(page);

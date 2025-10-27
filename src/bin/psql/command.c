@@ -67,8 +67,8 @@ static backslashResult exec_command_C(PsqlScanState scan_state, bool active_bran
 static backslashResult exec_command_connect(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_cd(PsqlScanState scan_state, bool active_branch,
 									   const char *cmd);
-static backslashResult exec_command_close(PsqlScanState scan_state, bool active_branch,
-										  const char *cmd);
+static backslashResult exec_command_close_prepared(PsqlScanState scan_state,
+												   bool active_branch, const char *cmd);
 static backslashResult exec_command_conninfo(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_copy(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_copyright(PsqlScanState scan_state, bool active_branch);
@@ -130,6 +130,8 @@ static backslashResult exec_command_pset(PsqlScanState scan_state, bool active_b
 static backslashResult exec_command_quit(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_reset(PsqlScanState scan_state, bool active_branch,
 										  PQExpBuffer query_buf);
+static backslashResult exec_command_restrict(PsqlScanState scan_state, bool active_branch,
+											 const char *cmd);
 static backslashResult exec_command_s(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_sendpipeline(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_set(PsqlScanState scan_state, bool active_branch);
@@ -142,6 +144,8 @@ static backslashResult exec_command_syncpipeline(PsqlScanState scan_state, bool 
 static backslashResult exec_command_t(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_T(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_timing(PsqlScanState scan_state, bool active_branch);
+static backslashResult exec_command_unrestrict(PsqlScanState scan_state, bool active_branch,
+											   const char *cmd);
 static backslashResult exec_command_unset(PsqlScanState scan_state, bool active_branch,
 										  const char *cmd);
 static backslashResult exec_command_write(PsqlScanState scan_state, bool active_branch,
@@ -192,6 +196,8 @@ static char *pset_value_string(const char *param, printQueryOpt *popt);
 static void checkWin32Codepage(void);
 #endif
 
+static bool restricted;
+static char *restrict_key;
 
 
 /*----------
@@ -237,8 +243,19 @@ HandleSlashCmds(PsqlScanState scan_state,
 	/* Parse off the command name */
 	cmd = psql_scan_slash_command(scan_state);
 
-	/* And try to execute it */
-	status = exec_command(cmd, scan_state, cstack, query_buf, previous_buf);
+	/*
+	 * And try to execute it.
+	 *
+	 * If we are in "restricted" mode, the only allowable backslash command is
+	 * \unrestrict (to exit restricted mode).
+	 */
+	if (restricted && strcmp(cmd, "unrestrict") != 0)
+	{
+		pg_log_error("backslash commands are restricted; only \\unrestrict is allowed");
+		status = PSQL_CMD_ERROR;
+	}
+	else
+		status = exec_command(cmd, scan_state, cstack, query_buf, previous_buf);
 
 	if (status == PSQL_CMD_UNKNOWN)
 	{
@@ -330,8 +347,8 @@ exec_command(const char *cmd,
 		status = exec_command_connect(scan_state, active_branch);
 	else if (strcmp(cmd, "cd") == 0)
 		status = exec_command_cd(scan_state, active_branch, cmd);
-	else if (strcmp(cmd, "close") == 0)
-		status = exec_command_close(scan_state, active_branch, cmd);
+	else if (strcmp(cmd, "close_prepared") == 0)
+		status = exec_command_close_prepared(scan_state, active_branch, cmd);
 	else if (strcmp(cmd, "conninfo") == 0)
 		status = exec_command_conninfo(scan_state, active_branch);
 	else if (pg_strcasecmp(cmd, "copy") == 0)
@@ -416,6 +433,8 @@ exec_command(const char *cmd,
 		status = exec_command_quit(scan_state, active_branch);
 	else if (strcmp(cmd, "r") == 0 || strcmp(cmd, "reset") == 0)
 		status = exec_command_reset(scan_state, active_branch, query_buf);
+	else if (strcmp(cmd, "restrict") == 0)
+		status = exec_command_restrict(scan_state, active_branch, cmd);
 	else if (strcmp(cmd, "s") == 0)
 		status = exec_command_s(scan_state, active_branch);
 	else if (strcmp(cmd, "sendpipeline") == 0)
@@ -438,6 +457,8 @@ exec_command(const char *cmd,
 		status = exec_command_T(scan_state, active_branch);
 	else if (strcmp(cmd, "timing") == 0)
 		status = exec_command_timing(scan_state, active_branch);
+	else if (strcmp(cmd, "unrestrict") == 0)
+		status = exec_command_unrestrict(scan_state, active_branch, cmd);
 	else if (strcmp(cmd, "unset") == 0)
 		status = exec_command_unset(scan_state, active_branch, cmd);
 	else if (strcmp(cmd, "w") == 0 || strcmp(cmd, "write") == 0)
@@ -728,10 +749,10 @@ exec_command_cd(PsqlScanState scan_state, bool active_branch, const char *cmd)
 }
 
 /*
- * \close -- close a previously prepared statement
+ * \close_prepared -- close a previously prepared statement
  */
 static backslashResult
-exec_command_close(PsqlScanState scan_state, bool active_branch, const char *cmd)
+exec_command_close_prepared(PsqlScanState scan_state, bool active_branch, const char *cmd)
 {
 	backslashResult status = PSQL_CMD_SKIP_LINE;
 
@@ -778,6 +799,7 @@ exec_command_conninfo(PsqlScanState scan_state, bool active_branch)
 	int			ssl_in_use,
 				password_used,
 				gssapi_used;
+	int			version_num;
 	char	   *paramval;
 
 	if (!active_branch)
@@ -793,7 +815,9 @@ exec_command_conninfo(PsqlScanState scan_state, bool active_branch)
 	/* Get values for the parameters */
 	host = PQhost(pset.db);
 	hostaddr = PQhostaddr(pset.db);
-	protocol_version = psprintf("%d", PQprotocolVersion(pset.db));
+	version_num = PQfullProtocolVersion(pset.db);
+	protocol_version = psprintf("%d.%d", version_num / 10000,
+								version_num % 10000);
 	ssl_in_use = PQsslInUse(pset.db);
 	password_used = PQconnectionUsedPassword(pset.db);
 	gssapi_used = PQconnectionUsedGSSAPI(pset.db);
@@ -874,11 +898,11 @@ exec_command_conninfo(PsqlScanState scan_state, bool active_branch)
 	printTableAddCell(&cont, _("Backend PID"), false, false);
 	printTableAddCell(&cont, backend_pid, false, false);
 
-	/* TLS Connection */
-	printTableAddCell(&cont, _("TLS Connection"), false, false);
+	/* SSL Connection */
+	printTableAddCell(&cont, _("SSL Connection"), false, false);
 	printTableAddCell(&cont, ssl_in_use ? _("true") : _("false"), false, false);
 
-	/* TLS Information */
+	/* SSL Information */
 	if (ssl_in_use)
 	{
 		char	   *library,
@@ -895,19 +919,19 @@ exec_command_conninfo(PsqlScanState scan_state, bool active_branch)
 		compression = (char *) PQsslAttribute(pset.db, "compression");
 		alpn = (char *) PQsslAttribute(pset.db, "alpn");
 
-		printTableAddCell(&cont, _("TLS Library"), false, false);
+		printTableAddCell(&cont, _("SSL Library"), false, false);
 		printTableAddCell(&cont, library ? library : _("unknown"), false, false);
 
-		printTableAddCell(&cont, _("TLS Protocol"), false, false);
+		printTableAddCell(&cont, _("SSL Protocol"), false, false);
 		printTableAddCell(&cont, protocol ? protocol : _("unknown"), false, false);
 
-		printTableAddCell(&cont, _("TLS Key Bits"), false, false);
+		printTableAddCell(&cont, _("SSL Key Bits"), false, false);
 		printTableAddCell(&cont, key_bits ? key_bits : _("unknown"), false, false);
 
-		printTableAddCell(&cont, _("TLS Cipher"), false, false);
+		printTableAddCell(&cont, _("SSL Cipher"), false, false);
 		printTableAddCell(&cont, cipher ? cipher : _("unknown"), false, false);
 
-		printTableAddCell(&cont, _("TLS Compression"), false, false);
+		printTableAddCell(&cont, _("SSL Compression"), false, false);
 		printTableAddCell(&cont, (compression && strcmp(compression, "off") != 0) ?
 						  _("true") : _("false"), false, false);
 
@@ -1946,7 +1970,7 @@ exec_command_gexec(PsqlScanState scan_state, bool active_branch)
 	{
 		if (PQpipelineStatus(pset.db) != PQ_PIPELINE_OFF)
 		{
-			pg_log_error("\\gexec not allowed in pipeline mode");
+			pg_log_error("\\%s not allowed in pipeline mode", "gexec");
 			clean_extended_state();
 			return PSQL_CMD_ERROR;
 		}
@@ -1972,7 +1996,7 @@ exec_command_gset(PsqlScanState scan_state, bool active_branch)
 
 		if (PQpipelineStatus(pset.db) != PQ_PIPELINE_OFF)
 		{
-			pg_log_error("\\gset not allowed in pipeline mode");
+			pg_log_error("\\%s not allowed in pipeline mode", "gset");
 			clean_extended_state();
 			return PSQL_CMD_ERROR;
 		}
@@ -2752,6 +2776,35 @@ exec_command_reset(PsqlScanState scan_state, bool active_branch,
 }
 
 /*
+ * \restrict -- enter "restricted mode" with the provided key
+ */
+static backslashResult
+exec_command_restrict(PsqlScanState scan_state, bool active_branch,
+					  const char *cmd)
+{
+	if (active_branch)
+	{
+		char	   *opt;
+
+		Assert(!restricted);
+
+		opt = psql_scan_slash_option(scan_state, OT_NORMAL, NULL, true);
+		if (opt == NULL || opt[0] == '\0')
+		{
+			pg_log_error("\\%s: missing required argument", cmd);
+			return PSQL_CMD_ERROR;
+		}
+
+		restrict_key = pstrdup(opt);
+		restricted = true;
+	}
+	else
+		ignore_slash_options(scan_state);
+
+	return PSQL_CMD_SKIP_LINE;
+}
+
+/*
  * \s -- save history in a file or show it on the screen
  */
 static backslashResult
@@ -3133,6 +3186,46 @@ exec_command_timing(PsqlScanState scan_state, bool active_branch)
 }
 
 /*
+ * \unrestrict -- exit "restricted mode" if provided key matches
+ */
+static backslashResult
+exec_command_unrestrict(PsqlScanState scan_state, bool active_branch,
+						const char *cmd)
+{
+	if (active_branch)
+	{
+		char	   *opt;
+
+		opt = psql_scan_slash_option(scan_state, OT_NORMAL, NULL, true);
+		if (opt == NULL || opt[0] == '\0')
+		{
+			pg_log_error("\\%s: missing required argument", cmd);
+			return PSQL_CMD_ERROR;
+		}
+
+		if (!restricted)
+		{
+			pg_log_error("\\%s: not currently in restricted mode", cmd);
+			return PSQL_CMD_ERROR;
+		}
+		else if (strcmp(opt, restrict_key) == 0)
+		{
+			pfree(restrict_key);
+			restricted = false;
+		}
+		else
+		{
+			pg_log_error("\\%s: wrong key", cmd);
+			return PSQL_CMD_ERROR;
+		}
+	}
+	else
+		ignore_slash_options(scan_state);
+
+	return PSQL_CMD_SKIP_LINE;
+}
+
+/*
  * \unset -- unset variable
  */
 static backslashResult
@@ -3284,7 +3377,7 @@ exec_command_watch(PsqlScanState scan_state, bool active_branch,
 
 		if (PQpipelineStatus(pset.db) != PQ_PIPELINE_OFF)
 		{
-			pg_log_error("\\watch not allowed in pipeline mode");
+			pg_log_error("\\%s not allowed in pipeline mode", "watch");
 			clean_extended_state();
 			success = false;
 		}
@@ -4477,6 +4570,8 @@ SyncVariables(void)
 {
 	char		vbuf[32];
 	const char *server_version;
+	char	   *service_name;
+	char	   *service_file;
 
 	/* get stuff from connection */
 	pset.encoding = PQclientEncoding(pset.db);
@@ -4486,11 +4581,20 @@ SyncVariables(void)
 	setFmtEncoding(pset.encoding);
 
 	SetVariable(pset.vars, "DBNAME", PQdb(pset.db));
-	SetVariable(pset.vars, "SERVICE", PQservice(pset.db));
 	SetVariable(pset.vars, "USER", PQuser(pset.db));
 	SetVariable(pset.vars, "HOST", PQhost(pset.db));
 	SetVariable(pset.vars, "PORT", PQport(pset.db));
 	SetVariable(pset.vars, "ENCODING", pg_encoding_to_char(pset.encoding));
+
+	service_name = get_conninfo_value("service");
+	SetVariable(pset.vars, "SERVICE", service_name);
+	if (service_name)
+		pg_free(service_name);
+
+	service_file = get_conninfo_value("servicefile");
+	SetVariable(pset.vars, "SERVICEFILE", service_file);
+	if (service_file)
+		pg_free(service_file);
 
 	/* this bit should match connection_warnings(): */
 	/* Try to get full text form of version, might include "devel" etc */
@@ -4521,6 +4625,7 @@ UnsyncVariables(void)
 {
 	SetVariable(pset.vars, "DBNAME", NULL);
 	SetVariable(pset.vars, "SERVICE", NULL);
+	SetVariable(pset.vars, "SERVICEFILE", NULL);
 	SetVariable(pset.vars, "USER", NULL);
 	SetVariable(pset.vars, "HOST", NULL);
 	SetVariable(pset.vars, "PORT", NULL);

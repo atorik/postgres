@@ -99,7 +99,8 @@ PerformCursorOpen(ParseState *pstate, DeclareCursorStmt *cstmt, ParamListInfo pa
 		elog(ERROR, "non-SELECT statement in DECLARE CURSOR");
 
 	/* Plan the query, applying the specified options */
-	plan = pg_plan_query(query, pstate->p_sourcetext, cstmt->options, params);
+	plan = pg_plan_query(query, pstate->p_sourcetext, cstmt->options, params,
+						 NULL);
 
 	/*
 	 * Create a portal and copy the plan and query string into its memory.
@@ -117,7 +118,6 @@ PerformCursorOpen(ParseState *pstate, DeclareCursorStmt *cstmt, ParamListInfo pa
 					  queryString,
 					  CMDTAG_SELECT,	/* cursor's query is always a SELECT */
 					  list_make1(plan),
-					  NULL,
 					  NULL);
 
 	/*----------

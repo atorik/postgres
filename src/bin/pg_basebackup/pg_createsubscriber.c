@@ -26,6 +26,7 @@
 #include "fe_utils/recovery_gen.h"
 #include "fe_utils/simple_list.h"
 #include "fe_utils/string_utils.h"
+#include "fe_utils/version.h"
 #include "getopt_long.h"
 
 #define	DEFAULT_SUB_PORT	"50432"
@@ -46,7 +47,7 @@ struct CreateSubscriberOptions
 	SimpleStringList replslot_names;	/* list of replication slot names */
 	int			recovery_timeout;	/* stop recovery after this time */
 	bool		all_dbs;		/* all option */
-	SimpleStringList objecttypes_to_remove; /* list of object types to remove */
+	SimpleStringList objecttypes_to_clean;	/* list of object types to cleanup */
 };
 
 /* per-database publication/subscription info */
@@ -71,8 +72,8 @@ struct LogicalRepInfos
 {
 	struct LogicalRepInfo *dbinfo;
 	bool		two_phase;		/* enable-two-phase option */
-	bits32		objecttypes_to_remove;	/* flags indicating which object types
-										 * to remove on subscriber */
+	bits32		objecttypes_to_clean;	/* flags indicating which object types
+										 * to clean up on subscriber */
 };
 
 static void cleanup_objects_atexit(void);
@@ -247,19 +248,19 @@ usage(void)
 	printf(_("  %s [OPTION]...\n"), progname);
 	printf(_("\nOptions:\n"));
 	printf(_("  -a, --all                       create subscriptions for all databases except template\n"
-			 "                                  databases or databases that don't allow connections\n"));
+			 "                                  databases and databases that don't allow connections\n"));
 	printf(_("  -d, --database=DBNAME           database in which to create a subscription\n"));
 	printf(_("  -D, --pgdata=DATADIR            location for the subscriber data directory\n"));
 	printf(_("  -n, --dry-run                   dry run, just show what would be done\n"));
 	printf(_("  -p, --subscriber-port=PORT      subscriber port number (default %s)\n"), DEFAULT_SUB_PORT);
 	printf(_("  -P, --publisher-server=CONNSTR  publisher connection string\n"));
-	printf(_("  -R, --remove=OBJECTTYPE         remove all objects of the specified type from specified\n"
-			 "                                  databases on the subscriber; accepts: publications\n"));
 	printf(_("  -s, --socketdir=DIR             socket directory to use (default current dir.)\n"));
 	printf(_("  -t, --recovery-timeout=SECS     seconds to wait for recovery to end\n"));
 	printf(_("  -T, --enable-two-phase          enable two-phase commit for all subscriptions\n"));
 	printf(_("  -U, --subscriber-username=NAME  user name for subscriber connection\n"));
 	printf(_("  -v, --verbose                   output verbose messages\n"));
+	printf(_("      --clean=OBJECTTYPE          drop all objects of the specified type from specified\n"
+			 "                                  databases on the subscriber; accepts: \"%s\"\n"), "publications");
 	printf(_("      --config-file=FILENAME      use specified main server configuration\n"
 			 "                                  file when running target cluster\n"));
 	printf(_("      --publication=NAME          publication name\n"));
@@ -407,7 +408,8 @@ static void
 check_data_directory(const char *datadir)
 {
 	struct stat statbuf;
-	char		versionfile[MAXPGPATH];
+	uint32		major_version;
+	char	   *version_str;
 
 	pg_log_info("checking if directory \"%s\" is a cluster data directory",
 				datadir);
@@ -420,11 +422,18 @@ check_data_directory(const char *datadir)
 			pg_fatal("could not access directory \"%s\": %m", datadir);
 	}
 
-	snprintf(versionfile, MAXPGPATH, "%s/PG_VERSION", datadir);
-	if (stat(versionfile, &statbuf) != 0 && errno == ENOENT)
+	/*
+	 * Retrieve the contents of this cluster's PG_VERSION.  We require
+	 * compatibility with the same major version as the one this tool is
+	 * compiled with.
+	 */
+	major_version = GET_PG_MAJORVERSION_NUM(get_pg_version(datadir, &version_str));
+	if (major_version != PG_MAJORVERSION_NUM)
 	{
-		pg_fatal("directory \"%s\" is not a database cluster directory",
-				 datadir);
+		pg_log_error("data directory is of wrong version");
+		pg_log_error_detail("File \"%s\" contains \"%s\", which is not compatible with this program's version \"%s\".",
+							"PG_VERSION", version_str, PG_MAJORVERSION);
+		exit(1);
 	}
 }
 
@@ -801,10 +810,7 @@ setup_publisher(struct LogicalRepInfo *dbinfo)
 		if (lsn)
 			pg_free(lsn);
 		lsn = create_logical_replication_slot(conn, &dbinfo[i]);
-		if (lsn != NULL || dry_run)
-			pg_log_info("create replication slot \"%s\" on publisher",
-						dbinfo[i].replslotname);
-		else
+		if (lsn == NULL && !dry_run)
 			exit(1);
 
 		/*
@@ -973,7 +979,7 @@ check_publisher(const struct LogicalRepInfo *dbinfo)
 		pg_log_warning("two_phase option will not be enabled for replication slots");
 		pg_log_warning_detail("Subscriptions will be created with the two_phase option disabled.  "
 							  "Prepared transactions will be replicated at COMMIT PREPARED.");
-		pg_log_warning_hint("You can use --enable-two-phase switch to enable two_phase.");
+		pg_log_warning_hint("You can use the command-line option --enable-two-phase to enable two_phase.");
 	}
 
 	/*
@@ -1250,8 +1256,17 @@ setup_recovery(const struct LogicalRepInfo *dbinfo, const char *datadir, const c
 	appendPQExpBufferStr(recoveryconfcontents, "recovery_target = ''\n");
 	appendPQExpBufferStr(recoveryconfcontents,
 						 "recovery_target_timeline = 'latest'\n");
+
+	/*
+	 * Set recovery_target_inclusive = false to avoid reapplying the
+	 * transaction committed at 'lsn' after subscription is enabled. This is
+	 * because the provided 'lsn' is also used as the replication start point
+	 * for the subscription. So, the server can send the transaction committed
+	 * at that 'lsn' after replication is started which can lead to applying
+	 * the same transaction twice if we keep recovery_target_inclusive = true.
+	 */
 	appendPQExpBufferStr(recoveryconfcontents,
-						 "recovery_target_inclusive = true\n");
+						 "recovery_target_inclusive = false\n");
 	appendPQExpBufferStr(recoveryconfcontents,
 						 "recovery_target_action = promote\n");
 	appendPQExpBufferStr(recoveryconfcontents, "recovery_target_name = ''\n");
@@ -1262,7 +1277,7 @@ setup_recovery(const struct LogicalRepInfo *dbinfo, const char *datadir, const c
 	{
 		appendPQExpBufferStr(recoveryconfcontents, "# dry run mode");
 		appendPQExpBuffer(recoveryconfcontents,
-						  "recovery_target_lsn = '%X/%X'\n",
+						  "recovery_target_lsn = '%X/%08X'\n",
 						  LSN_FORMAT_ARGS((XLogRecPtr) InvalidXLogRecPtr));
 	}
 	else
@@ -1366,7 +1381,7 @@ create_logical_replication_slot(PGconn *conn, struct LogicalRepInfo *dbinfo)
 
 	Assert(conn != NULL);
 
-	pg_log_info("creating the replication slot \"%s\" in database \"%s\"",
+	pg_log_info("creating the replication slot \"%s\" in database \"%s\" on publisher",
 				slot_name, dbinfo->dbname);
 
 	slot_name_esc = PQescapeLiteral(conn, slot_name, strlen(slot_name));
@@ -1730,7 +1745,7 @@ static void
 check_and_drop_publications(PGconn *conn, struct LogicalRepInfo *dbinfo)
 {
 	PGresult   *res;
-	bool		drop_all_pubs = dbinfos.objecttypes_to_remove & OBJECTTYPE_PUBLICATIONS;
+	bool		drop_all_pubs = dbinfos.objecttypes_to_clean & OBJECTTYPE_PUBLICATIONS;
 
 	Assert(conn != NULL);
 
@@ -1876,7 +1891,7 @@ set_replication_progress(PGconn *conn, const struct LogicalRepInfo *dbinfo, cons
 	if (dry_run)
 	{
 		suboid = InvalidOid;
-		lsnstr = psprintf("%X/%X", LSN_FORMAT_ARGS((XLogRecPtr) InvalidXLogRecPtr));
+		lsnstr = psprintf("%X/%08X", LSN_FORMAT_ARGS((XLogRecPtr) InvalidXLogRecPtr));
 	}
 	else
 	{
@@ -2026,7 +2041,6 @@ main(int argc, char **argv)
 		{"dry-run", no_argument, NULL, 'n'},
 		{"subscriber-port", required_argument, NULL, 'p'},
 		{"publisher-server", required_argument, NULL, 'P'},
-		{"remove", required_argument, NULL, 'R'},
 		{"socketdir", required_argument, NULL, 's'},
 		{"recovery-timeout", required_argument, NULL, 't'},
 		{"enable-two-phase", no_argument, NULL, 'T'},
@@ -2038,6 +2052,7 @@ main(int argc, char **argv)
 		{"publication", required_argument, NULL, 2},
 		{"replication-slot", required_argument, NULL, 3},
 		{"subscription", required_argument, NULL, 4},
+		{"clean", required_argument, NULL, 5},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -2109,7 +2124,7 @@ main(int argc, char **argv)
 
 	get_restricted_token();
 
-	while ((c = getopt_long(argc, argv, "ad:D:np:P:R:s:t:TU:v",
+	while ((c = getopt_long(argc, argv, "ad:D:np:P:s:t:TU:v",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -2138,12 +2153,6 @@ main(int argc, char **argv)
 				break;
 			case 'P':
 				opt.pub_conninfo_str = pg_strdup(optarg);
-				break;
-			case 'R':
-				if (!simple_string_list_member(&opt.objecttypes_to_remove, optarg))
-					simple_string_list_append(&opt.objecttypes_to_remove, optarg);
-				else
-					pg_fatal("object type \"%s\" is specified more than once for -R/--remove", optarg);
 				break;
 			case 's':
 				opt.socket_dir = pg_strdup(optarg);
@@ -2191,6 +2200,12 @@ main(int argc, char **argv)
 				else
 					pg_fatal("subscription \"%s\" specified more than once for --subscription", optarg);
 				break;
+			case 5:
+				if (!simple_string_list_member(&opt.objecttypes_to_clean, optarg))
+					simple_string_list_append(&opt.objecttypes_to_clean, optarg);
+				else
+					pg_fatal("object type \"%s\" specified more than once for --clean", optarg);
+				break;
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -2214,7 +2229,7 @@ main(int argc, char **argv)
 
 		if (bad_switch)
 		{
-			pg_log_error("%s cannot be used with -a/--all", bad_switch);
+			pg_log_error("options %s and -a/--all cannot be used together", bad_switch);
 			pg_log_error_hint("Try \"%s --help\" for more information.", progname);
 			exit(1);
 		}
@@ -2334,14 +2349,14 @@ main(int argc, char **argv)
 	}
 
 	/* Verify the object types specified for removal from the subscriber */
-	for (SimpleStringListCell *cell = opt.objecttypes_to_remove.head; cell; cell = cell->next)
+	for (SimpleStringListCell *cell = opt.objecttypes_to_clean.head; cell; cell = cell->next)
 	{
 		if (pg_strcasecmp(cell->val, "publications") == 0)
-			dbinfos.objecttypes_to_remove |= OBJECTTYPE_PUBLICATIONS;
+			dbinfos.objecttypes_to_clean |= OBJECTTYPE_PUBLICATIONS;
 		else
 		{
-			pg_log_error("invalid object type \"%s\" specified for -R/--remove", cell->val);
-			pg_log_error_hint("The valid option is: \"publications\"");
+			pg_log_error("invalid object type \"%s\" specified for --clean", cell->val);
+			pg_log_error_hint("The valid value is: \"%s\"", "publications");
 			exit(1);
 		}
 	}

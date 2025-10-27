@@ -77,7 +77,6 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_namespace.h"
-#include "commands/dbcommands.h"
 #include "commands/vacuum.h"
 #include "common/int.h"
 #include "lib/ilist.h"
@@ -134,6 +133,7 @@ double		autovacuum_vac_cost_delay;
 int			autovacuum_vac_cost_limit;
 
 int			Log_autovacuum_min_duration = 600000;
+int			Log_autoanalyze_min_duration = 600000;
 
 /* the minimum allowed time between two awakenings of the launcher */
 #define MIN_AUTOVAC_SLEEPTIME 100.0 /* milliseconds */
@@ -309,6 +309,16 @@ static AutoVacuumShmemStruct *AutoVacuumShmem;
  */
 static dlist_head DatabaseList = DLIST_STATIC_INIT(DatabaseList);
 static MemoryContext DatabaseListCxt = NULL;
+
+/*
+ * Dummy pointer to persuade Valgrind that we've not leaked the array of
+ * avl_dbase structs.  Make it global to ensure the compiler doesn't
+ * optimize it away.
+ */
+#ifdef USE_VALGRIND
+extern avl_dbase *avl_dbase_array;
+avl_dbase  *avl_dbase_array;
+#endif
 
 /* Pointer to my own WorkerInfo, valid on each worker */
 static WorkerInfo MyWorkerInfo = NULL;
@@ -562,10 +572,10 @@ AutoVacLauncherMain(const void *startup_data, size_t startup_data_len)
 
 	/*
 	 * Create the initial database list.  The invariant we want this list to
-	 * keep is that it's ordered by decreasing next_time.  As soon as an entry
-	 * is updated to a higher time, it will be moved to the front (which is
-	 * correct because the only operation is to add autovacuum_naptime to the
-	 * entry, and time always increases).
+	 * keep is that it's ordered by decreasing next_worker.  As soon as an
+	 * entry is updated to a higher time, it will be moved to the front (which
+	 * is correct because the only operation is to add autovacuum_naptime to
+	 * the entry, and time always increases).
 	 */
 	rebuild_database_list(InvalidOid);
 
@@ -780,10 +790,6 @@ ProcessAutoVacLauncherInterrupts(void)
 	/* Perform logging of memory contexts of this process */
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
-
-	/* Publish memory contexts of this process */
-	if (PublishMemoryContextPending)
-		ProcessGetMemoryContextInterrupt();
 
 	/* Process sinval catchup interrupts that happened while sleeping */
 	ProcessCatchupInterrupt();
@@ -1024,6 +1030,10 @@ rebuild_database_list(Oid newdb)
 
 		/* put all the hash elements into an array */
 		dbary = palloc(nelems * sizeof(avl_dbase));
+		/* keep Valgrind quiet */
+#ifdef USE_VALGRIND
+		avl_dbase_array = dbary;
+#endif
 
 		i = 0;
 		hash_seq_init(&seq, dbhash);
@@ -1922,7 +1932,7 @@ do_autovacuum(void)
 	 * This injection point is put in a transaction block to work with a wait
 	 * that uses a condition variable.
 	 */
-	INJECTION_POINT("autovacuum-worker-start");
+	INJECTION_POINT("autovacuum-worker-start", NULL);
 
 	/*
 	 * Compute the multixact age for which freezing is urgent.  This is
@@ -2077,6 +2087,12 @@ do_autovacuum(void)
 				}
 			}
 		}
+
+		/* Release stuff to avoid per-relation leakage */
+		if (relopts)
+			pfree(relopts);
+		if (tabentry)
+			pfree(tabentry);
 	}
 
 	table_endscan(relScan);
@@ -2093,7 +2109,8 @@ do_autovacuum(void)
 		Form_pg_class classForm = (Form_pg_class) GETSTRUCT(tuple);
 		PgStat_StatTabEntry *tabentry;
 		Oid			relid;
-		AutoVacOpts *relopts = NULL;
+		AutoVacOpts *relopts;
+		bool		free_relopts = false;
 		bool		dovacuum;
 		bool		doanalyze;
 		bool		wraparound;
@@ -2111,7 +2128,9 @@ do_autovacuum(void)
 		 * main rel
 		 */
 		relopts = extract_autovac_opts(tuple, pg_class_desc);
-		if (relopts == NULL)
+		if (relopts)
+			free_relopts = true;
+		else
 		{
 			av_relation *hentry;
 			bool		found;
@@ -2132,6 +2151,12 @@ do_autovacuum(void)
 		/* ignore analyze for toast tables */
 		if (dovacuum)
 			table_oids = lappend_oid(table_oids, relid);
+
+		/* Release stuff to avoid leakage */
+		if (free_relopts)
+			pfree(relopts);
+		if (tabentry)
+			pfree(tabentry);
 	}
 
 	table_endscan(relScan);
@@ -2223,6 +2248,12 @@ do_autovacuum(void)
 						get_namespace_name(classForm->relnamespace),
 						NameStr(classForm->relname))));
 
+		/*
+		 * Deletion might involve TOAST table access, so ensure we have a
+		 * valid snapshot.
+		 */
+		PushActiveSnapshot(GetTransactionSnapshot());
+
 		object.classId = RelationRelationId;
 		object.objectId = relid;
 		object.objectSubId = 0;
@@ -2235,6 +2266,7 @@ do_autovacuum(void)
 		 * To commit the deletion, end current transaction and start a new
 		 * one.  Note this also releases the locks we took.
 		 */
+		PopActiveSnapshot();
 		CommitTransactionCommand();
 		StartTransactionCommand();
 
@@ -2503,6 +2535,8 @@ deleted:
 		pg_atomic_test_set_flag(&MyWorkerInfo->wi_dobalance);
 	}
 
+	list_free(table_oids);
+
 	/*
 	 * Perform additional work items, as requested by backends.
 	 */
@@ -2545,8 +2579,18 @@ deleted:
 
 	/*
 	 * We leak table_toast_map here (among other things), but since we're
-	 * going away soon, it's not a problem.
+	 * going away soon, it's not a problem normally.  But when using Valgrind,
+	 * release some stuff to reduce complaints about leaked storage.
 	 */
+#ifdef USE_VALGRIND
+	hash_destroy(table_toast_map);
+	FreeTupleDesc(pg_class_desc);
+	if (bstrategy)
+		pfree(bstrategy);
+#endif
+
+	/* Run the rest in xact context, mainly to avoid Valgrind leak warnings */
+	MemoryContextSwitchTo(TopTransactionContext);
 
 	/*
 	 * Update pg_database.datfrozenxid, and truncate pg_xact if possible. We
@@ -2684,8 +2728,8 @@ deleted2:
 /*
  * extract_autovac_opts
  *
- * Given a relation's pg_class tuple, return the AutoVacOpts portion of
- * reloptions, if set; otherwise, return NULL.
+ * Given a relation's pg_class tuple, return a palloc'd copy of the
+ * AutoVacOpts portion of reloptions, if set; otherwise, return NULL.
  *
  * Note: callers do not have a relation lock on the table at this point,
  * so the table could have been dropped, and its catalog rows gone, after
@@ -2734,6 +2778,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	autovac_table *tab = NULL;
 	bool		wraparound;
 	AutoVacOpts *avopts;
+	bool		free_avopts = false;
 
 	/* fetch the relation's relcache entry */
 	classTup = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relid));
@@ -2746,8 +2791,10 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	 * main table reloptions if the toast table itself doesn't have.
 	 */
 	avopts = extract_autovac_opts(classTup, pg_class_desc);
-	if (classForm->relkind == RELKIND_TOASTVALUE &&
-		avopts == NULL && table_toast_map != NULL)
+	if (avopts)
+		free_avopts = true;
+	else if (classForm->relkind == RELKIND_TOASTVALUE &&
+			 table_toast_map != NULL)
 	{
 		av_relation *hentry;
 		bool		found;
@@ -2768,7 +2815,8 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		int			freeze_table_age;
 		int			multixact_freeze_min_age;
 		int			multixact_freeze_table_age;
-		int			log_min_duration;
+		int			log_vacuum_min_duration;
+		int			log_analyze_min_duration;
 
 		/*
 		 * Calculate the vacuum cost parameters and the freeze ages.  If there
@@ -2778,9 +2826,14 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		 */
 
 		/* -1 in autovac setting means use log_autovacuum_min_duration */
-		log_min_duration = (avopts && avopts->log_min_duration >= 0)
-			? avopts->log_min_duration
+		log_vacuum_min_duration = (avopts && avopts->log_vacuum_min_duration >= 0)
+			? avopts->log_vacuum_min_duration
 			: Log_autovacuum_min_duration;
+
+		/* -1 in autovac setting means use log_autoanalyze_min_duration */
+		log_analyze_min_duration = (avopts && avopts->log_analyze_min_duration >= 0)
+			? avopts->log_analyze_min_duration
+			: Log_autoanalyze_min_duration;
 
 		/* these do not have autovacuum-specific settings */
 		freeze_min_age = (avopts && avopts->freeze_min_age >= 0)
@@ -2831,7 +2884,8 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		tab->at_params.multixact_freeze_min_age = multixact_freeze_min_age;
 		tab->at_params.multixact_freeze_table_age = multixact_freeze_table_age;
 		tab->at_params.is_wraparound = wraparound;
-		tab->at_params.log_min_duration = log_min_duration;
+		tab->at_params.log_vacuum_min_duration = log_vacuum_min_duration;
+		tab->at_params.log_analyze_min_duration = log_analyze_min_duration;
 		tab->at_params.toast_parent = InvalidOid;
 
 		/*
@@ -2856,6 +2910,8 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 						 avopts->vacuum_cost_delay >= 0));
 	}
 
+	if (free_avopts)
+		pfree(avopts);
 	heap_freetuple(classTup);
 	return tab;
 }
@@ -2886,6 +2942,10 @@ recheck_relation_needs_vacanalyze(Oid relid,
 	relation_needs_vacanalyze(relid, avopts, classForm, tabentry,
 							  effective_multixact_freeze_max_age,
 							  dovacuum, doanalyze, wraparound);
+
+	/* Release tabentry to avoid leakage */
+	if (tabentry)
+		pfree(tabentry);
 
 	/* ignore ANALYZE for toast tables */
 	if (classForm->relkind == RELKIND_TOASTVALUE)
@@ -3055,7 +3115,7 @@ relation_needs_vacanalyze(Oid relid,
 	 * vacuuming only, so don't vacuum (or analyze) anything that's not being
 	 * forced.
 	 */
-	if (PointerIsValid(tabentry) && AutoVacuumingActive())
+	if (tabentry && AutoVacuumingActive())
 	{
 		float4		pcnt_unfrozen = 1;
 		float4		reltuples = classForm->reltuples;
@@ -3144,20 +3204,24 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 	VacuumRelation *rel;
 	List	   *rel_list;
 	MemoryContext vac_context;
+	MemoryContext old_context;
 
 	/* Let pgstat know what we're doing */
 	autovac_report_activity(tab);
 
-	/* Set up one VacuumRelation target, identified by OID, for vacuum() */
-	rangevar = makeRangeVar(tab->at_nspname, tab->at_relname, -1);
-	rel = makeVacuumRelation(rangevar, tab->at_relid, NIL);
-	rel_list = list_make1(rel);
-
+	/* Create a context that vacuum() can use as cross-transaction storage */
 	vac_context = AllocSetContextCreate(CurrentMemoryContext,
 										"Vacuum",
 										ALLOCSET_DEFAULT_SIZES);
 
-	vacuum(rel_list, &tab->at_params, bstrategy, vac_context, true);
+	/* Set up one VacuumRelation target, identified by OID, for vacuum() */
+	old_context = MemoryContextSwitchTo(vac_context);
+	rangevar = makeRangeVar(tab->at_nspname, tab->at_relname, -1);
+	rel = makeVacuumRelation(rangevar, tab->at_relid, NIL);
+	rel_list = list_make1(rel);
+	MemoryContextSwitchTo(old_context);
+
+	vacuum(rel_list, tab->at_params, bstrategy, vac_context, true);
 
 	MemoryContextDelete(vac_context);
 }

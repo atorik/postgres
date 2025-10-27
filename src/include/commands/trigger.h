@@ -213,7 +213,8 @@ extern bool ExecBRDeleteTriggers(EState *estate,
 								 HeapTuple fdw_trigtuple,
 								 TupleTableSlot **epqslot,
 								 TM_Result *tmresult,
-								 TM_FailureData *tmfd);
+								 TM_FailureData *tmfd,
+								 bool is_merge_delete);
 extern void ExecARDeleteTriggers(EState *estate,
 								 ResultRelInfo *relinfo,
 								 ItemPointer tupleid,
@@ -235,7 +236,8 @@ extern bool ExecBRUpdateTriggers(EState *estate,
 								 HeapTuple fdw_trigtuple,
 								 TupleTableSlot *newslot,
 								 TM_Result *tmresult,
-								 TM_FailureData *tmfd);
+								 TM_FailureData *tmfd,
+								 bool is_merge_update);
 extern void ExecARUpdateTriggers(EState *estate,
 								 ResultRelInfo *relinfo,
 								 ResultRelInfo *src_partinfo,
@@ -258,7 +260,6 @@ extern void ExecASTruncateTriggers(EState *estate,
 extern void AfterTriggerBeginXact(void);
 extern void AfterTriggerBeginQuery(void);
 extern void AfterTriggerEndQuery(EState *estate);
-extern void AfterTriggerAbortQuery(void);
 extern void AfterTriggerFireDeferred(void);
 extern void AfterTriggerEndXact(bool isCommit);
 extern void AfterTriggerBeginSubXact(void);

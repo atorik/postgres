@@ -357,7 +357,8 @@ typedef struct pg_conn_host
 	pg_conn_host_type type;		/* type of host address */
 	char	   *host;			/* host name or socket path */
 	char	   *hostaddr;		/* host numeric IP address */
-	char	   *port;			/* port number (always provided) */
+	char	   *port;			/* port number (if NULL or empty, use
+								 * DEF_PGPORT[_STR]) */
 	char	   *password;		/* password for this host, read from the
 								 * password file; NULL if not sought or not
 								 * found in password file. */
@@ -389,6 +390,8 @@ struct pg_conn
 	char	   *dbName;			/* database name */
 	char	   *replication;	/* connect as the replication standby? */
 	char	   *pgservice;		/* Postgres service, if any */
+	char	   *pgservicefile;	/* path to a service file containing
+								 * service(s) */
 	char	   *pguser;			/* Postgres username and password, if any */
 	char	   *pgpass;
 	char	   *pgpassfile;		/* path to a file containing password(s) */
@@ -539,16 +542,16 @@ struct pg_conn
 								 * tried host */
 	bool		send_appname;	/* okay to send application_name? */
 	size_t		scram_client_key_len;
-	void	   *scram_client_key_binary;	/* binary SCRAM client key */
+	uint8	   *scram_client_key_binary;	/* binary SCRAM client key */
 	size_t		scram_server_key_len;
-	void	   *scram_server_key_binary;	/* binary SCRAM server key */
+	uint8	   *scram_server_key_binary;	/* binary SCRAM server key */
 	ProtocolVersion min_pversion;	/* protocol version to request */
 	ProtocolVersion max_pversion;	/* protocol version to request */
 
 	/* Miscellaneous stuff */
 	int			be_pid;			/* PID of backend --- needed for cancels */
-	char	   *be_cancel_key;	/* query cancellation key and its length */
-	uint16		be_cancel_key_len;
+	int			be_cancel_key_len;
+	uint8	   *be_cancel_key;	/* query cancellation key */
 	pgParameterStatus *pstatus; /* ParameterStatus data */
 	int			client_encoding;	/* encoding id */
 	bool		std_strings;	/* standard_conforming_strings */
@@ -743,7 +746,7 @@ extern PGresult *pqPrepareAsyncResult(PGconn *conn);
 extern void pqInternalNotice(const PGNoticeHooks *hooks, const char *fmt,...) pg_attribute_printf(2, 3);
 extern void pqSaveMessageField(PGresult *res, char code,
 							   const char *value);
-extern void pqSaveParameterStatus(PGconn *conn, const char *name,
+extern int	pqSaveParameterStatus(PGconn *conn, const char *name,
 								  const char *value);
 extern int	pqRowProcessor(PGconn *conn, const char **errmsgp);
 extern void pqCommandQueueAdvance(PGconn *conn, bool isReadyForQuery,
@@ -787,9 +790,9 @@ extern int	pqPutc(char c, PGconn *conn);
 extern int	pqGets(PQExpBuffer buf, PGconn *conn);
 extern int	pqGets_append(PQExpBuffer buf, PGconn *conn);
 extern int	pqPuts(const char *s, PGconn *conn);
-extern int	pqGetnchar(char *s, size_t len, PGconn *conn);
+extern int	pqGetnchar(void *s, size_t len, PGconn *conn);
 extern int	pqSkipnchar(size_t len, PGconn *conn);
-extern int	pqPutnchar(const char *s, size_t len, PGconn *conn);
+extern int	pqPutnchar(const void *s, size_t len, PGconn *conn);
 extern int	pqGetInt(int *result, size_t bytes, PGconn *conn);
 extern int	pqPutInt(int value, size_t bytes, PGconn *conn);
 extern int	pqPutMsgStart(char msg_type, PGconn *conn);

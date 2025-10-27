@@ -14,12 +14,12 @@
 #ifndef EXECUTOR_H
 #define EXECUTOR_H
 
+#include "datatype/timestamp.h"
 #include "executor/execdesc.h"
 #include "fmgr.h"
 #include "nodes/lockoptions.h"
 #include "nodes/parsenodes.h"
 #include "utils/memutils.h"
-#include "utils/plancache.h"
 
 
 /*
@@ -73,7 +73,7 @@
 
 
 /* Hook for plugins to get control in ExecutorStart() */
-typedef bool (*ExecutorStart_hook_type) (QueryDesc *queryDesc, int eflags);
+typedef void (*ExecutorStart_hook_type) (QueryDesc *queryDesc, int eflags);
 extern PGDLLIMPORT ExecutorStart_hook_type ExecutorStart_hook;
 
 /* Hook for plugins to get control in ExecutorRun() */
@@ -100,12 +100,12 @@ extern PGDLLIMPORT ExecutorCheckPerms_hook_type ExecutorCheckPerms_hook;
 /*
  * prototypes from functions in execAmi.c
  */
-struct Path;					/* avoid including pathnodes.h here */
+typedef struct Path Path;		/* avoid including pathnodes.h here */
 
 extern void ExecReScan(PlanState *node);
 extern void ExecMarkPos(PlanState *node);
 extern void ExecRestrPos(PlanState *node);
-extern bool ExecSupportsMarkRestore(struct Path *pathnode);
+extern bool ExecSupportsMarkRestore(Path *pathnode);
 extern bool ExecSupportsBackwardScan(Plan *node);
 extern bool ExecMaterializesOutput(NodeTag plantype);
 
@@ -229,11 +229,8 @@ ExecGetJunkAttribute(TupleTableSlot *slot, AttrNumber attno, bool *isNull)
 /*
  * prototypes from functions in execMain.c
  */
-extern bool ExecutorStart(QueryDesc *queryDesc, int eflags);
-extern void ExecutorStartCachedPlan(QueryDesc *queryDesc, int eflags,
-									CachedPlanSource *plansource,
-									int query_index);
-extern bool standard_ExecutorStart(QueryDesc *queryDesc, int eflags);
+extern void ExecutorStart(QueryDesc *queryDesc, int eflags);
+extern void standard_ExecutorStart(QueryDesc *queryDesc, int eflags);
 extern void ExecutorRun(QueryDesc *queryDesc,
 						ScanDirection direction, uint64 count);
 extern void standard_ExecutorRun(QueryDesc *queryDesc,
@@ -245,7 +242,9 @@ extern void standard_ExecutorEnd(QueryDesc *queryDesc);
 extern void ExecutorRewind(QueryDesc *queryDesc);
 extern bool ExecCheckPermissions(List *rangeTable,
 								 List *rteperminfos, bool ereport_on_violation);
+extern bool ExecCheckOneRelPerms(RTEPermissionInfo *perminfo);
 extern void CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation,
+								OnConflictAction onConflictAction,
 								List *mergeActions);
 extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 							  Relation resultRelationDesc,
@@ -300,30 +299,6 @@ extern void ExecEndNode(PlanState *node);
 extern void ExecShutdownNode(PlanState *node);
 extern void ExecSetTupleBound(int64 tuples_needed, PlanState *child_node);
 
-/*
- * Is the CachedPlan in es_cachedplan still valid?
- *
- * Called from InitPlan() because invalidation messages that affect the plan
- * might be received after locks have been taken on runtime-prunable relations.
- * The caller should take appropriate action if the plan has become invalid.
- */
-static inline bool
-ExecPlanStillValid(EState *estate)
-{
-	return estate->es_cachedplan == NULL ? true :
-		CachedPlanValid(estate->es_cachedplan);
-}
-
-/*
- * Locks are needed only if running a cached plan that might contain unlocked
- * relations, such as a reused generic plan.
- */
-static inline bool
-ExecShouldLockRelations(EState *estate)
-{
-	return estate->es_cachedplan == NULL ? false :
-		CachedPlanRequiresLocking(estate->es_cachedplan);
-}
 
 /* ----------------------------------------------------------------
  *		ExecProcNode
@@ -787,7 +762,18 @@ extern bool RelationFindReplTupleByIndex(Relation rel, Oid idxoid,
 										 TupleTableSlot *outslot);
 extern bool RelationFindReplTupleSeq(Relation rel, LockTupleMode lockmode,
 									 TupleTableSlot *searchslot, TupleTableSlot *outslot);
-
+extern bool RelationFindDeletedTupleInfoSeq(Relation rel,
+											TupleTableSlot *searchslot,
+											TransactionId oldestxmin,
+											TransactionId *delete_xid,
+											RepOriginId *delete_origin,
+											TimestampTz *delete_time);
+extern bool RelationFindDeletedTupleInfoByIndex(Relation rel, Oid idxoid,
+												TupleTableSlot *searchslot,
+												TransactionId oldestxmin,
+												TransactionId *delete_xid,
+												RepOriginId *delete_origin,
+												TimestampTz *delete_time);
 extern void ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 									 EState *estate, TupleTableSlot *slot);
 extern void ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
@@ -798,8 +784,8 @@ extern void ExecSimpleRelationDelete(ResultRelInfo *resultRelInfo,
 									 TupleTableSlot *searchslot);
 extern void CheckCmdReplicaIdentity(Relation rel, CmdType cmd);
 
-extern void CheckSubscriptionRelkind(char relkind, const char *nspname,
-									 const char *relname);
+extern void CheckSubscriptionRelkind(char localrelkind, char remoterelkind,
+									 const char *nspname, const char *relname);
 
 /*
  * prototypes from functions in nodeModifyTable.c

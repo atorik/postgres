@@ -78,6 +78,17 @@ SELECT num_nonnulls();
 SELECT num_nulls();
 
 --
+-- error_on_null()
+--
+
+SELECT error_on_null(1);
+SELECT error_on_null(NULL::int);
+SELECT error_on_null(NULL::int[]);
+SELECT error_on_null('{1,2,NULL,3}'::int[]);
+SELECT error_on_null(ROW(1,NULL::int));
+SELECT error_on_null(ROW(NULL,NULL));
+
+--
 -- canonicalize_path()
 --
 
@@ -400,9 +411,9 @@ SELECT pg_column_toast_chunk_id(a) IS NULL,
 DROP TABLE test_chunk_id;
 DROP FUNCTION explain_mask_costs(text, bool, bool, bool, bool);
 
--- test stratnum support functions
-SELECT gist_stratnum_common(7);
-SELECT gist_stratnum_common(3);
+-- test stratnum translation support functions
+SELECT gist_translate_cmptype_common(7);
+SELECT gist_translate_cmptype_common(3);
 
 
 -- relpath tests

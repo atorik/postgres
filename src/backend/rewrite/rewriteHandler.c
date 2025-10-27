@@ -923,8 +923,9 @@ rewriteTargetListIU(List *targetList,
 				apply_default = true;
 
 			/*
-			 * Can only insert DEFAULT into generated columns, regardless of
-			 * any OVERRIDING clauses.
+			 * Can only insert DEFAULT into generated columns.  (The
+			 * OVERRIDING clause does not apply to generated columns, so we
+			 * don't consider it here.)
 			 */
 			if (att_tup->attgenerated && !apply_default)
 			{
@@ -4544,7 +4545,7 @@ build_generation_expression(Relation rel, int attrno)
 List *
 QueryRewrite(Query *parsetree)
 {
-	uint64		input_query_id = parsetree->queryId;
+	int64		input_query_id = parsetree->queryId;
 	List	   *querylist;
 	List	   *results;
 	ListCell   *l;

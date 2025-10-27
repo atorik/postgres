@@ -131,7 +131,7 @@ GetPortalByName(const char *name)
 {
 	Portal		portal;
 
-	if (PointerIsValid(name))
+	if (name)
 		PortalHashTableLookup(name, portal);
 	else
 		portal = NULL;
@@ -176,7 +176,7 @@ CreatePortal(const char *name, bool allowDup, bool dupSilent)
 {
 	Portal		portal;
 
-	Assert(PointerIsValid(name));
+	Assert(name);
 
 	portal = GetPortalByName(name);
 	if (PortalIsValid(portal))
@@ -284,8 +284,7 @@ PortalDefineQuery(Portal portal,
 				  const char *sourceText,
 				  CommandTag commandTag,
 				  List *stmts,
-				  CachedPlan *cplan,
-				  CachedPlanSource *plansource)
+				  CachedPlan *cplan)
 {
 	Assert(PortalIsValid(portal));
 	Assert(portal->status == PORTAL_NEW);
@@ -300,7 +299,6 @@ PortalDefineQuery(Portal portal,
 	portal->commandTag = commandTag;
 	portal->stmts = stmts;
 	portal->cplan = cplan;
-	portal->plansource = plansource;
 	portal->status = PORTAL_DEFINED;
 }
 
@@ -427,7 +425,7 @@ MarkPortalDone(Portal portal)
 	 * aborted transaction, this is necessary, or we'd reach AtCleanup_Portals
 	 * with the cleanup hook still unexecuted.
 	 */
-	if (PointerIsValid(portal->cleanup))
+	if (portal->cleanup)
 	{
 		portal->cleanup(portal);
 		portal->cleanup = NULL;
@@ -455,7 +453,7 @@ MarkPortalFailed(Portal portal)
 	 * is necessary, or we'd reach AtCleanup_Portals with the cleanup hook
 	 * still unexecuted.
 	 */
-	if (PointerIsValid(portal->cleanup))
+	if (portal->cleanup)
 	{
 		portal->cleanup(portal);
 		portal->cleanup = NULL;
@@ -499,7 +497,7 @@ PortalDrop(Portal portal, bool isTopCommit)
 	 * Note: in most paths of control, this will have been done already in
 	 * MarkPortalDone or MarkPortalFailed.  We're just making sure.
 	 */
-	if (PointerIsValid(portal->cleanup))
+	if (portal->cleanup)
 	{
 		portal->cleanup(portal);
 		portal->cleanup = NULL;
@@ -825,7 +823,7 @@ AtAbort_Portals(void)
 		 * Allow portalcmds.c to clean up the state it knows about, if we
 		 * haven't already.
 		 */
-		if (PointerIsValid(portal->cleanup))
+		if (portal->cleanup)
 		{
 			portal->cleanup(portal);
 			portal->cleanup = NULL;
@@ -898,7 +896,7 @@ AtCleanup_Portals(void)
 		 * We had better not call any user-defined code during cleanup, so if
 		 * the cleanup hook hasn't been run yet, too bad; we'll just skip it.
 		 */
-		if (PointerIsValid(portal->cleanup))
+		if (portal->cleanup)
 		{
 			elog(WARNING, "skipping cleanup for portal \"%s\"", portal->name);
 			portal->cleanup = NULL;
@@ -1058,7 +1056,7 @@ AtSubAbort_Portals(SubTransactionId mySubid,
 		 * Allow portalcmds.c to clean up the state it knows about, if we
 		 * haven't already.
 		 */
-		if (PointerIsValid(portal->cleanup))
+		if (portal->cleanup)
 		{
 			portal->cleanup(portal);
 			portal->cleanup = NULL;
@@ -1117,7 +1115,7 @@ AtSubCleanup_Portals(SubTransactionId mySubid)
 		 * We had better not call any user-defined code during cleanup, so if
 		 * the cleanup hook hasn't been run yet, too bad; we'll just skip it.
 		 */
-		if (PointerIsValid(portal->cleanup))
+		if (portal->cleanup)
 		{
 			elog(WARNING, "skipping cleanup for portal \"%s\"", portal->name);
 			portal->cleanup = NULL;

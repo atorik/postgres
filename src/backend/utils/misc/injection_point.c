@@ -541,14 +541,14 @@ InjectionPointLoad(const char *name)
  * Execute an injection point, if defined.
  */
 void
-InjectionPointRun(const char *name)
+InjectionPointRun(const char *name, void *arg)
 {
 #ifdef USE_INJECTION_POINTS
 	InjectionPointCacheEntry *cache_entry;
 
 	cache_entry = InjectionPointCacheRefresh(name);
 	if (cache_entry)
-		cache_entry->callback(name, cache_entry->private_data);
+		cache_entry->callback(name, cache_entry->private_data, arg);
 #else
 	elog(ERROR, "Injection points are not supported by this build");
 #endif
@@ -558,14 +558,14 @@ InjectionPointRun(const char *name)
  * Execute an injection point directly from the cache, if defined.
  */
 void
-InjectionPointCached(const char *name)
+InjectionPointCached(const char *name, void *arg)
 {
 #ifdef USE_INJECTION_POINTS
 	InjectionPointCacheEntry *cache_entry;
 
 	cache_entry = injection_point_cache_get(name);
 	if (cache_entry)
-		cache_entry->callback(name, cache_entry->private_data);
+		cache_entry->callback(name, cache_entry->private_data, arg);
 #else
 	elog(ERROR, "Injection points are not supported by this build");
 #endif
@@ -582,5 +582,51 @@ IsInjectionPointAttached(const char *name)
 #else
 	elog(ERROR, "Injection points are not supported by this build");
 	return false;				/* silence compiler */
+#endif
+}
+
+/*
+ * Retrieve a list of all the injection points currently attached.
+ *
+ * This list is palloc'd in the current memory context.
+ */
+List *
+InjectionPointList(void)
+{
+#ifdef USE_INJECTION_POINTS
+	List	   *inj_points = NIL;
+	uint32		max_inuse;
+
+	LWLockAcquire(InjectionPointLock, LW_SHARED);
+
+	max_inuse = pg_atomic_read_u32(&ActiveInjectionPoints->max_inuse);
+
+	for (uint32 idx = 0; idx < max_inuse; idx++)
+	{
+		InjectionPointEntry *entry;
+		InjectionPointData *inj_point;
+		uint64		generation;
+
+		entry = &ActiveInjectionPoints->entries[idx];
+		generation = pg_atomic_read_u64(&entry->generation);
+
+		/* skip free slots */
+		if (generation % 2 == 0)
+			continue;
+
+		inj_point = (InjectionPointData *) palloc0(sizeof(InjectionPointData));
+		inj_point->name = pstrdup(entry->name);
+		inj_point->library = pstrdup(entry->library);
+		inj_point->function = pstrdup(entry->function);
+		inj_points = lappend(inj_points, inj_point);
+	}
+
+	LWLockRelease(InjectionPointLock);
+
+	return inj_points;
+
+#else
+	elog(ERROR, "Injection points are not supported by this build");
+	return NIL;					/* keep compiler quiet */
 #endif
 }

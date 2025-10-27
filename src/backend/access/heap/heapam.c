@@ -213,6 +213,27 @@ static const int MultiXactStatusLock[MaxMultiXactStatus + 1] =
 #define TUPLOCK_from_mxstatus(status) \
 			(MultiXactStatusLock[(status)])
 
+/*
+ * Check that we have a valid snapshot if we might need TOAST access.
+ */
+static inline void
+AssertHasSnapshotForToast(Relation rel)
+{
+#ifdef USE_ASSERT_CHECKING
+
+	/* bootstrap mode in particular breaks this rule */
+	if (!IsNormalProcessingMode())
+		return;
+
+	/* if the relation doesn't have a TOAST table, we are good */
+	if (!OidIsValid(rel->rd_rel->reltoastrelid))
+		return;
+
+	Assert(HaveRegisteredOrActiveSnapshot());
+
+#endif							/* USE_ASSERT_CHECKING */
+}
+
 /* ----------------------------------------------------------------
  *						 heap support routines
  * ----------------------------------------------------------------
@@ -1121,6 +1142,17 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 	 */
 	if (!(snapshot && IsMVCCSnapshot(snapshot)))
 		scan->rs_base.rs_flags &= ~SO_ALLOW_PAGEMODE;
+
+	/* Check that a historic snapshot is not used for non-catalog tables */
+	if (snapshot &&
+		IsHistoricMVCCSnapshot(snapshot) &&
+		!RelationIsAccessibleInLogicalDecoding(relation))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
+				 errmsg("cannot query non-catalog table \"%s\" during logical decoding",
+						RelationGetRelationName(relation))));
+	}
 
 	/*
 	 * For seqscan and sample scans in a serializable transaction, acquire a
@@ -2066,6 +2098,8 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	Assert(HeapTupleHeaderGetNatts(tup->t_data) <=
 		   RelationGetNumberOfAttributes(relation));
 
+	AssertHasSnapshotForToast(relation);
+
 	/*
 	 * Fill in tuple header fields and toast the tuple if necessary.
 	 *
@@ -2343,6 +2377,8 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 	/* currently not needed (thus unsupported) for heap_multi_insert() */
 	Assert(!(options & HEAP_INSERT_NO_LOGICAL));
 
+	AssertHasSnapshotForToast(relation);
+
 	needwal = RelationNeedsWAL(relation);
 	saveFreeSpace = RelationGetTargetPageFreeSpace(relation,
 												   HEAP_DEFAULT_FILLFACTOR);
@@ -2430,7 +2466,11 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 		starting_with_empty_page = PageGetMaxOffsetNumber(page) == 0;
 
 		if (starting_with_empty_page && (options & HEAP_INSERT_FROZEN))
+		{
 			all_frozen_set = true;
+			/* Lock the vmbuffer before entering the critical section */
+			LockBuffer(vmbuffer, BUFFER_LOCK_EXCLUSIVE);
+		}
 
 		/* NO EREPORT(ERROR) from here till changes are logged */
 		START_CRIT_SECTION();
@@ -2470,7 +2510,8 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 		 * going to add further frozen rows to it.
 		 *
 		 * If we're only adding already frozen rows to a previously empty
-		 * page, mark it as all-visible.
+		 * page, mark it as all-frozen and update the visibility map. We're
+		 * already holding a pin on the vmbuffer.
 		 */
 		if (PageIsAllVisible(page) && !(options & HEAP_INSERT_FROZEN))
 		{
@@ -2481,7 +2522,14 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 								vmbuffer, VISIBILITYMAP_VALID_BITS);
 		}
 		else if (all_frozen_set)
+		{
 			PageSetAllVisible(page);
+			visibilitymap_set_vmbits(BufferGetBlockNumber(buffer),
+									 vmbuffer,
+									 VISIBILITYMAP_ALL_VISIBLE |
+									 VISIBILITYMAP_ALL_FROZEN,
+									 relation->rd_locator);
+		}
 
 		/*
 		 * XXX Should we set PageSetPrunable on this page ? See heap_insert()
@@ -2529,6 +2577,12 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 			xlrec->flags = 0;
 			if (all_visible_cleared)
 				xlrec->flags = XLH_INSERT_ALL_VISIBLE_CLEARED;
+
+			/*
+			 * We don't have to worry about including a conflict xid in the
+			 * WAL record, as HEAP_INSERT_FROZEN intentionally violates
+			 * visibility rules.
+			 */
 			if (all_frozen_set)
 				xlrec->flags = XLH_INSERT_ALL_FROZEN_SET;
 
@@ -2592,6 +2646,8 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 			XLogBeginInsert();
 			XLogRegisterData(xlrec, tupledata - scratch.data);
 			XLogRegisterBuffer(0, buffer, REGBUF_STANDARD | bufflags);
+			if (all_frozen_set)
+				XLogRegisterBuffer(1, vmbuffer, 0);
 
 			XLogRegisterBufData(0, tupledata, totaldatalen);
 
@@ -2601,29 +2657,17 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 			recptr = XLogInsert(RM_HEAP2_ID, info);
 
 			PageSetLSN(page, recptr);
+			if (all_frozen_set)
+			{
+				Assert(BufferIsDirty(vmbuffer));
+				PageSetLSN(BufferGetPage(vmbuffer), recptr);
+			}
 		}
 
 		END_CRIT_SECTION();
 
-		/*
-		 * If we've frozen everything on the page, update the visibilitymap.
-		 * We're already holding pin on the vmbuffer.
-		 */
 		if (all_frozen_set)
-		{
-			Assert(PageIsAllVisible(page));
-			Assert(visibilitymap_pin_ok(BufferGetBlockNumber(buffer), vmbuffer));
-
-			/*
-			 * It's fine to use InvalidTransactionId here - this is only used
-			 * when HEAP_INSERT_FROZEN is specified, which intentionally
-			 * violates visibility rules.
-			 */
-			visibilitymap_set(relation, BufferGetBlockNumber(buffer), buffer,
-							  InvalidXLogRecPtr, vmbuffer,
-							  InvalidTransactionId,
-							  VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN);
-		}
+			LockBuffer(vmbuffer, BUFFER_LOCK_UNLOCK);
 
 		UnlockReleaseBuffer(buffer);
 		ndone += nthispage;
@@ -2764,6 +2808,8 @@ heap_delete(Relation relation, ItemPointer tid,
 	bool		old_key_copied = false;
 
 	Assert(ItemPointerIsValid(tid));
+
+	AssertHasSnapshotForToast(relation);
 
 	/*
 	 * Forbid this during a parallel operation, lest it allocate a combo CID.
@@ -3260,6 +3306,8 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 	Assert(HeapTupleHeaderGetNatts(newtup->t_data) <=
 		   RelationGetNumberOfAttributes(relation));
 
+	AssertHasSnapshotForToast(relation);
+
 	/*
 	 * Forbid this during a parallel operation, lest it allocate a combo CID.
 	 * Other workers might need that combo CID for visibility checks, and we
@@ -3304,7 +3352,7 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 	interesting_attrs = bms_add_members(interesting_attrs, id_attrs);
 
 	block = ItemPointerGetBlockNumber(otid);
-	INJECTION_POINT("heap_update-before-pin");
+	INJECTION_POINT("heap_update-before-pin", NULL);
 	buffer = ReadBuffer(relation, block);
 	page = BufferGetPage(buffer);
 
@@ -4515,7 +4563,6 @@ get_mxact_status_for_lock(LockTupleMode mode, bool is_update)
  *
  * Input parameters:
  *	relation: relation containing tuple (caller must hold suitable lock)
- *	tid: TID of tuple to lock
  *	cid: current command ID (used for visibility test, and stored into
  *		tuple's cmax if lock is successful)
  *	mode: indicates if shared or exclusive tuple lock is desired
@@ -4953,7 +5000,7 @@ l3:
 					case LockWaitError:
 						if (!ConditionalMultiXactIdWait((MultiXactId) xwait,
 														status, infomask, relation,
-														NULL, log_lock_failure))
+														NULL, log_lock_failures))
 							ereport(ERROR,
 									(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
 									 errmsg("could not obtain lock on row in relation \"%s\"",
@@ -4991,7 +5038,7 @@ l3:
 						}
 						break;
 					case LockWaitError:
-						if (!ConditionalXactLockTableWait(xwait, log_lock_failure))
+						if (!ConditionalXactLockTableWait(xwait, log_lock_failures))
 							ereport(ERROR,
 									(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
 									 errmsg("could not obtain lock on row in relation \"%s\"",
@@ -5256,7 +5303,7 @@ heap_acquire_tuplock(Relation relation, ItemPointer tid, LockTupleMode mode,
 			break;
 
 		case LockWaitError:
-			if (!ConditionalLockTupleTuplock(relation, tid, mode, log_lock_failure))
+			if (!ConditionalLockTupleTuplock(relation, tid, mode, log_lock_failures))
 				ereport(ERROR,
 						(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
 						 errmsg("could not obtain lock on row in relation \"%s\"",
@@ -6059,7 +6106,7 @@ heap_finish_speculative(Relation relation, ItemPointer tid)
 
 	buffer = ReadBuffer(relation, ItemPointerGetBlockNumber(tid));
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
-	page = (Page) BufferGetPage(buffer);
+	page = BufferGetPage(buffer);
 
 	offnum = ItemPointerGetOffsetNumber(tid);
 	if (PageGetMaxOffsetNumber(page) >= offnum)

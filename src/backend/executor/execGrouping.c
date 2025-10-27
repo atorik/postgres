@@ -144,7 +144,7 @@ execTuplesHashPrepare(int numCols,
  *	hashfunctions: FmgrInfos of datatype-specific hashing functions to use
  *	collations: collations to use in comparisons
  *	nbuckets: initial estimate of hashtable size
- *	additionalsize: size of data stored in ->additional
+ *	additionalsize: size of data that may be stored along with the hash entry
  *	metacxt: memory context for long-lived allocation, but not per-entry data
  *	tablecxt: memory context in which to store table entries
  *	tempcxt: short-lived context for evaluation hash and comparison functions
@@ -156,6 +156,12 @@ execTuplesHashPrepare(int numCols,
  *
  * Note that the keyColIdx, hashfunctions, and collations arrays must be
  * allocated in storage that will live as long as the hashtable does.
+ *
+ * LookupTupleHashEntry, FindTupleHashEntry, and related functions may leak
+ * memory in the tempcxt.  It is caller's responsibility to reset that context
+ * reasonably often, typically once per tuple.  (We do it that way, rather
+ * than managing an extra context within the hashtable, because in many cases
+ * the caller can specify a tempcxt that it needs to reset per-tuple anyway.)
  */
 TupleHashTable
 BuildTupleHashTable(PlanState *parent,
@@ -288,7 +294,7 @@ ResetTupleHashTable(TupleHashTable hashtable)
  *
  * If isnew isn't NULL, then a new entry is created if no existing entry
  * matches.  On return, *isnew is true if the entry is newly created,
- * false if it existed already.  ->additional_data in the new entry has
+ * false if it existed already.  The additional data in the new entry has
  * been zeroed.
  */
 TupleHashEntry

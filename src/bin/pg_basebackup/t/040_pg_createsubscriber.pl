@@ -331,7 +331,7 @@ $node_p->safe_psql($db1,
 $node_p->wait_for_replay_catchup($node_s);
 
 # Create user-defined publications, wait for streaming replication to sync them
-# to the standby, then verify that '--remove'
+# to the standby, then verify that '--clean'
 # removes them.
 $node_p->safe_psql(
 	$db1, qq(
@@ -341,8 +341,8 @@ $node_p->safe_psql(
 
 $node_p->wait_for_replay_catchup($node_s);
 
-ok($node_s->safe_psql($db1, "SELECT COUNT(*) = 2 FROM pg_publication"),
-	'two pre-existing publications on subscriber');
+is($node_s->safe_psql($db1, "SELECT COUNT(*) FROM pg_publication"),
+	'2', 'two pre-existing publications on subscriber');
 
 $node_s->stop;
 
@@ -399,7 +399,7 @@ command_fails_like(
 		'--database' => $db1,
 		'--all',
 	],
-	qr/--database cannot be used with -a\/--all/,
+	qr/options --database and -a\/--all cannot be used together/,
 	'fail if --database is used with --all');
 
 # run pg_createsubscriber with '--publication' and '--all' and verify
@@ -416,7 +416,7 @@ command_fails_like(
 		'--all',
 		'--publication' => 'pub1',
 	],
-	qr/--publication cannot be used with -a\/--all/,
+	qr/options --publication and -a\/--all cannot be used together/,
 	'fail if --publication is used with --all');
 
 # run pg_createsubscriber with '--all' option
@@ -446,7 +446,7 @@ is(scalar(() = $stderr =~ /creating subscription/g),
 # Run pg_createsubscriber on node S.  --verbose is used twice
 # to show more information.
 # In passing, also test the --enable-two-phase option and
-# --remove option
+# --clean option
 command_ok(
 	[
 		'pg_createsubscriber',
@@ -463,7 +463,7 @@ command_ok(
 		'--database' => $db1,
 		'--database' => $db2,
 		'--enable-two-phase',
-		'--remove' => 'publications',
+		'--clean' => 'publications',
 	],
 	'run pg_createsubscriber on node S');
 
@@ -535,7 +535,7 @@ my $sysid_p = $node_p->safe_psql('postgres',
 	'SELECT system_identifier FROM pg_control_system()');
 my $sysid_s = $node_s->safe_psql('postgres',
 	'SELECT system_identifier FROM pg_control_system()');
-ok($sysid_p != $sysid_s, 'system identifier was changed');
+isnt($sysid_p, $sysid_s, 'system identifier was changed');
 
 # clean up
 $node_p->teardown_node;

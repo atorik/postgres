@@ -267,7 +267,6 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
-#include "utils/dynahash.h"
 #include "utils/expandeddatum.h"
 #include "utils/injection_point.h"
 #include "utils/logtape.h"
@@ -1492,7 +1491,7 @@ build_hash_tables(AggState *aggstate)
 		if (IS_INJECTION_POINT_ATTACHED("hash-aggregate-oversize-table"))
 		{
 			nbuckets = memory / TupleHashEntrySize();
-			INJECTION_POINT_CACHED("hash-aggregate-oversize-table");
+			INJECTION_POINT_CACHED("hash-aggregate-oversize-table", NULL);
 		}
 #endif
 
@@ -1882,7 +1881,7 @@ hash_agg_check_limits(AggState *aggstate)
 		if (IS_INJECTION_POINT_ATTACHED("hash-aggregate-spill-1000"))
 		{
 			do_spill = true;
-			INJECTION_POINT_CACHED("hash-aggregate-spill-1000");
+			INJECTION_POINT_CACHED("hash-aggregate-spill-1000", NULL);
 		}
 	}
 #endif
@@ -1910,7 +1909,7 @@ hash_agg_check_limits(AggState *aggstate)
 static void
 hash_agg_enter_spill_mode(AggState *aggstate)
 {
-	INJECTION_POINT("hash-aggregate-enter-spill-mode");
+	INJECTION_POINT("hash-aggregate-enter-spill-mode", NULL);
 	aggstate->hash_spill_mode = true;
 	hashagg_recompile_expressions(aggstate, aggstate->table_filled, true);
 
@@ -2115,7 +2114,7 @@ hash_choose_num_partitions(double input_groups, double hashentrysize,
 	npartitions = (int) dpartitions;
 
 	/* ceil(log2(npartitions)) */
-	partition_bits = my_log2(npartitions);
+	partition_bits = pg_ceil_log2_32(npartitions);
 
 	/* make sure that we don't exhaust the hash bits */
 	if (partition_bits + used_bits >= 32)
@@ -2739,7 +2738,7 @@ agg_refill_hash_table(AggState *aggstate)
 	 */
 	hashagg_recompile_expressions(aggstate, true, true);
 
-	INJECTION_POINT("hash-aggregate-process-batch");
+	INJECTION_POINT("hash-aggregate-process-batch", NULL);
 	for (;;)
 	{
 		TupleTableSlot *spillslot = aggstate->hash_spill_rslot;
@@ -2912,7 +2911,7 @@ agg_retrieve_hash_table_in_memory(AggState *aggstate)
 
 				perhash = &aggstate->perhash[aggstate->current_set];
 
-				ResetTupleHashIterator(hashtable, &perhash->hashiter);
+				ResetTupleHashIterator(perhash->hashtable, &perhash->hashiter);
 
 				continue;
 			}
@@ -2995,7 +2994,7 @@ hashagg_spill_init(HashAggSpill *spill, LogicalTapeSet *tapeset, int used_bits,
 	{
 		npartitions = 1;
 		partition_bits = 0;
-		INJECTION_POINT_CACHED("hash-aggregate-single-partition");
+		INJECTION_POINT_CACHED("hash-aggregate-single-partition", NULL);
 	}
 #endif
 
