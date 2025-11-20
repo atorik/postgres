@@ -72,16 +72,14 @@ $psql_session1->query_until(
 $node->wait_for_event('client backend', 'advisory');
 
 # Run pg_log_query_plan().
-# Then commit the session 2 to release the advisory lock.
-$psql_session2->query_safe(
-	qq[
-	SELECT pg_log_query_plan($session1_pid);
-	COMMIT;
-]);
+$psql_session2->query_safe("SELECT pg_log_query_plan($session1_pid);");
 
 # Ensure that the signal of pg_log_query_plan() is actually
 # rececived by confirming session1 is waiting on the injection point.
 $node->wait_for_event('client backend', 'log-query-interrupt');
+
+# Commit the session 2 to release the advisory lock.
+$psql_session2->query_safe("COMMIT;");
 
 my $log_offset = -s $node->logfile;
 
