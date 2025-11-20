@@ -430,7 +430,7 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 			{
 				IndexTuple	thistup = (IndexTuple) data;
 
-				if (PageAddItem(ptr->page, (Item) data, IndexTupleSize(thistup), i + FirstOffsetNumber, false, false) == InvalidOffsetNumber)
+				if (PageAddItem(ptr->page, data, IndexTupleSize(thistup), i + FirstOffsetNumber, false, false) == InvalidOffsetNumber)
 					elog(ERROR, "failed to add item to index page in \"%s\"", RelationGetRelationName(rel));
 
 				/*
@@ -551,8 +551,7 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 			if (ntup == 1)
 			{
 				/* One-for-one replacement, so use PageIndexTupleOverwrite */
-				if (!PageIndexTupleOverwrite(page, oldoffnum, (Item) *itup,
-											 IndexTupleSize(*itup)))
+				if (!PageIndexTupleOverwrite(page, oldoffnum, *itup, IndexTupleSize(*itup)))
 					elog(ERROR, "failed to add item to index page in \"%s\"",
 						 RelationGetRelationName(rel));
 			}
@@ -683,7 +682,7 @@ gistdoinsert(Relation r, IndexTuple itup, Size freespace,
 			state.stack = stack = stack->parent;
 		}
 
-		if (XLogRecPtrIsInvalid(stack->lsn))
+		if (!XLogRecPtrIsValid(stack->lsn))
 			stack->buffer = ReadBuffer(state.r, stack->blkno);
 
 		/*
@@ -699,7 +698,7 @@ gistdoinsert(Relation r, IndexTuple itup, Size freespace,
 		stack->page = BufferGetPage(stack->buffer);
 		stack->lsn = xlocked ?
 			PageGetLSN(stack->page) : BufferGetLSNAtomic(stack->buffer);
-		Assert(!RelationNeedsWAL(state.r) || !XLogRecPtrIsInvalid(stack->lsn));
+		Assert(!RelationNeedsWAL(state.r) || XLogRecPtrIsValid(stack->lsn));
 
 		/*
 		 * If this page was split but the downlink was never inserted to the

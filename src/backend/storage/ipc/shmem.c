@@ -76,6 +76,7 @@
 #include "utils/builtins.h"
 
 static void *ShmemAllocRaw(Size size, Size *allocated_size);
+static void *ShmemAllocUnlocked(Size size);
 
 /* shared memory global variables */
 
@@ -234,7 +235,7 @@ ShmemAllocRaw(Size size, Size *allocated_size)
  *
  * We consider maxalign, rather than cachealign, sufficient here.
  */
-void *
+static void *
 ShmemAllocUnlocked(Size size)
 {
 	Size		newStart;
@@ -606,16 +607,13 @@ pg_get_shmem_allocations_numa(PG_FUNCTION_ARGS)
 	nodes = palloc(sizeof(Size) * (max_nodes + 1));
 
 	/*
-	 * Different database block sizes (4kB, 8kB, ..., 32kB) can be used, while
-	 * the OS may have different memory page sizes.
+	 * Shared memory allocations can vary in size and may not align with OS
+	 * memory page boundaries, while NUMA queries work on pages.
 	 *
-	 * To correctly map between them, we need to: 1. Determine the OS memory
-	 * page size 2. Calculate how many OS pages are used by all buffer blocks
-	 * 3. Calculate how many OS pages are contained within each database
-	 * block.
-	 *
-	 * This information is needed before calling move_pages() for NUMA memory
-	 * node inquiry.
+	 * To correctly map each allocation to NUMA nodes, we need to: 1.
+	 * Determine the OS memory page size. 2. Align each allocation's start/end
+	 * addresses to page boundaries. 3. Query NUMA node information for all
+	 * pages spanning the allocation.
 	 */
 	os_page_size = pg_get_shmem_pagesize();
 

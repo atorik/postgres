@@ -1221,6 +1221,7 @@ CREATE VIEW pg_stat_wal AS
         w.wal_records,
         w.wal_fpi,
         w.wal_bytes,
+        w.wal_fpi_bytes,
         w.wal_buffers_full,
         w.stats_reset
     FROM pg_stat_get_wal() w;
@@ -1414,7 +1415,8 @@ CREATE VIEW pg_stat_subscription_stats AS
         ss.subid,
         s.subname,
         ss.apply_error_count,
-        ss.sync_error_count,
+        ss.sync_seq_error_count,
+        ss.sync_table_error_count,
         ss.confl_insert_exists,
         ss.confl_update_origin_differs,
         ss.confl_update_exists,

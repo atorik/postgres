@@ -100,14 +100,17 @@ char	   *localized_full_days[7 + 1];
 char	   *localized_abbrev_months[12 + 1];
 char	   *localized_full_months[12 + 1];
 
-/* is the databases's LC_CTYPE the C locale? */
-bool		database_ctype_is_c = false;
-
 static pg_locale_t default_locale = NULL;
 
 /* indicates whether locale information cache is valid */
 static bool CurrentLocaleConvValid = false;
 static bool CurrentLCTimeValid = false;
+
+static struct pg_locale_struct c_locale = {
+	.deterministic = true,
+	.collate_is_c = true,
+	.ctype_is_c = true,
+};
 
 /* Cache for collation-related knowledge */
 
@@ -1187,6 +1190,13 @@ pg_newlocale_from_collation(Oid collid)
 
 	if (collid == DEFAULT_COLLATION_OID)
 		return default_locale;
+
+	/*
+	 * Some callers expect C_COLLATION_OID to succeed even without catalog
+	 * access.
+	 */
+	if (collid == C_COLLATION_OID)
+		return &c_locale;
 
 	if (!OidIsValid(collid))
 		elog(ERROR, "cache lookup failed for collation %u", collid);

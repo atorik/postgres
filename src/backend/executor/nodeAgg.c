@@ -402,12 +402,12 @@ static void find_cols(AggState *aggstate, Bitmapset **aggregated,
 					  Bitmapset **unaggregated);
 static bool find_cols_walker(Node *node, FindColsContext *context);
 static void build_hash_tables(AggState *aggstate);
-static void build_hash_table(AggState *aggstate, int setno, long nbuckets);
+static void build_hash_table(AggState *aggstate, int setno, double nbuckets);
 static void hashagg_recompile_expressions(AggState *aggstate, bool minslot,
 										  bool nullcheck);
 static void hash_create_memory(AggState *aggstate);
-static long hash_choose_num_buckets(double hashentrysize,
-									long ngroups, Size memory);
+static double hash_choose_num_buckets(double hashentrysize,
+									  double ngroups, Size memory);
 static int	hash_choose_num_partitions(double input_groups,
 									   double hashentrysize,
 									   int used_bits,
@@ -1457,7 +1457,7 @@ find_cols_walker(Node *node, FindColsContext *context)
  * We have a separate hashtable and associated perhash data structure for each
  * grouping set for which we're doing hashing.
  *
- * The contents of the hash tables always live in the hashcontext's per-tuple
+ * The contents of the hash tables live in the aggstate's hash_tuplescxt
  * memory context (there is only one of these for all tables together, since
  * they are all reset at the same time).
  */
@@ -1469,7 +1469,7 @@ build_hash_tables(AggState *aggstate)
 	for (setno = 0; setno < aggstate->num_hashes; ++setno)
 	{
 		AggStatePerHash perhash = &aggstate->perhash[setno];
-		long		nbuckets;
+		double		nbuckets;
 		Size		memory;
 
 		if (perhash->hashtable != NULL)
@@ -1477,8 +1477,6 @@ build_hash_tables(AggState *aggstate)
 			ResetTupleHashTable(perhash->hashtable);
 			continue;
 		}
-
-		Assert(perhash->aggnode->numGroups > 0);
 
 		memory = aggstate->hash_mem_limit / aggstate->num_hashes;
 
@@ -1505,11 +1503,11 @@ build_hash_tables(AggState *aggstate)
  * Build a single hashtable for this grouping set.
  */
 static void
-build_hash_table(AggState *aggstate, int setno, long nbuckets)
+build_hash_table(AggState *aggstate, int setno, double nbuckets)
 {
 	AggStatePerHash perhash = &aggstate->perhash[setno];
 	MemoryContext metacxt = aggstate->hash_metacxt;
-	MemoryContext tablecxt = aggstate->hash_tablecxt;
+	MemoryContext tuplescxt = aggstate->hash_tuplescxt;
 	MemoryContext tmpcxt = aggstate->tmpcontext->ecxt_per_tuple_memory;
 	Size		additionalsize;
 
@@ -1535,7 +1533,7 @@ build_hash_table(AggState *aggstate, int setno, long nbuckets)
 											 nbuckets,
 											 additionalsize,
 											 metacxt,
-											 tablecxt,
+											 tuplescxt,
 											 tmpcxt,
 											 DO_AGGSPLIT_SKIPFINAL(aggstate->aggsplit));
 }
@@ -1868,7 +1866,7 @@ hash_agg_check_limits(AggState *aggstate)
 	uint64		ngroups = aggstate->hash_ngroups_current;
 	Size		meta_mem = MemoryContextMemAllocated(aggstate->hash_metacxt,
 													 true);
-	Size		entry_mem = MemoryContextMemAllocated(aggstate->hash_tablecxt,
+	Size		entry_mem = MemoryContextMemAllocated(aggstate->hash_tuplescxt,
 													  true);
 	Size		tval_mem = MemoryContextMemAllocated(aggstate->hashcontext->ecxt_per_tuple_memory,
 													 true);
@@ -1959,7 +1957,7 @@ hash_agg_update_metrics(AggState *aggstate, bool from_tape, int npartitions)
 	meta_mem = MemoryContextMemAllocated(aggstate->hash_metacxt, true);
 
 	/* memory for hash entries */
-	entry_mem = MemoryContextMemAllocated(aggstate->hash_tablecxt, true);
+	entry_mem = MemoryContextMemAllocated(aggstate->hash_tuplescxt, true);
 
 	/* memory for byref transition states */
 	hashkey_mem = MemoryContextMemAllocated(aggstate->hashcontext->ecxt_per_tuple_memory, true);
@@ -2042,22 +2040,22 @@ hash_create_memory(AggState *aggstate)
 	/* and no smaller than ALLOCSET_DEFAULT_INITSIZE */
 	maxBlockSize = Max(maxBlockSize, ALLOCSET_DEFAULT_INITSIZE);
 
-	aggstate->hash_tablecxt = BumpContextCreate(aggstate->ss.ps.state->es_query_cxt,
-												"HashAgg table context",
-												ALLOCSET_DEFAULT_MINSIZE,
-												ALLOCSET_DEFAULT_INITSIZE,
-												maxBlockSize);
+	aggstate->hash_tuplescxt = BumpContextCreate(aggstate->ss.ps.state->es_query_cxt,
+												 "HashAgg hashed tuples",
+												 ALLOCSET_DEFAULT_MINSIZE,
+												 ALLOCSET_DEFAULT_INITSIZE,
+												 maxBlockSize);
 
 }
 
 /*
  * Choose a reasonable number of buckets for the initial hash table size.
  */
-static long
-hash_choose_num_buckets(double hashentrysize, long ngroups, Size memory)
+static double
+hash_choose_num_buckets(double hashentrysize, double ngroups, Size memory)
 {
-	long		max_nbuckets;
-	long		nbuckets = ngroups;
+	double		max_nbuckets;
+	double		nbuckets = ngroups;
 
 	max_nbuckets = memory / hashentrysize;
 
@@ -2065,12 +2063,16 @@ hash_choose_num_buckets(double hashentrysize, long ngroups, Size memory)
 	 * Underestimating is better than overestimating. Too many buckets crowd
 	 * out space for group keys and transition state values.
 	 */
-	max_nbuckets >>= 1;
+	max_nbuckets /= 2;
 
 	if (nbuckets > max_nbuckets)
 		nbuckets = max_nbuckets;
 
-	return Max(nbuckets, 1);
+	/*
+	 * BuildTupleHashTable will clamp any obviously-insane result, so we don't
+	 * need to be too careful here.
+	 */
+	return nbuckets;
 }
 
 /*
@@ -2707,7 +2709,6 @@ agg_refill_hash_table(AggState *aggstate)
 
 	/* free memory and reset hash tables */
 	ReScanExprContext(aggstate->hashcontext);
-	MemoryContextReset(aggstate->hash_tablecxt);
 	for (int setno = 0; setno < aggstate->num_hashes; setno++)
 		ResetTupleHashTable(aggstate->perhash[setno].hashtable);
 
@@ -3687,7 +3688,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	if (use_hashing)
 	{
 		Plan	   *outerplan = outerPlan(node);
-		uint64		totalGroups = 0;
+		double		totalGroups = 0;
 
 		aggstate->hash_spill_rslot = ExecInitExtraTupleSlot(estate, scanDesc,
 															&TTSOpsMinimalTuple);
@@ -4428,17 +4429,17 @@ ExecEndAgg(AggState *node)
 
 	hashagg_reset_spill_state(node);
 
+	/* Release hash tables too */
 	if (node->hash_metacxt != NULL)
 	{
 		MemoryContextDelete(node->hash_metacxt);
 		node->hash_metacxt = NULL;
 	}
-	if (node->hash_tablecxt != NULL)
+	if (node->hash_tuplescxt != NULL)
 	{
-		MemoryContextDelete(node->hash_tablecxt);
-		node->hash_tablecxt = NULL;
+		MemoryContextDelete(node->hash_tuplescxt);
+		node->hash_tuplescxt = NULL;
 	}
-
 
 	for (transno = 0; transno < node->numtrans; transno++)
 	{
@@ -4555,8 +4556,7 @@ ExecReScanAgg(AggState *node)
 		node->hash_ngroups_current = 0;
 
 		ReScanExprContext(node->hashcontext);
-		MemoryContextReset(node->hash_tablecxt);
-		/* Rebuild an empty hash table */
+		/* Rebuild empty hash table(s) */
 		build_hash_tables(node);
 		node->table_filled = false;
 		/* iterator will be reset when the table is filled */

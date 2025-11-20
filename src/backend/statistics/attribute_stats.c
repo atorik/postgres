@@ -36,6 +36,11 @@
 #define DEFAULT_AVG_WIDTH      Int32GetDatum(0) /* unknown */
 #define DEFAULT_N_DISTINCT     Float4GetDatum(0.0)	/* unknown */
 
+/*
+ * Positional argument numbers, names, and types for
+ * attribute_statistics_update() and pg_restore_attribute_stats().
+ */
+
 enum attribute_stats_argnum
 {
 	ATTRELSCHEMA_ARG = 0,
@@ -82,6 +87,11 @@ static struct StatsArgInfo attarginfo[] =
 	[NUM_ATTRIBUTE_STATS_ARGS] = {0}
 };
 
+/*
+ * Positional argument numbers, names, and types for
+ * pg_clear_attribute_stats().
+ */
+
 enum clear_attribute_stats_argnum
 {
 	C_ATTRELSCHEMA_ARG = 0,
@@ -115,7 +125,7 @@ static void set_stats_slot(Datum *values, bool *nulls, bool *replaces,
 						   Datum stanumbers, bool stanumbers_isnull,
 						   Datum stavalues, bool stavalues_isnull);
 static void upsert_pg_statistic(Relation starel, HeapTuple oldtup,
-								Datum *values, bool *nulls, bool *replaces);
+								const Datum *values, const bool *nulls, const bool *replaces);
 static bool delete_pg_statistic(Oid reloid, AttrNumber attnum, bool stainherit);
 static void init_empty_stats_tuple(Oid reloid, int16 attnum, bool inherited,
 								   Datum *values, bool *nulls, bool *replaces);
@@ -819,7 +829,7 @@ set_stats_slot(Datum *values, bool *nulls, bool *replaces,
  */
 static void
 upsert_pg_statistic(Relation starel, HeapTuple oldtup,
-					Datum *values, bool *nulls, bool *replaces)
+					const Datum *values, const bool *nulls, const bool *replaces)
 {
 	HeapTuple	newtup;
 

@@ -526,6 +526,7 @@ CopyMethod
 CopyMultiInsertBuffer
 CopyMultiInsertInfo
 CopyOnErrorChoice
+CopySeqResult
 CopySource
 CopyStmt
 CopyToRoutine
@@ -1076,6 +1077,7 @@ GinQualCounts
 GinScanEntry
 GinScanItem
 GinScanKey
+GinScanKeyData
 GinScanOpaque
 GinScanOpaqueData
 GinSegmentInfo
@@ -1321,7 +1323,6 @@ IsForeignRelUpdatable_function
 IsForeignScanParallelSafe_function
 IsoConnInfo
 IspellDict
-Item
 ItemArray
 ItemId
 ItemIdData
@@ -1629,6 +1630,7 @@ LogicalRepRelId
 LogicalRepRelMapEntry
 LogicalRepRelation
 LogicalRepRollbackPreparedTxnData
+LogicalRepSequenceInfo
 LogicalRepStreamAbortData
 LogicalRepTupleData
 LogicalRepTyp
@@ -1647,6 +1649,9 @@ LtreeGistOptions
 LtreeSignature
 MAGIC
 MBuf
+MCVHashContext
+MCVHashEntry
+MCVHashTable_hash
 MCVItem
 MCVList
 MEMORY_BASIC_INFORMATION
@@ -2363,6 +2368,7 @@ PublicationObjSpec
 PublicationObjSpecType
 PublicationPartOpt
 PublicationRelInfo
+PublicationRelKind
 PublicationSchemaInfo
 PublicationTable
 PublishGencolsType
@@ -3264,7 +3270,12 @@ WaitEventIO
 WaitEventIPC
 WaitEventSet
 WaitEventTimeout
+WaitLSNType
+WaitLSNState
+WaitLSNProcInfo
+WaitLSNResult
 WaitPMResult
+WaitStmt
 WalCloseMethod
 WalCompression
 WalInsertClass
@@ -3505,6 +3516,8 @@ cb_cleanup_dir
 cb_options
 cb_tablespace
 cb_tablespace_mapping
+char16_t
+char32_t
 check_agg_arguments_context
 check_function_callback
 check_network_data
@@ -3622,6 +3635,7 @@ fe_scram_state
 fe_scram_state_enum
 fetch_range_request
 file_action_t
+file_content_type_t
 file_entry_t
 file_type_t
 filehash_hash
@@ -3807,7 +3821,6 @@ memoize_iterator
 metastring
 missing_cache_key
 mix_data_t
-mixedStruct
 mode_t
 movedb_failure_params
 multirange_bsearch_comparison
@@ -3850,6 +3863,7 @@ pe_test_vector
 pendingPosition
 pending_label
 pgParameterStatus
+pgoff_t
 pg_atomic_flag
 pg_atomic_uint32
 pg_atomic_uint64

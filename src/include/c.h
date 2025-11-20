@@ -60,6 +60,7 @@
 
 /* System header files that should be available everywhere in Postgres */
 #include <inttypes.h>
+#include <stdalign.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -93,8 +94,6 @@
 
 /* ----------------------------------------------------------------
  *				Section 1: compiler characteristics
- *
- * type prefixes (const, signed, volatile, inline) are handled in pg_config.h.
  * ----------------------------------------------------------------
  */
 
@@ -107,6 +106,12 @@
 #undef inline
 #define inline
 #endif
+
+/*
+ * Previously used PostgreSQL-specific spelling, for backward compatibility
+ * for extensions.
+ */
+#define pg_restrict restrict
 
 /*
  * Attribute macros
@@ -1003,29 +1008,29 @@ pg_noreturn extern void ExceptionalCondition(const char *conditionName,
 #define Min(x, y)		((x) < (y) ? (x) : (y))
 
 
-/* Get a bit mask of the bits set in non-long aligned addresses */
-#define LONG_ALIGN_MASK (sizeof(long) - 1)
+/* Get a bit mask of the bits set in non-size_t aligned addresses */
+#define SIZE_T_ALIGN_MASK (sizeof(size_t) - 1)
 
 /*
  * MemSet
  *	Exactly the same as standard library function memset(), but considerably
- *	faster for zeroing small word-aligned structures (such as parsetree nodes).
- *	This has to be a macro because the main point is to avoid function-call
- *	overhead.   However, we have also found that the loop is faster than
- *	native libc memset() on some platforms, even those with assembler
- *	memset() functions.  More research needs to be done, perhaps with
- *	MEMSET_LOOP_LIMIT tests in configure.
+ *	faster for zeroing small size_t-aligned structures (such as parsetree
+ *	nodes).  This has to be a macro because the main point is to avoid
+ *	function-call overhead.  However, we have also found that the loop is
+ *	faster than native libc memset() on some platforms, even those with
+ *	assembler memset() functions.  More research needs to be done, perhaps
+ *	with MEMSET_LOOP_LIMIT tests in configure.
  */
 #define MemSet(start, val, len) \
 	do \
 	{ \
-		/* must be void* because we don't know if it is integer aligned yet */ \
+		/* must be void* because we don't know if it is size_t aligned yet */ \
 		void   *_vstart = (void *) (start); \
 		int		_val = (val); \
 		Size	_len = (len); \
 \
-		if ((((uintptr_t) _vstart) & LONG_ALIGN_MASK) == 0 && \
-			(_len & LONG_ALIGN_MASK) == 0 && \
+		if ((((uintptr_t) _vstart) & SIZE_T_ALIGN_MASK) == 0 && \
+			(_len & SIZE_T_ALIGN_MASK) == 0 && \
 			_val == 0 && \
 			_len <= MEMSET_LOOP_LIMIT && \
 			/* \
@@ -1034,8 +1039,8 @@ pg_noreturn extern void ExceptionalCondition(const char *conditionName,
 			 */ \
 			MEMSET_LOOP_LIMIT != 0) \
 		{ \
-			long *_start = (long *) _vstart; \
-			long *_stop = (long *) ((char *) _start + _len); \
+			size_t *_start = (size_t *) _vstart; \
+			size_t *_stop = (size_t *) ((char *) _start + _len); \
 			while (_start < _stop) \
 				*_start++ = 0; \
 		} \
@@ -1045,23 +1050,23 @@ pg_noreturn extern void ExceptionalCondition(const char *conditionName,
 
 /*
  * MemSetAligned is the same as MemSet except it omits the test to see if
- * "start" is word-aligned.  This is okay to use if the caller knows a-priori
- * that the pointer is suitably aligned (typically, because he just got it
- * from palloc(), which always delivers a max-aligned pointer).
+ * "start" is size_t-aligned.  This is okay to use if the caller knows
+ * a-priori that the pointer is suitably aligned (typically, because he just
+ * got it from palloc(), which always delivers a max-aligned pointer).
  */
 #define MemSetAligned(start, val, len) \
 	do \
 	{ \
-		long   *_start = (long *) (start); \
+		size_t *_start = (size_t *) (start); \
 		int		_val = (val); \
 		Size	_len = (len); \
 \
-		if ((_len & LONG_ALIGN_MASK) == 0 && \
+		if ((_len & SIZE_T_ALIGN_MASK) == 0 && \
 			_val == 0 && \
 			_len <= MEMSET_LOOP_LIMIT && \
 			MEMSET_LOOP_LIMIT != 0) \
 		{ \
-			long *_stop = (long *) ((char *) _start + _len); \
+			size_t *_stop = (size_t *) ((char *) _start + _len); \
 			while (_start < _stop) \
 				*_start++ = 0; \
 		} \
@@ -1371,6 +1376,29 @@ typedef intptr_t sigjmp_buf[5];
 
 /* /port compatibility functions */
 #include "port.h"
+
+/*
+ * char16_t and char32_t
+ *      Unicode code points.
+ *
+ * uchar.h should always be available in C11, but it's not available on
+ * Mac. However, these types are keywords in C++11, so when using C++, we
+ * can't redefine the types.
+ *
+ * XXX: when uchar.h is available everywhere, we can remove this check and
+ * just include uchar.h unconditionally.
+ *
+ * XXX: this section is out of place because uchar.h needs to be included
+ * after port.h, due to an interaction with win32_port.h in some cases.
+ */
+#ifdef HAVE_UCHAR_H
+#include <uchar.h>
+#else
+#ifndef __cplusplus
+typedef uint16_t char16_t;
+typedef uint32_t char32_t;
+#endif
+#endif
 
 /* IWYU pragma: end_exports */
 

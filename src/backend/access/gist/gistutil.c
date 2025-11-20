@@ -44,7 +44,7 @@ gistfillbuffer(Page page, IndexTuple *itup, int len, OffsetNumber off)
 		Size		sz = IndexTupleSize(itup[i]);
 		OffsetNumber l;
 
-		l = PageAddItem(page, (Item) itup[i], sz, off, false, false);
+		l = PageAddItem(page, itup[i], sz, off, false, false);
 		if (l == InvalidOffsetNumber)
 			elog(ERROR, "failed to add item to GiST index page, item %d out of %d, size %d bytes",
 				 i, len, (int) sz);
@@ -1040,7 +1040,7 @@ gistGetFakeLSN(Relation rel)
 		Assert(!RelationNeedsWAL(rel));
 
 		/* No need for an actual record if we already have a distinct LSN */
-		if (!XLogRecPtrIsInvalid(lastlsn) && lastlsn == currlsn)
+		if (XLogRecPtrIsValid(lastlsn) && lastlsn == currlsn)
 			currlsn = gistXLogAssignLSN();
 
 		lastlsn = currlsn;

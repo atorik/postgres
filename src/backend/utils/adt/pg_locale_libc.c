@@ -45,8 +45,7 @@
  *
  * 2. When working in UTF8 encoding, we use the <wctype.h> functions.
  * This assumes that every platform uses Unicode codepoints directly
- * as the wchar_t representation of Unicode.  (XXX: ICU makes this assumption
- * even for non-UTF8 encodings, which may be a problem.)  On some platforms
+ * as the wchar_t representation of Unicode.  On some platforms
  * wchar_t is only 16 bits wide, so we have to punt for codepoints > 0xFFFF.
  *
  * 3. In all other encodings, we use the <ctype.h> functions for pg_wchar
@@ -98,6 +97,9 @@ static int	strncoll_libc_win32_utf8(const char *arg1, ssize_t len1,
 									 const char *arg2, ssize_t len2,
 									 pg_locale_t locale);
 #endif
+
+static size_t char2wchar(wchar_t *to, size_t tolen, const char *from,
+						 size_t fromlen, locale_t loc);
 
 static size_t strlower_libc_sb(char *dest, size_t destsize,
 							   const char *src, ssize_t srclen,
@@ -1141,7 +1143,7 @@ wcstombs_l(char *dest, const wchar_t *src, size_t n, locale_t loc)
 #endif
 
 /*
- * These functions convert from/to libc's wchar_t, *not* pg_wchar_t.
+ * These functions convert from/to libc's wchar_t, *not* pg_wchar.
  * Therefore we keep them here rather than with the mbutils code.
  */
 
@@ -1206,7 +1208,7 @@ wchar2char(char *to, const wchar_t *from, size_t tolen, locale_t loc)
  * input encoding.  tolen is the maximum number of wchar_t's to store at *to.
  * The output will be zero-terminated iff there is room.
  */
-size_t
+static size_t
 char2wchar(wchar_t *to, size_t tolen, const char *from, size_t fromlen,
 		   locale_t loc)
 {

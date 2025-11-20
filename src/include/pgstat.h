@@ -16,6 +16,7 @@
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
 #include "replication/conflict.h"
+#include "replication/worker_internal.h"
 #include "utils/backend_progress.h" /* for backward compatibility */	/* IWYU pragma: export */
 #include "utils/backend_status.h"	/* for backward compatibility */	/* IWYU pragma: export */
 #include "utils/pgstat_kind.h"
@@ -108,7 +109,8 @@ typedef struct PgStat_FunctionCallUsage
 typedef struct PgStat_BackendSubEntry
 {
 	PgStat_Counter apply_error_count;
-	PgStat_Counter sync_error_count;
+	PgStat_Counter sync_seq_error_count;
+	PgStat_Counter sync_table_error_count;
 	PgStat_Counter conflict_count[CONFLICT_NUM_TYPES];
 } PgStat_BackendSubEntry;
 
@@ -212,7 +214,7 @@ typedef struct PgStat_TableXactStatus
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BCB9
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BCBA
 
 typedef struct PgStat_ArchiverStats
 {
@@ -416,7 +418,8 @@ typedef struct PgStat_SLRUStats
 typedef struct PgStat_StatSubEntry
 {
 	PgStat_Counter apply_error_count;
-	PgStat_Counter sync_error_count;
+	PgStat_Counter sync_seq_error_count;
+	PgStat_Counter sync_table_error_count;
 	PgStat_Counter conflict_count[CONFLICT_NUM_TYPES];
 	TimestampTz stat_reset_timestamp;
 } PgStat_StatSubEntry;
@@ -473,6 +476,7 @@ typedef struct PgStat_WalCounters
 	PgStat_Counter wal_records;
 	PgStat_Counter wal_fpi;
 	uint64		wal_bytes;
+	uint64		wal_fpi_bytes;
 	PgStat_Counter wal_buffers_full;
 } PgStat_WalCounters;
 
@@ -768,7 +772,8 @@ extern PgStat_SLRUStats *pgstat_fetch_slru(void);
  * Functions in pgstat_subscription.c
  */
 
-extern void pgstat_report_subscription_error(Oid subid, bool is_apply_error);
+extern void pgstat_report_subscription_error(Oid subid,
+											 LogicalRepWorkerType wtype);
 extern void pgstat_report_subscription_conflict(Oid subid, ConflictType type);
 extern void pgstat_create_subscription(Oid subid);
 extern void pgstat_drop_subscription(Oid subid);

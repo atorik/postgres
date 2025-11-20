@@ -2556,7 +2556,10 @@ deleted:
 		workitem->avw_active = true;
 		LWLockRelease(AutovacuumLock);
 
+		PushActiveSnapshot(GetTransactionSnapshot());
 		perform_work_item(workitem);
+		if (ActiveSnapshotSet())	/* transaction could have aborted */
+			PopActiveSnapshot();
 
 		/*
 		 * Check for config changes before acquiring lock for further jobs.
@@ -3155,11 +3158,6 @@ relation_needs_vacanalyze(Oid relid,
 			vac_ins_scale_factor * reltuples * pcnt_unfrozen;
 		anlthresh = (float4) anl_base_thresh + anl_scale_factor * reltuples;
 
-		/*
-		 * Note that we don't need to take special consideration for stat
-		 * reset, because if that happens, the last vacuum and analyze counts
-		 * will be reset too.
-		 */
 		if (vac_ins_base_thresh >= 0)
 			elog(DEBUG3, "%s: vac: %.0f (threshold %.0f), ins: %.0f (threshold %.0f), anl: %.0f (threshold %.0f)",
 				 NameStr(classForm->relname),

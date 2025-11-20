@@ -2191,7 +2191,8 @@ pg_stat_subscription| SELECT su.oid AS subid,
 pg_stat_subscription_stats| SELECT ss.subid,
     s.subname,
     ss.apply_error_count,
-    ss.sync_error_count,
+    ss.sync_seq_error_count,
+    ss.sync_table_error_count,
     ss.confl_insert_exists,
     ss.confl_update_origin_differs,
     ss.confl_update_exists,
@@ -2202,7 +2203,7 @@ pg_stat_subscription_stats| SELECT ss.subid,
     ss.confl_multiple_unique_conflicts,
     ss.stats_reset
    FROM pg_subscription s,
-    LATERAL pg_stat_get_subscription_stats(s.oid) ss(subid, apply_error_count, sync_error_count, confl_insert_exists, confl_update_origin_differs, confl_update_exists, confl_update_deleted, confl_update_missing, confl_delete_origin_differs, confl_delete_missing, confl_multiple_unique_conflicts, stats_reset);
+    LATERAL pg_stat_get_subscription_stats(s.oid) ss(subid, apply_error_count, sync_seq_error_count, sync_table_error_count, confl_insert_exists, confl_update_origin_differs, confl_update_exists, confl_update_deleted, confl_update_missing, confl_delete_origin_differs, confl_delete_missing, confl_multiple_unique_conflicts, stats_reset);
 pg_stat_sys_indexes| SELECT relid,
     indexrelid,
     schemaname,
@@ -2306,9 +2307,10 @@ pg_stat_user_tables| SELECT relid,
 pg_stat_wal| SELECT wal_records,
     wal_fpi,
     wal_bytes,
+    wal_fpi_bytes,
     wal_buffers_full,
     stats_reset
-   FROM pg_stat_get_wal() w(wal_records, wal_fpi, wal_bytes, wal_buffers_full, stats_reset);
+   FROM pg_stat_get_wal() w(wal_records, wal_fpi, wal_bytes, wal_fpi_bytes, wal_buffers_full, stats_reset);
 pg_stat_wal_receiver| SELECT pid,
     status,
     receive_start_lsn,
@@ -3571,6 +3573,7 @@ CREATE FUNCTION func_with_set_params() RETURNS integer
     SET extra_float_digits TO 2
     SET work_mem TO '4MB'
     SET datestyle to iso, mdy
+    SET temp_tablespaces to NULL
     SET local_preload_libraries TO "Mixed/Case", 'c:/''a"/path', '', '0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789'
     IMMUTABLE STRICT;
 SELECT pg_get_functiondef('func_with_set_params()'::regprocedure);
@@ -3584,6 +3587,7 @@ SELECT pg_get_functiondef('func_with_set_params()'::regprocedure);
   SET extra_float_digits TO '2'                                                                                                                                          +
   SET work_mem TO '4MB'                                                                                                                                                  +
   SET "DateStyle" TO 'iso, mdy'                                                                                                                                          +
+  SET temp_tablespaces TO NULL                                                                                                                                           +
   SET local_preload_libraries TO 'Mixed/Case', 'c:/''a"/path', '', '0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789'+
  AS $function$select 1;$function$                                                                                                                                        +
  

@@ -4362,6 +4362,7 @@ typedef enum AlterSubscriptionType
 	ALTER_SUBSCRIPTION_ADD_PUBLICATION,
 	ALTER_SUBSCRIPTION_DROP_PUBLICATION,
 	ALTER_SUBSCRIPTION_REFRESH_PUBLICATION,
+	ALTER_SUBSCRIPTION_REFRESH_SEQUENCES,
 	ALTER_SUBSCRIPTION_ENABLED,
 	ALTER_SUBSCRIPTION_SKIP,
 } AlterSubscriptionType;
@@ -4383,5 +4384,13 @@ typedef struct DropSubscriptionStmt
 	bool		missing_ok;		/* Skip error if missing? */
 	DropBehavior behavior;		/* RESTRICT or CASCADE behavior */
 } DropSubscriptionStmt;
+
+typedef struct WaitStmt
+{
+	NodeTag		type;
+	char	   *lsn_literal;	/* LSN string from grammar */
+	List	   *options;		/* List of DefElem nodes */
+} WaitStmt;
+
 
 #endif							/* PARSENODES_H */

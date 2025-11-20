@@ -452,6 +452,14 @@ else
   segsize = (get_option('segsize') * 1024 * 1024 * 1024) / blocksize
 endif
 
+# If we don't have largefile support, can't handle segment size >= 2GB.
+if cc.sizeof('off_t', args: test_c_args) < 8
+  segsize_bytes = segsize * blocksize
+  if segsize_bytes >= (2 * 1024 * 1024 * 1024)
+    error('Large file support is not enabled. Segment size cannot be larger than 1GB.')
+  endif
+endif
+
 cdata.set('BLCKSZ', blocksize, description:
 '''Size of a disk block --- this also limits the size of a tuple. You can set
    it bigger if you need bigger tuples (although TOAST should reduce the need
@@ -2147,13 +2155,20 @@ endforeach
 
 if cc.get_id() == 'msvc'
   cflags_warn += [
-    '/wd4018', # signed/unsigned mismatch
-    '/wd4244', # conversion from 'type1' to 'type2', possible loss of data
-    '/wd4273', # inconsistent DLL linkage
-    '/wd4101', # unreferenced local variable
-    '/wd4102', # unreferenced label
+    # Warnings to disable:
+    # from /W1:
     '/wd4090', # different 'modifier' qualifiers
+    # from /W2:
+    '/wd4244', # conversion from 'type1' to 'type2', possible loss of data
+    # from /W3:
+    '/wd4018', # signed/unsigned mismatch
+    '/wd4101', # unreferenced local variable [like -Wunused-variable, but there is no "unused" attribute, so too noisy]
     '/wd4267', # conversion from 'size_t' to 'type', possible loss of data
+
+    # Additional warnings to enable:
+    '/w24062', # enumerator 'identifier' in switch of enum 'enumeration' is not handled [like -Wswitch]
+    '/w24102', # unreferenced label [like -Wunused-label]
+    '/w24777', # 'function' : format string 'string' requires an argument of type 'type1', but variadic argument number has type 'type2' [like -Wformat]
   ]
 
   cppflags += [
@@ -2613,6 +2628,7 @@ header_checks = [
   'sys/signalfd.h',
   'sys/ucred.h',
   'termios.h',
+  'uchar.h',
   'ucred.h',
   'xlocale.h',
 ]
@@ -2803,13 +2819,12 @@ int main(void)
 endforeach
 
 
-# MSVC doesn't cope well with defining restrict to __restrict, the spelling it
-# understands, because it conflicts with __declspec(restrict). Therefore we
-# define pg_restrict to the appropriate definition, which presumably won't
-# conflict.
-#
-# We assume C99 support, so we don't need to make this conditional.
-cdata.set('pg_restrict', '__restrict')
+# Even though restrict is in C99 and should be supported by all
+# supported compilers, this indirection is useful because __restrict
+# also works in C++ in all supported compilers.  (If not, then we
+# might have to write a real test.)  (restrict is not part of the C++
+# standard.)
+cdata.set('restrict', '__restrict')
 
 
 # Most libraries are included only if they demonstrably provide a function we
