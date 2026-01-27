@@ -2,7 +2,7 @@
  *
  * PostgreSQL locale utilities for builtin provider
  *
- * Portions Copyright (c) 2002-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2002-2026, PostgreSQL Global Development Group
  *
  * src/backend/utils/adt/pg_locale_builtin.c
  *
@@ -15,7 +15,6 @@
 #include "catalog/pg_collation.h"
 #include "common/unicode_case.h"
 #include "common/unicode_category.h"
-#include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
 #include "utils/pg_locale.h"
@@ -36,6 +35,23 @@ struct WordBoundaryState
 };
 
 /*
+ * In UTF-8, pg_wchar is guaranteed to be the code point value.
+ */
+static inline char32_t
+to_char32(pg_wchar wc)
+{
+	Assert(GetDatabaseEncoding() == PG_UTF8);
+	return (char32_t) wc;
+}
+
+static inline pg_wchar
+to_pg_wchar(char32_t c32)
+{
+	Assert(GetDatabaseEncoding() == PG_UTF8);
+	return (pg_wchar) c32;
+}
+
+/*
  * Simple word boundary iterator that draws boundaries each time the result of
  * pg_u_isalnum() changes.
  */
@@ -47,7 +63,7 @@ initcap_wbnext(void *state)
 	while (wbstate->offset < wbstate->len &&
 		   wbstate->str[wbstate->offset] != '\0')
 	{
-		pg_wchar	u = utf8_to_unicode((unsigned char *) wbstate->str +
+		char32_t	u = utf8_to_unicode((const unsigned char *) wbstate->str +
 										wbstate->offset);
 		bool		curr_alnum = pg_u_isalnum(u, wbstate->posix);
 
@@ -112,80 +128,79 @@ strfold_builtin(char *dest, size_t destsize, const char *src, ssize_t srclen,
 static bool
 wc_isdigit_builtin(pg_wchar wc, pg_locale_t locale)
 {
-	return pg_u_isdigit(wc, !locale->builtin.casemap_full);
+	return pg_u_isdigit(to_char32(wc), !locale->builtin.casemap_full);
 }
 
 static bool
 wc_isalpha_builtin(pg_wchar wc, pg_locale_t locale)
 {
-	return pg_u_isalpha(wc);
+	return pg_u_isalpha(to_char32(wc));
 }
 
 static bool
 wc_isalnum_builtin(pg_wchar wc, pg_locale_t locale)
 {
-	return pg_u_isalnum(wc, !locale->builtin.casemap_full);
+	return pg_u_isalnum(to_char32(wc), !locale->builtin.casemap_full);
 }
 
 static bool
 wc_isupper_builtin(pg_wchar wc, pg_locale_t locale)
 {
-	return pg_u_isupper(wc);
+	return pg_u_isupper(to_char32(wc));
 }
 
 static bool
 wc_islower_builtin(pg_wchar wc, pg_locale_t locale)
 {
-	return pg_u_islower(wc);
+	return pg_u_islower(to_char32(wc));
 }
 
 static bool
 wc_isgraph_builtin(pg_wchar wc, pg_locale_t locale)
 {
-	return pg_u_isgraph(wc);
+	return pg_u_isgraph(to_char32(wc));
 }
 
 static bool
 wc_isprint_builtin(pg_wchar wc, pg_locale_t locale)
 {
-	return pg_u_isprint(wc);
+	return pg_u_isprint(to_char32(wc));
 }
 
 static bool
 wc_ispunct_builtin(pg_wchar wc, pg_locale_t locale)
 {
-	return pg_u_ispunct(wc, !locale->builtin.casemap_full);
+	return pg_u_ispunct(to_char32(wc), !locale->builtin.casemap_full);
 }
 
 static bool
 wc_isspace_builtin(pg_wchar wc, pg_locale_t locale)
 {
-	return pg_u_isspace(wc);
+	return pg_u_isspace(to_char32(wc));
 }
 
 static bool
 wc_isxdigit_builtin(pg_wchar wc, pg_locale_t locale)
 {
-	return pg_u_isxdigit(wc, !locale->builtin.casemap_full);
+	return pg_u_isxdigit(to_char32(wc), !locale->builtin.casemap_full);
 }
 
 static bool
-char_is_cased_builtin(char ch, pg_locale_t locale)
+wc_iscased_builtin(pg_wchar wc, pg_locale_t locale)
 {
-	return IS_HIGHBIT_SET(ch) ||
-		(ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+	return pg_u_prop_cased(to_char32(wc));
 }
 
 static pg_wchar
 wc_toupper_builtin(pg_wchar wc, pg_locale_t locale)
 {
-	return unicode_uppercase_simple(wc);
+	return to_pg_wchar(unicode_uppercase_simple(to_char32(wc)));
 }
 
 static pg_wchar
 wc_tolower_builtin(pg_wchar wc, pg_locale_t locale)
 {
-	return unicode_lowercase_simple(wc);
+	return to_pg_wchar(unicode_lowercase_simple(to_char32(wc)));
 }
 
 static const struct ctype_methods ctype_methods_builtin = {
@@ -193,6 +208,8 @@ static const struct ctype_methods ctype_methods_builtin = {
 	.strtitle = strtitle_builtin,
 	.strupper = strupper_builtin,
 	.strfold = strfold_builtin,
+	/* uses plain ASCII semantics for historical reasons */
+	.downcase_ident = NULL,
 	.wc_isdigit = wc_isdigit_builtin,
 	.wc_isalpha = wc_isalpha_builtin,
 	.wc_isalnum = wc_isalnum_builtin,
@@ -203,7 +220,7 @@ static const struct ctype_methods ctype_methods_builtin = {
 	.wc_ispunct = wc_ispunct_builtin,
 	.wc_isspace = wc_isspace_builtin,
 	.wc_isxdigit = wc_isxdigit_builtin,
-	.char_is_cased = char_is_cased_builtin,
+	.wc_iscased = wc_iscased_builtin,
 	.wc_tolower = wc_tolower_builtin,
 	.wc_toupper = wc_toupper_builtin,
 };

@@ -1,6 +1,6 @@
 <!-- doc/src/sgml/libpq.sgml -->
 
-<chapter id="libpq" xreflabel="libpq">
+<chapter id="libpq">
  <title><application>libpq</application> &mdash; C Library</title>
 
  <indexterm zone="libpq">
@@ -2220,7 +2220,7 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
         server does not support the protocol version requested by the client,
         the connection is automatically downgraded to a lower minor protocol
         version that the server supports. After the connection attempt has
-        completed you can use <xref linkend="libpq-PQprotocolVersion"/> to
+        completed you can use <xref linkend="libpq-PQfullProtocolVersion"/> to
         find out which exact protocol version was negotiated.
        </para>
 
@@ -2889,18 +2889,13 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
        before 16; <varname>search_path</varname> was not reported by releases
        before 18.)
        Note that
-       <varname>server_version</varname>,
-       <varname>server_encoding</varname> and
-       <varname>integer_datetimes</varname>
+       <varname>server_version</varname> and
+       <varname>server_encoding</varname>
        cannot change after startup.
-      </para>
-
-      <para>
-       If no value for <varname>standard_conforming_strings</varname> is reported,
-       applications can assume it is <literal>off</literal>, that is, backslashes
-       are treated as escapes in string literals.  Also, the presence of
-       this parameter can be taken as an indication that the escape string
-       syntax (<literal>E'...'</literal>) is accepted.
+       Also, <varname>integer_datetimes</varname> is
+       always <literal>on</literal> in releases 9.5 and later,
+       and <varname>standard_conforming_strings</varname> is
+       always <literal>on</literal> in releases 19 and later.
       </para>
 
       <para>
@@ -4508,7 +4503,7 @@ Oid PQftable(const PGresult *res,
       <para>
        <literal>InvalidOid</literal> is returned if the column number is out of range,
        or if the specified column is not a simple reference to a table column.
-       You can query the system table <literal>pg_class</literal> to determine
+       You can query the system table <structname>pg_class</structname> to determine
        exactly which table is referenced.
       </para>
 
@@ -4578,7 +4573,7 @@ Oid PQftype(const PGresult *res,
       </para>
 
       <para>
-       You can query the system table <literal>pg_type</literal> to
+       You can query the system table <structname>pg_type</structname> to
        obtain the names and properties of the various data types. The
        <acronym>OID</acronym>s of the built-in data types are defined
        in the file <filename>catalog/pg_type_d.h</filename>
@@ -10422,10 +10417,14 @@ typedef struct PGoauthBearerRequest
 
     /* Hook outputs */
 
-    /* Callback implementing a custom asynchronous OAuth flow. */
+    /*
+     * Callback implementing a custom asynchronous OAuth flow. The signature is
+     * platform-dependent: PQ_SOCKTYPE is SOCKET on Windows, and int everywhere
+     * else.
+     */
     PostgresPollingStatusType (*async) (PGconn *conn,
                                         struct PGoauthBearerRequest *request,
-                                        SOCKTYPE *altsock);
+                                        PQ_SOCKTYPE *altsock);
 
     /* Callback to clean up custom allocations. */
     void        (*cleanup) (PGconn *conn, struct PGoauthBearerRequest *request);
@@ -10482,7 +10481,7 @@ typedef struct PGoauthBearerRequest
          hook. When the callback cannot make further progress without blocking,
          it should return either <symbol>PGRES_POLLING_READING</symbol> or
          <symbol>PGRES_POLLING_WRITING</symbol> after setting
-         <literal>*pgsocket</literal> to the file descriptor that will be marked
+         <literal>*altsock</literal> to the file descriptor that will be marked
          ready to read/write when progress can be made again. (This descriptor
          is then provided to the top-level polling loop via
          <function>PQsocket()</function>.) Return <symbol>PGRES_POLLING_OK</symbol>
@@ -10861,7 +10860,7 @@ main(int argc, char **argv)
     /*
      * Our test case here involves using a cursor, for which we must be inside
      * a transaction block.  We could do the whole thing with a single
-     * PQexec() of "select * from pg_database", but that's too trivial to make
+     * PQexec() of "SELECT * FROM pg_database", but that's too trivial to make
      * a good example.
      */
 
@@ -10878,7 +10877,7 @@ main(int argc, char **argv)
     /*
      * Fetch rows from pg_database, the system catalog of databases
      */
-    res = PQexec(conn, "DECLARE myportal CURSOR FOR select * from pg_database");
+    res = PQexec(conn, "DECLARE myportal CURSOR FOR SELECT * FROM pg_database");
     if (PQresultStatus(res) != PGRES_COMMAND_OK)
     {
         fprintf(stderr, "DECLARE CURSOR failed: %s", PQerrorMessage(conn));
@@ -11104,7 +11103,6 @@ main(int argc, char **argv)
  *
  * CREATE SCHEMA testlibpq3;
  * SET search_path = testlibpq3;
- * SET standard_conforming_strings = ON;
  * CREATE TABLE test1 (i int4, t text, b bytea);
  * INSERT INTO test1 values (1, 'joe''s place', '\000\001\002\003\004');
  * INSERT INTO test1 values (2, 'ho there', '\004\003\002\001\000');

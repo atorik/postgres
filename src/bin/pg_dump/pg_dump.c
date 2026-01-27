@@ -4,7 +4,7 @@
  *	  pg_dump is a utility for dumping out a postgres database
  *	  into a script file.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *	pg_dump will read the system catalogs in a database and dump out a
@@ -71,6 +71,7 @@
 #include "pg_backup_db.h"
 #include "pg_backup_utils.h"
 #include "pg_dump.h"
+#include "statistics/statistics_format.h"
 #include "storage/block.h"
 
 typedef struct
@@ -137,6 +138,7 @@ typedef struct
 	int64		cache;			/* cache size */
 	int64		last_value;		/* last value of sequence */
 	bool		is_called;		/* whether nextval advances before returning */
+	bool		null_seqtuple;	/* did pg_get_sequence_data return nulls? */
 } SequenceItem;
 
 typedef enum OidOptions
@@ -324,6 +326,7 @@ static void dumpSequenceData(Archive *fout, const TableDataInfo *tdinfo);
 static void dumpIndex(Archive *fout, const IndxInfo *indxinfo);
 static void dumpIndexAttach(Archive *fout, const IndexAttachInfo *attachinfo);
 static void dumpStatisticsExt(Archive *fout, const StatsExtInfo *statsextinfo);
+static void dumpStatisticsExtStats(Archive *fout, const StatsExtInfo *statsextinfo);
 static void dumpConstraint(Archive *fout, const ConstraintInfo *coninfo);
 static void dumpTableConstraintComment(Archive *fout, const ConstraintInfo *coninfo);
 static void dumpTSParser(Archive *fout, const TSParserInfo *prsinfo);
@@ -831,23 +834,30 @@ main(int argc, char **argv)
 
 	/* reject conflicting "-only" options */
 	if (data_only && schema_only)
-		pg_fatal("options -s/--schema-only and -a/--data-only cannot be used together");
+		pg_fatal("options %s and %s cannot be used together",
+				 "-s/--schema-only", "-a/--data-only");
 	if (schema_only && statistics_only)
-		pg_fatal("options -s/--schema-only and --statistics-only cannot be used together");
+		pg_fatal("options %s and %s cannot be used together",
+				 "-s/--schema-only", "--statistics-only");
 	if (data_only && statistics_only)
-		pg_fatal("options -a/--data-only and --statistics-only cannot be used together");
+		pg_fatal("options %s and %s cannot be used together",
+				 "-a/--data-only", "--statistics-only");
 
 	/* reject conflicting "-only" and "no-" options */
 	if (data_only && no_data)
-		pg_fatal("options -a/--data-only and --no-data cannot be used together");
+		pg_fatal("options %s and %s cannot be used together",
+				 "-a/--data-only", "--no-data");
 	if (schema_only && no_schema)
-		pg_fatal("options -s/--schema-only and --no-schema cannot be used together");
+		pg_fatal("options %s and %s cannot be used together",
+				 "-s/--schema-only", "--no-schema");
 	if (statistics_only && no_statistics)
-		pg_fatal("options --statistics-only and --no-statistics cannot be used together");
+		pg_fatal("options %s and %s cannot be used together",
+				 "--statistics-only", "--no-statistics");
 
 	/* reject conflicting "no-" options */
 	if (with_statistics && no_statistics)
-		pg_fatal("options --statistics and --no-statistics cannot be used together");
+		pg_fatal("options %s and %s cannot be used together",
+				 "--statistics", "--no-statistics");
 
 	/* reject conflicting "-only" options */
 	if (data_only && with_statistics)
@@ -858,16 +868,20 @@ main(int argc, char **argv)
 				 "-s/--schema-only", "--statistics");
 
 	if (schema_only && foreign_servers_include_patterns.head != NULL)
-		pg_fatal("options -s/--schema-only and --include-foreign-data cannot be used together");
+		pg_fatal("options %s and %s cannot be used together",
+				 "-s/--schema-only", "--include-foreign-data");
 
 	if (numWorkers > 1 && foreign_servers_include_patterns.head != NULL)
-		pg_fatal("option --include-foreign-data is not supported with parallel backup");
+		pg_fatal("option %s is not supported with parallel backup",
+				 "--include-foreign-data");
 
 	if (data_only && dopt.outputClean)
-		pg_fatal("options -c/--clean and -a/--data-only cannot be used together");
+		pg_fatal("options %s and %s cannot be used together",
+				 "-c/--clean", "-a/--data-only");
 
 	if (dopt.if_exists && !dopt.outputClean)
-		pg_fatal("option --if-exists requires option -c/--clean");
+		pg_fatal("option %s requires option %s",
+				 "--if-exists", "-c/--clean");
 
 	/*
 	 * Set derivative flags. Ambiguous or nonsensical combinations, e.g.
@@ -887,7 +901,9 @@ main(int argc, char **argv)
 	 * --rows-per-insert were specified.
 	 */
 	if (dopt.do_nothing && dopt.dump_inserts == 0)
-		pg_fatal("option --on-conflict-do-nothing requires option --inserts, --rows-per-insert, or --column-inserts");
+		pg_fatal("option %s requires option %s, %s, or %s",
+				 "--on-conflict-do-nothing",
+				 "--inserts", "--rows-per-insert", "--column-inserts");
 
 	/* Identify archive format to emit */
 	archiveFormat = parseArchiveFormat(format, &archiveMode);
@@ -908,7 +924,8 @@ main(int argc, char **argv)
 			pg_fatal("invalid restrict key");
 	}
 	else if (dopt.restrict_key)
-		pg_fatal("option --restrict-key can only be used with --format=plain");
+		pg_fatal("option %s can only be used with %s",
+				 "--restrict-key", "--format=plain");
 
 	/*
 	 * Custom and directory formats are compressed by default with gzip when
@@ -1414,7 +1431,6 @@ setup_connection(Archive *AH, const char *dumpencoding,
 {
 	DumpOptions *dopt = AH->dopt;
 	PGconn	   *conn = GetConnection(AH);
-	const char *std_strings;
 
 	PQclear(ExecuteSqlQueryForSingleRow(AH, ALWAYS_SECURE_SEARCH_PATH_SQL));
 
@@ -1429,14 +1445,26 @@ setup_connection(Archive *AH, const char *dumpencoding,
 	}
 
 	/*
-	 * Get the active encoding and the standard_conforming_strings setting, so
-	 * we know how to escape strings.
+	 * Force standard_conforming_strings on, just in case we are dumping from
+	 * an old server that has it disabled.  Without this, literals in views,
+	 * expressions, etc, would be incorrect for modern servers.
+	 */
+	ExecuteSqlStatement(AH, "SET standard_conforming_strings = on");
+
+	/*
+	 * And reflect that to AH->std_strings.  You might think that we should
+	 * just delete that variable and the code that checks it, but that would
+	 * be problematic for pg_restore, which at least for now should still cope
+	 * with archives containing the other setting (cf. processStdStringsEntry
+	 * in pg_backup_archiver.c).
+	 */
+	AH->std_strings = true;
+
+	/*
+	 * Get the active encoding, so we know how to escape strings.
 	 */
 	AH->encoding = PQclientEncoding(conn);
 	setFmtEncoding(AH->encoding);
-
-	std_strings = PQparameterStatus(conn, "standard_conforming_strings");
-	AH->std_strings = (std_strings && strcmp(std_strings, "on") == 0);
 
 	/*
 	 * Set the role if requested.  In a parallel dump worker, we'll be passed
@@ -2182,7 +2210,7 @@ selectDumpableCast(CastInfo *cast, Archive *fout)
 	 * This would be DUMP_COMPONENT_ACL for from-initdb casts, but they do not
 	 * support ACLs currently.
 	 */
-	if (cast->dobj.catId.oid <= (Oid) g_last_builtin_oid)
+	if (cast->dobj.catId.oid <= g_last_builtin_oid)
 		cast->dobj.dump = DUMP_COMPONENT_NONE;
 	else
 		cast->dobj.dump = fout->dopt->include_everything ?
@@ -2214,7 +2242,7 @@ selectDumpableProcLang(ProcLangInfo *plang, Archive *fout)
 		plang->dobj.dump = DUMP_COMPONENT_NONE;
 	else
 	{
-		if (plang->dobj.catId.oid <= (Oid) g_last_builtin_oid)
+		if (plang->dobj.catId.oid <= g_last_builtin_oid)
 			plang->dobj.dump = fout->remoteVersion < 90600 ?
 				DUMP_COMPONENT_NONE : DUMP_COMPONENT_ACL;
 		else
@@ -2247,7 +2275,7 @@ selectDumpableAccessMethod(AccessMethodInfo *method, Archive *fout)
 	 * This would be DUMP_COMPONENT_ACL for from-initdb access methods, but
 	 * they do not support ACLs currently.
 	 */
-	if (method->dobj.catId.oid <= (Oid) g_last_builtin_oid)
+	if (method->dobj.catId.oid <= g_last_builtin_oid)
 		method->dobj.dump = DUMP_COMPONENT_NONE;
 	else
 		method->dobj.dump = fout->dopt->include_everything ?
@@ -2273,7 +2301,7 @@ selectDumpableExtension(ExtensionInfo *extinfo, DumpOptions *dopt)
 	 * change permissions on their member objects, if they wish to, and have
 	 * those changes preserved.
 	 */
-	if (extinfo->dobj.catId.oid <= (Oid) g_last_builtin_oid)
+	if (extinfo->dobj.catId.oid <= g_last_builtin_oid)
 		extinfo->dobj.dump = extinfo->dobj.dump_contains = DUMP_COMPONENT_ACL;
 	else
 	{
@@ -2365,8 +2393,8 @@ selectDumpableObject(DumpableObject *dobj, Archive *fout)
 static int
 dumpTableData_copy(Archive *fout, const void *dcontext)
 {
-	TableDataInfo *tdinfo = (TableDataInfo *) dcontext;
-	TableInfo  *tbinfo = tdinfo->tdtable;
+	const TableDataInfo *tdinfo = dcontext;
+	const TableInfo *tbinfo = tdinfo->tdtable;
 	const char *classname = tbinfo->dobj.name;
 	PQExpBuffer q = createPQExpBuffer();
 
@@ -2533,8 +2561,8 @@ dumpTableData_copy(Archive *fout, const void *dcontext)
 static int
 dumpTableData_insert(Archive *fout, const void *dcontext)
 {
-	TableDataInfo *tdinfo = (TableDataInfo *) dcontext;
-	TableInfo  *tbinfo = tdinfo->tdtable;
+	const TableDataInfo *tdinfo = dcontext;
+	const TableInfo *tbinfo = tdinfo->tdtable;
 	DumpOptions *dopt = fout->dopt;
 	PQExpBuffer q = createPQExpBuffer();
 	PQExpBuffer insertStmt = NULL;
@@ -2604,7 +2632,7 @@ dumpTableData_insert(Archive *fout, const void *dcontext)
 		 */
 		if (insertStmt == NULL)
 		{
-			TableInfo  *targettab;
+			const TableInfo *targettab;
 
 			insertStmt = createPQExpBuffer();
 
@@ -2856,7 +2884,7 @@ static void
 dumpTableData(Archive *fout, const TableDataInfo *tdinfo)
 {
 	DumpOptions *dopt = fout->dopt;
-	TableInfo  *tbinfo = tdinfo->tdtable;
+	const TableInfo *tbinfo = tdinfo->tdtable;
 	PQExpBuffer copyBuf = createPQExpBuffer();
 	PQExpBuffer clistBuf = createPQExpBuffer();
 	DataDumperPtr dumpFn;
@@ -2877,7 +2905,7 @@ dumpTableData(Archive *fout, const TableDataInfo *tdinfo)
 		(dopt->load_via_partition_root ||
 		 forcePartitionRootLoad(tbinfo)))
 	{
-		TableInfo  *parentTbinfo;
+		const TableInfo *parentTbinfo;
 		char	   *sanitized;
 
 		parentTbinfo = getRootTableInfo(tbinfo);
@@ -5372,15 +5400,15 @@ getSubscriptionRelations(Archive *fout)
 		subrinfo[i].dobj.catId.tableoid = relid;
 		subrinfo[i].dobj.catId.oid = cur_srsubid;
 		AssignDumpId(&subrinfo[i].dobj);
-		subrinfo[i].dobj.name = pg_strdup(subinfo->dobj.name);
+		subrinfo[i].dobj.namespace = tblinfo->dobj.namespace;
+		subrinfo[i].dobj.name = tblinfo->dobj.name;
+		subrinfo[i].subinfo = subinfo;
 		subrinfo[i].tblinfo = tblinfo;
 		subrinfo[i].srsubstate = PQgetvalue(res, i, i_srsubstate)[0];
 		if (PQgetisnull(res, i, i_srsublsn))
 			subrinfo[i].srsublsn = NULL;
 		else
 			subrinfo[i].srsublsn = pg_strdup(PQgetvalue(res, i, i_srsublsn));
-
-		subrinfo[i].subinfo = subinfo;
 
 		/* Decide whether we want to dump it */
 		selectDumpableObject(&(subrinfo[i].dobj), fout);
@@ -5409,7 +5437,7 @@ dumpSubscriptionTable(Archive *fout, const SubRelInfo *subrinfo)
 
 	Assert(fout->dopt->binary_upgrade && fout->remoteVersion >= 170000);
 
-	tag = psprintf("%s %s", subinfo->dobj.name, subrinfo->dobj.name);
+	tag = psprintf("%s %s", subinfo->dobj.name, subrinfo->tblinfo->dobj.name);
 
 	query = createPQExpBuffer();
 
@@ -5424,7 +5452,7 @@ dumpSubscriptionTable(Archive *fout, const SubRelInfo *subrinfo)
 							 "\n-- For binary upgrade, must preserve the subscriber table.\n");
 		appendPQExpBufferStr(query,
 							 "SELECT pg_catalog.binary_upgrade_add_sub_rel_state(");
-		appendStringLiteralAH(query, subrinfo->dobj.name, fout);
+		appendStringLiteralAH(query, subinfo->dobj.name, fout);
 		appendPQExpBuffer(query,
 						  ", %u, '%c'",
 						  subrinfo->tblinfo->dobj.catId.oid,
@@ -8258,6 +8286,9 @@ getExtendedStatistics(Archive *fout)
 
 		/* Decide whether we want to dump it */
 		selectDumpableStatisticsObject(&(statsextinfo[i]), fout);
+
+		if (fout->dopt->dumpStatistics)
+			statsextinfo[i].dobj.components |= DUMP_COMPONENT_STATISTICS;
 	}
 
 	PQclear(res);
@@ -11087,7 +11118,7 @@ fetchAttributeStats(Archive *fout)
 static char *
 dumpRelationStats_dumper(Archive *fout, const void *userArg, const TocEntry *te)
 {
-	const RelStatsInfo *rsinfo = (RelStatsInfo *) userArg;
+	const RelStatsInfo *rsinfo = userArg;
 	static PGresult *res;
 	static int	rownum;
 	PQExpBuffer query;
@@ -11712,6 +11743,7 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 			break;
 		case DO_STATSEXT:
 			dumpStatisticsExt(fout, (const StatsExtInfo *) dobj);
+			dumpStatisticsExtStats(fout, (const StatsExtInfo *) dobj);
 			break;
 		case DO_REFRESH_MATVIEW:
 			refreshMatViewData(fout, (const TableDataInfo *) dobj);
@@ -13764,7 +13796,8 @@ dumpFunc(Archive *fout, const FuncInfo *finfo)
 		 * and then quote the elements as string literals.  (The elements may
 		 * be double-quoted as-is, but we can't just feed them to the SQL
 		 * parser; it would do the wrong thing with elements that are
-		 * zero-length or longer than NAMEDATALEN.)
+		 * zero-length or longer than NAMEDATALEN.)  Also, we need a special
+		 * case for empty lists.
 		 *
 		 * Variables that are not so marked should just be emitted as simple
 		 * string literals.  If the variable is not known to
@@ -13780,6 +13813,9 @@ dumpFunc(Archive *fout, const FuncInfo *finfo)
 			/* this shouldn't fail really */
 			if (SplitGUCList(pos, ',', &namelist))
 			{
+				/* Special case: represent an empty list as NULL */
+				if (*namelist == NULL)
+					appendPQExpBufferStr(q, "NULL");
 				for (nameptr = namelist; *nameptr; nameptr++)
 				{
 					if (nameptr != namelist)
@@ -18511,6 +18547,209 @@ dumpStatisticsExt(Archive *fout, const StatsExtInfo *statsextinfo)
 }
 
 /*
+ * dumpStatisticsExtStats
+ *	  write out to fout the stats for an extended statistics object
+ */
+static void
+dumpStatisticsExtStats(Archive *fout, const StatsExtInfo *statsextinfo)
+{
+	DumpOptions *dopt = fout->dopt;
+	PQExpBuffer query;
+	PGresult   *res;
+	int			nstats;
+
+	/* Do nothing if not dumping statistics */
+	if (!dopt->dumpStatistics)
+		return;
+
+	if (!fout->is_prepared[PREPQUERY_DUMPEXTSTATSOBJSTATS])
+	{
+		PQExpBuffer pq = createPQExpBuffer();
+
+		/*---------
+		 * Set up query for details about extended statistics objects.
+		 *
+		 * The query depends on the backend version:
+		 * - In v19 and newer versions, query directly the pg_stats_ext*
+		 *   catalogs.
+		 * - In v18 and older versions, ndistinct and dependencies have a
+		 *   different format that needs translation.
+		 * - In v14 and older versions, inherited does not exist.
+		 * - In v11 and older versions, there is no pg_stats_ext, hence
+		 *   the logic joins pg_statistic_ext and pg_namespace.
+		 *---------
+		 */
+
+		appendPQExpBufferStr(pq,
+							 "PREPARE getExtStatsStats(pg_catalog.name, pg_catalog.name) AS\n"
+							 "SELECT ");
+
+		/*
+		 * Versions 15 and newer have inherited stats.
+		 *
+		 * Create this column in all versions because we need to order by it
+		 * later.
+		 */
+		if (fout->remoteVersion >= 150000)
+			appendPQExpBufferStr(pq, "e.inherited, ");
+		else
+			appendPQExpBufferStr(pq, "false AS inherited, ");
+
+		/*--------
+		 * The ndistinct and dependencies formats changed in v19, so
+		 * everything before that needs to be translated.
+		 *
+		 * The ndistinct translation converts this kind of data:
+		 * {"3, 4": 11, "3, 6": 11, "4, 6": 11, "3, 4, 6": 11}
+		 *
+		 * to this:
+		 * [ {"attributes": [3,4], "ndistinct": 11},
+		 *   {"attributes": [3,6], "ndistinct": 11},
+		 *   {"attributes": [4,6], "ndistinct": 11},
+		 *   {"attributes": [3,4,6], "ndistinct": 11} ]
+		 *
+		 * The dependencies translation converts this kind of data:
+		 * {"3 => 4": 1.000000, "3 => 6": 1.000000,
+		 *  "4 => 6": 1.000000, "3, 4 => 6": 1.000000,
+		 *  "3, 6 => 4": 1.000000}
+		 *
+		 * to this:
+		 * [ {"attributes": [3], "dependency": 4, "degree": 1.000000},
+		 *   {"attributes": [3], "dependency": 6, "degree": 1.000000},
+		 *   {"attributes": [4], "dependency": 6, "degree": 1.000000},
+		 *   {"attributes": [3,4], "dependency": 6, "degree": 1.000000},
+		 *   {"attributes": [3,6], "dependency": 4, "degree": 1.000000} ]
+		 *--------
+		 */
+		if (fout->remoteVersion >= 190000)
+			appendPQExpBufferStr(pq, "e.n_distinct, e.dependencies ");
+		else
+			appendPQExpBufferStr(pq,
+								 "( "
+								 "SELECT json_agg( "
+								 "  json_build_object( "
+								 "    '" PG_NDISTINCT_KEY_ATTRIBUTES "', "
+								 "    string_to_array(kv.key, ', ')::integer[], "
+								 "    '" PG_NDISTINCT_KEY_NDISTINCT "', "
+								 "    kv.value::bigint )) "
+								 "FROM json_each_text(e.n_distinct::text::json) AS kv"
+								 ") AS n_distinct, "
+								 "( "
+								 "SELECT json_agg( "
+								 "  json_build_object( "
+								 "    '" PG_DEPENDENCIES_KEY_ATTRIBUTES "', "
+								 "    string_to_array( "
+								 "      split_part(kv.key, ' => ', 1), "
+								 "      ', ')::integer[], "
+								 "    '" PG_DEPENDENCIES_KEY_DEPENDENCY "', "
+								 "    split_part(kv.key, ' => ', 2)::integer, "
+								 "    '" PG_DEPENDENCIES_KEY_DEGREE "', "
+								 "    kv.value::double precision )) "
+								 "FROM json_each_text(e.dependencies::text::json) AS kv "
+								 ") AS dependencies ");
+
+		/* pg_stats_ext introduced in v12 */
+		if (fout->remoteVersion >= 120000)
+			appendPQExpBufferStr(pq,
+								 "FROM pg_catalog.pg_stats_ext AS e "
+								 "WHERE e.statistics_schemaname = $1 "
+								 "AND e.statistics_name = $2 ");
+		else
+			appendPQExpBufferStr(pq,
+								 "FROM ( "
+								 "SELECT s.stxndistinct AS n_distinct, "
+								 "    s.stxdependencies AS dependencies "
+								 "FROM pg_catalog.pg_statistic_ext AS s "
+								 "JOIN pg_catalog.pg_namespace AS n "
+								 "ON n.oid = s.stxnamespace "
+								 "WHERE n.nspname = $1 "
+								 "AND s.stxname = $2 "
+								 ") AS e ");
+
+		/* we always have an inherited column, but it may be a constant */
+		appendPQExpBufferStr(pq, "ORDER BY inherited");
+
+		ExecuteSqlStatement(fout, pq->data);
+
+		fout->is_prepared[PREPQUERY_DUMPEXTSTATSOBJSTATS] = true;
+
+		destroyPQExpBuffer(pq);
+	}
+
+	query = createPQExpBuffer();
+
+	appendPQExpBufferStr(query, "EXECUTE getExtStatsStats(");
+	appendStringLiteralAH(query, statsextinfo->dobj.namespace->dobj.name, fout);
+	appendPQExpBufferStr(query, "::pg_catalog.name, ");
+	appendStringLiteralAH(query, statsextinfo->dobj.name, fout);
+	appendPQExpBufferStr(query, "::pg_catalog.name)");
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	destroyPQExpBuffer(query);
+
+	nstats = PQntuples(res);
+
+	if (nstats > 0)
+	{
+		PQExpBuffer out = createPQExpBuffer();
+
+		int			i_inherited = PQfnumber(res, "inherited");
+		int			i_ndistinct = PQfnumber(res, "n_distinct");
+		int			i_dependencies = PQfnumber(res, "dependencies");
+
+		for (int i = 0; i < nstats; i++)
+		{
+			TableInfo  *tbinfo = statsextinfo->stattable;
+
+			if (PQgetisnull(res, i, i_inherited))
+				pg_fatal("inherited cannot be NULL");
+
+			appendPQExpBufferStr(out,
+								 "SELECT * FROM pg_catalog.pg_restore_extended_stats(\n");
+			appendPQExpBuffer(out, "\t'version', '%d'::integer,\n",
+							  fout->remoteVersion);
+
+			/* Relation information */
+			appendPQExpBufferStr(out, "\t'schemaname', ");
+			appendStringLiteralAH(out, tbinfo->dobj.namespace->dobj.name, fout);
+			appendPQExpBufferStr(out, ",\n\t'relname', ");
+			appendStringLiteralAH(out, tbinfo->dobj.name, fout);
+
+			/* Extended statistics information */
+			appendPQExpBufferStr(out, ",\n\t'statistics_schemaname', ");
+			appendStringLiteralAH(out, statsextinfo->dobj.namespace->dobj.name, fout);
+			appendPQExpBufferStr(out, ",\n\t'statistics_name', ");
+			appendStringLiteralAH(out, statsextinfo->dobj.name, fout);
+			appendNamedArgument(out, fout, "inherited", "boolean",
+								PQgetvalue(res, i, i_inherited));
+
+			if (!PQgetisnull(res, i, i_ndistinct))
+				appendNamedArgument(out, fout, "n_distinct", "pg_ndistinct",
+									PQgetvalue(res, i, i_ndistinct));
+
+			if (!PQgetisnull(res, i, i_dependencies))
+				appendNamedArgument(out, fout, "dependencies", "pg_dependencies",
+									PQgetvalue(res, i, i_dependencies));
+
+			appendPQExpBufferStr(out, "\n);\n");
+		}
+
+		ArchiveEntry(fout, nilCatalogId, createDumpId(),
+					 ARCHIVE_OPTS(.tag = statsextinfo->dobj.name,
+								  .namespace = statsextinfo->dobj.namespace->dobj.name,
+								  .owner = statsextinfo->rolname,
+								  .description = "EXTENDED STATISTICS DATA",
+								  .section = SECTION_POST_DATA,
+								  .createStmt = out->data,
+								  .deps = &statsextinfo->dobj.dumpId,
+								  .nDeps = 1));
+		destroyPQExpBuffer(out);
+	}
+	PQclear(res);
+}
+
+/*
  * dumpConstraint
  *	  write out to fout a user-defined constraint
  */
@@ -18941,6 +19180,7 @@ collectSequences(Archive *fout)
 		sequences[i].cycled = (strcmp(PQgetvalue(res, i, 7), "t") == 0);
 		sequences[i].last_value = strtoi64(PQgetvalue(res, i, 8), NULL, 10);
 		sequences[i].is_called = (strcmp(PQgetvalue(res, i, 9), "t") == 0);
+		sequences[i].null_seqtuple = (PQgetisnull(res, i, 8) || PQgetisnull(res, i, 9));
 	}
 
 	PQclear(res);
@@ -19210,7 +19450,13 @@ dumpSequenceData(Archive *fout, const TableDataInfo *tdinfo)
 	TableInfo  *tbinfo = tdinfo->tdtable;
 	int64		last;
 	bool		called;
-	PQExpBuffer query = createPQExpBuffer();
+	PQExpBuffer query;
+
+	/* needn't bother if not dumping sequence data */
+	if (!fout->dopt->dumpData && !fout->dopt->sequence_data)
+		return;
+
+	query = createPQExpBuffer();
 
 	/*
 	 * For versions >= 18, the sequence information is gathered in the sorted
@@ -19252,6 +19498,12 @@ dumpSequenceData(Archive *fout, const TableDataInfo *tdinfo)
 		key.oid = tbinfo->dobj.catId.oid;
 		entry = bsearch(&key, sequences, nsequences,
 						sizeof(SequenceItem), SequenceItemCmp);
+
+		if (entry->null_seqtuple)
+			pg_fatal("failed to get data for sequence \"%s\"; user may lack "
+					 "SELECT privilege on the sequence or the sequence may "
+					 "have been concurrently dropped",
+					 tbinfo->dobj.name);
 
 		last = entry->last_value;
 		called = entry->is_called;

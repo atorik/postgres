@@ -3,7 +3,7 @@
  * publicationcmds.c
  *		publication manipulation
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -121,7 +121,12 @@ parse_publication_options(ParseState *pstate,
 			pubactions->pubtruncate = false;
 
 			*publish_given = true;
-			publish = defGetString(defel);
+
+			/*
+			 * SplitIdentifierString destructively modifies its input, so make
+			 * a copy so we don't modify the memory of the executing statement
+			 */
+			publish = pstrdup(defGetString(defel));
 
 			if (!SplitIdentifierString(publish, ',', &publish_list))
 				ereport(ERROR,
@@ -975,11 +980,16 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 
 	InvokeObjectPostCreateHook(PublicationRelationId, puboid, 0);
 
-	if (wal_level != WAL_LEVEL_LOGICAL)
+	/*
+	 * We don't need this warning message when wal_level >= 'replica' since
+	 * logical decoding is automatically enabled up on a logical slot
+	 * creation.
+	 */
+	if (wal_level < WAL_LEVEL_REPLICA)
 		ereport(WARNING,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("\"wal_level\" is insufficient to publish logical changes"),
-				 errhint("Set \"wal_level\" to \"logical\" before creating subscriptions.")));
+				 errmsg("logical decoding must be enabled to publish logical changes"),
+				 errhint("Before creating subscriptions, ensure that \"wal_level\" is set to \"replica\" or higher.")));
 
 	return myself;
 }
@@ -1345,7 +1355,7 @@ AlterPublicationTables(AlterPublicationStmt *stmt, HeapTuple tup,
 			 */
 			if (!found)
 			{
-				oldrel = palloc(sizeof(PublicationRelInfo));
+				oldrel = palloc_object(PublicationRelInfo);
 				oldrel->whereClause = NULL;
 				oldrel->columns = NIL;
 				oldrel->relation = table_open(oldrelid,
@@ -1757,7 +1767,7 @@ OpenTableList(List *tables)
 			continue;
 		}
 
-		pub_rel = palloc(sizeof(PublicationRelInfo));
+		pub_rel = palloc_object(PublicationRelInfo);
 		pub_rel->relation = rel;
 		pub_rel->whereClause = t->whereClause;
 		pub_rel->columns = t->columns;
@@ -1826,7 +1836,7 @@ OpenTableList(List *tables)
 
 				/* find_all_inheritors already got lock */
 				rel = table_open(childrelid, NoLock);
-				pub_rel = palloc(sizeof(PublicationRelInfo));
+				pub_rel = palloc_object(PublicationRelInfo);
 				pub_rel->relation = rel;
 				/* child inherits WHERE clause from parent */
 				pub_rel->whereClause = t->whereClause;

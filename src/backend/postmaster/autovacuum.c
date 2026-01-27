@@ -51,7 +51,7 @@
  * holding the relation lock) during which a worker may choose a table that was
  * already vacuumed; this is a bug in the current design.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -322,9 +322,6 @@ avl_dbase  *avl_dbase_array;
 
 /* Pointer to my own WorkerInfo, valid on each worker */
 static WorkerInfo MyWorkerInfo = NULL;
-
-/* PID of launcher, valid only in worker while shutting down */
-int			AutovacuumLauncherPid = 0;
 
 static Oid	do_start_worker(void);
 static void ProcessAutoVacLauncherInterrupts(void);
@@ -1604,11 +1601,6 @@ AutoVacWorkerMain(const void *startup_data, size_t startup_data_len)
 		do_autovacuum();
 	}
 
-	/*
-	 * The launcher will be notified of my death in ProcKill, *if* we managed
-	 * to get a worker slot at all
-	 */
-
 	/* All done, go away */
 	proc_exit(0);
 }
@@ -1622,20 +1614,6 @@ FreeWorkerInfo(int code, Datum arg)
 	if (MyWorkerInfo != NULL)
 	{
 		LWLockAcquire(AutovacuumLock, LW_EXCLUSIVE);
-
-		/*
-		 * Wake the launcher up so that he can launch a new worker immediately
-		 * if required.  We only save the launcher's PID in local memory here;
-		 * the actual signal will be sent when the PGPROC is recycled.  Note
-		 * that we always do this, so that the launcher can rebalance the cost
-		 * limit setting of the remaining workers.
-		 *
-		 * We somewhat ignore the risk that the launcher changes its PID
-		 * between us reading it and the actual kill; we expect ProcKill to be
-		 * called shortly after us, and we assume that PIDs are not reused too
-		 * quickly after a process exits.
-		 */
-		AutovacuumLauncherPid = AutoVacuumShmem->av_launcherpid;
 
 		dlist_delete(&MyWorkerInfo->wi_links);
 		MyWorkerInfo->wi_dboid = InvalidOid;
@@ -1865,7 +1843,7 @@ get_database_list(void)
 		 */
 		oldcxt = MemoryContextSwitchTo(resultcxt);
 
-		avdb = (avw_dbase *) palloc(sizeof(avw_dbase));
+		avdb = palloc_object(avw_dbase);
 
 		avdb->adw_datid = pgdatabase->oid;
 		avdb->adw_name = pstrdup(NameStr(pgdatabase->datname));
@@ -1936,8 +1914,8 @@ do_autovacuum(void)
 
 	/*
 	 * Compute the multixact age for which freezing is urgent.  This is
-	 * normally autovacuum_multixact_freeze_max_age, but may be less if we are
-	 * short of multixact member space.
+	 * normally autovacuum_multixact_freeze_max_age, but may be less if
+	 * multixact members are bloated.
 	 */
 	effective_multixact_freeze_max_age = MultiXactMemberFreezeThreshold();
 
@@ -2556,7 +2534,10 @@ deleted:
 		workitem->avw_active = true;
 		LWLockRelease(AutovacuumLock);
 
+		PushActiveSnapshot(GetTransactionSnapshot());
 		perform_work_item(workitem);
+		if (ActiveSnapshotSet())	/* transaction could have aborted */
+			PopActiveSnapshot();
 
 		/*
 		 * Check for config changes before acquiring lock for further jobs.
@@ -2750,7 +2731,7 @@ extract_autovac_opts(HeapTuple tup, TupleDesc pg_class_desc)
 	if (relopts == NULL)
 		return NULL;
 
-	av = palloc(sizeof(AutoVacOpts));
+	av = palloc_object(AutoVacOpts);
 	memcpy(av, &(((StdRdOptions *) relopts)->autovacuum), sizeof(AutoVacOpts));
 	pfree(relopts);
 
@@ -2854,7 +2835,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 			? avopts->multixact_freeze_table_age
 			: default_multixact_freeze_table_age;
 
-		tab = palloc(sizeof(autovac_table));
+		tab = palloc_object(autovac_table);
 		tab->at_relid = relid;
 		tab->at_sharedrel = classForm->relisshared;
 
@@ -3155,11 +3136,6 @@ relation_needs_vacanalyze(Oid relid,
 			vac_ins_scale_factor * reltuples * pcnt_unfrozen;
 		anlthresh = (float4) anl_base_thresh + anl_scale_factor * reltuples;
 
-		/*
-		 * Note that we don't need to take special consideration for stat
-		 * reset, because if that happens, the last vacuum and analyze counts
-		 * will be reset too.
-		 */
 		if (vac_ins_base_thresh >= 0)
 			elog(DEBUG3, "%s: vac: %.0f (threshold %.0f), ins: %.0f (threshold %.0f), anl: %.0f (threshold %.0f)",
 				 NameStr(classForm->relname),

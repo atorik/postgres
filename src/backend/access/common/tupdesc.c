@@ -3,7 +3,7 @@
  * tupdesc.c
  *	  POSTGRES tuple descriptor support code
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -361,7 +361,7 @@ CreateTupleDescCopyConstr(TupleDesc tupdesc)
 	/* Copy the TupleConstr data structure, if any */
 	if (constr)
 	{
-		TupleConstr *cpy = (TupleConstr *) palloc0(sizeof(TupleConstr));
+		TupleConstr *cpy = palloc0_object(TupleConstr);
 
 		cpy->has_not_null = constr->has_not_null;
 		cpy->has_generated_stored = constr->has_generated_stored;

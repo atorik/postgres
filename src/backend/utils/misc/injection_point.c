@@ -6,7 +6,7 @@
  * Injection points can be used to run arbitrary code by attaching callbacks
  * that would be executed in place of the named injection point.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -186,7 +186,7 @@ injection_point_cache_load(InjectionPointEntry *entry, int slot_idx, uint64 gene
 		elog(ERROR, "could not find library \"%s\" for injection point \"%s\"",
 			 path, entry->name);
 
-	injection_callback_local = (void *)
+	injection_callback_local =
 		load_external_function(path, entry->function, false, NULL);
 
 	if (injection_callback_local == NULL)
@@ -283,16 +283,16 @@ InjectionPointAttach(const char *name,
 	int			free_idx;
 
 	if (strlen(name) >= INJ_NAME_MAXLEN)
-		elog(ERROR, "injection point name %s too long (maximum of %u)",
-			 name, INJ_NAME_MAXLEN);
+		elog(ERROR, "injection point name %s too long (maximum of %u characters)",
+			 name, INJ_NAME_MAXLEN - 1);
 	if (strlen(library) >= INJ_LIB_MAXLEN)
-		elog(ERROR, "injection point library %s too long (maximum of %u)",
-			 library, INJ_LIB_MAXLEN);
+		elog(ERROR, "injection point library %s too long (maximum of %u characters)",
+			 library, INJ_LIB_MAXLEN - 1);
 	if (strlen(function) >= INJ_FUNC_MAXLEN)
-		elog(ERROR, "injection point function %s too long (maximum of %u)",
-			 function, INJ_FUNC_MAXLEN);
-	if (private_data_size >= INJ_PRIVATE_MAXLEN)
-		elog(ERROR, "injection point data too long (maximum of %u)",
+		elog(ERROR, "injection point function %s too long (maximum of %u characters)",
+			 function, INJ_FUNC_MAXLEN - 1);
+	if (private_data_size > INJ_PRIVATE_MAXLEN)
+		elog(ERROR, "injection point data too long (maximum of %u bytes)",
 			 INJ_PRIVATE_MAXLEN);
 
 	/*
@@ -331,11 +331,8 @@ InjectionPointAttach(const char *name,
 
 	/* Save the entry */
 	strlcpy(entry->name, name, sizeof(entry->name));
-	entry->name[INJ_NAME_MAXLEN - 1] = '\0';
 	strlcpy(entry->library, library, sizeof(entry->library));
-	entry->library[INJ_LIB_MAXLEN - 1] = '\0';
 	strlcpy(entry->function, function, sizeof(entry->function));
-	entry->function[INJ_FUNC_MAXLEN - 1] = '\0';
 	if (private_data != NULL)
 		memcpy(entry->private_data, private_data, private_data_size);
 
@@ -614,7 +611,7 @@ InjectionPointList(void)
 		if (generation % 2 == 0)
 			continue;
 
-		inj_point = (InjectionPointData *) palloc0(sizeof(InjectionPointData));
+		inj_point = palloc0_object(InjectionPointData);
 		inj_point->name = pstrdup(entry->name);
 		inj_point->library = pstrdup(entry->library);
 		inj_point->function = pstrdup(entry->function);

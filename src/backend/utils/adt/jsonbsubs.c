@@ -3,7 +3,7 @@
  * jsonbsubs.c
  *	  Subscripting support functions for jsonb.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -152,7 +152,7 @@ jsonb_subscript_transform(SubscriptingRef *sbsref,
 		upperIndexpr = lappend(upperIndexpr, subExpr);
 	}
 
-	/* store the transformed lists into the SubscriptRef node */
+	/* store the transformed lists into the SubscriptingRef node */
 	sbsref->refupperindexpr = upperIndexpr;
 	sbsref->reflowerindexpr = NIL;
 

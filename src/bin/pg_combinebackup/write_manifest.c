@@ -2,7 +2,7 @@
  *
  * Write a new backup manifest.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/bin/pg_combinebackup/write_manifest.c
@@ -259,8 +259,8 @@ flush_manifest(manifest_writer *mwriter)
 			if (wb < 0)
 				pg_fatal("could not write file \"%s\": %m", mwriter->pathname);
 			else
-				pg_fatal("could not write file \"%s\": wrote %d of %d",
-						 mwriter->pathname, (int) wb, mwriter->buf.len);
+				pg_fatal("could not write file \"%s\": wrote %zd of %d",
+						 mwriter->pathname, wb, mwriter->buf.len);
 		}
 
 		if (mwriter->still_checksumming &&

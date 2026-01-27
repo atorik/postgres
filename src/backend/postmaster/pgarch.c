@@ -14,7 +14,7 @@
  *
  *	Initial author: Simon Riggs		simon@2ndquadrant.com
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -257,7 +257,7 @@ PgArchiverMain(const void *startup_data, size_t startup_data_len)
 	PgArch->pgprocno = MyProcNumber;
 
 	/* Create workspace for pgarch_readyXlog() */
-	arch_files = palloc(sizeof(struct arch_files_state));
+	arch_files = palloc_object(struct arch_files_state);
 	arch_files->arch_files_size = 0;
 
 	/* Initialize our max-heap for prioritizing files to archive. */
@@ -292,7 +292,7 @@ PgArchWakeup(void)
 	 * be relaunched shortly and will start archiving.
 	 */
 	if (arch_pgprocno != INVALID_PROC_NUMBER)
-		SetLatch(&ProcGlobal->allProcs[arch_pgprocno].procLatch);
+		SetLatch(&GetPGProcByNumber(arch_pgprocno)->procLatch);
 }
 
 
@@ -945,7 +945,7 @@ LoadArchiveLibrary(void)
 		ereport(ERROR,
 				(errmsg("archive modules must register an archive callback")));
 
-	archive_module_state = (ArchiveModuleState *) palloc0(sizeof(ArchiveModuleState));
+	archive_module_state = palloc0_object(ArchiveModuleState);
 	if (ArchiveCallbacks->startup_cb != NULL)
 		ArchiveCallbacks->startup_cb(archive_module_state);
 

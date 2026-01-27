@@ -3,7 +3,7 @@
  * sequence.c
  *	  PostgreSQL sequences support code.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -14,7 +14,6 @@
  */
 #include "postgres.h"
 
-#include "access/bufmask.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
 #include "access/relation.h"
@@ -22,9 +21,7 @@
 #include "access/table.h"
 #include "access/transam.h"
 #include "access/xact.h"
-#include "access/xlog.h"
 #include "access/xloginsert.h"
-#include "access/xlogutils.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
@@ -34,11 +31,13 @@
 #include "catalog/storage_xlog.h"
 #include "commands/defrem.h"
 #include "commands/sequence.h"
+#include "commands/sequence_xlog.h"
 #include "commands/tablecmds.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "parser/parse_type.h"
+#include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "storage/proc.h"
 #include "storage/smgr.h"
@@ -57,16 +56,6 @@
  * crash we can lose (skip over) as many values as we pre-logged.
  */
 #define SEQ_LOG_VALS	32
-
-/*
- * The "special area" of a sequence's buffer page looks like this.
- */
-#define SEQ_MAGIC	  0x1717
-
-typedef struct sequence_magic
-{
-	uint32		magic;
-} sequence_magic;
 
 /*
  * We store a SeqTable item for every sequence we have touched in the current
@@ -112,7 +101,6 @@ static void init_params(ParseState *pstate, List *options, bool for_identity,
 						bool *is_called,
 						bool *need_seq_rewrite,
 						List **owned_by);
-static void do_setval(Oid relid, int64 next, bool iscalled);
 static void process_owned_by(Relation seqrel, List *owned_by, bool for_identity);
 
 
@@ -954,8 +942,8 @@ lastval(PG_FUNCTION_ARGS)
  * it is the only way to clear the is_called flag in an existing
  * sequence.
  */
-static void
-do_setval(Oid relid, int64 next, bool iscalled)
+void
+SetSequence(Oid relid, int64 next, bool iscalled)
 {
 	SeqTable	elm;
 	Relation	seqrel;
@@ -1056,7 +1044,7 @@ do_setval(Oid relid, int64 next, bool iscalled)
 
 /*
  * Implement the 2 arg setval procedure.
- * See do_setval for discussion.
+ * See SetSequence for discussion.
  */
 Datum
 setval_oid(PG_FUNCTION_ARGS)
@@ -1064,14 +1052,14 @@ setval_oid(PG_FUNCTION_ARGS)
 	Oid			relid = PG_GETARG_OID(0);
 	int64		next = PG_GETARG_INT64(1);
 
-	do_setval(relid, next, true);
+	SetSequence(relid, next, true);
 
 	PG_RETURN_INT64(next);
 }
 
 /*
  * Implement the 3 arg setval procedure.
- * See do_setval for discussion.
+ * See SetSequence for discussion.
  */
 Datum
 setval3_oid(PG_FUNCTION_ARGS)
@@ -1080,7 +1068,7 @@ setval3_oid(PG_FUNCTION_ARGS)
 	int64		next = PG_GETARG_INT64(1);
 	bool		iscalled = PG_GETARG_BOOL(2);
 
-	do_setval(relid, next, iscalled);
+	SetSequence(relid, next, iscalled);
 
 	PG_RETURN_INT64(next);
 }
@@ -1797,15 +1785,15 @@ pg_sequence_parameters(PG_FUNCTION_ARGS)
 /*
  * Return the sequence tuple along with its page LSN.
  *
- * This is primarily intended for use by pg_dump to gather sequence data
- * without needing to individually query each sequence relation.
+ * This is primarily used by pg_dump to efficiently collect sequence data
+ * without querying each sequence individually, and is also leveraged by
+ * logical replication while synchronizing sequences.
  */
 Datum
 pg_get_sequence_data(PG_FUNCTION_ARGS)
 {
 #define PG_GET_SEQUENCE_DATA_COLS	3
 	Oid			relid = PG_GETARG_OID(0);
-	SeqTable	elm;
 	Relation	seqrel;
 	Datum		values[PG_GET_SEQUENCE_DATA_COLS] = {0};
 	bool		isnull[PG_GET_SEQUENCE_DATA_COLS] = {0};
@@ -1822,13 +1810,15 @@ pg_get_sequence_data(PG_FUNCTION_ARGS)
 					   LSNOID, -1, 0);
 	resultTupleDesc = BlessTupleDesc(resultTupleDesc);
 
-	init_sequence(relid, &elm, &seqrel);
+	seqrel = try_relation_open(relid, AccessShareLock);
 
 	/*
-	 * Return all NULLs for sequences for which we lack privileges, other
-	 * sessions' temporary sequences, and unlogged sequences on standbys.
+	 * Return all NULLs for missing sequences, sequences for which we lack
+	 * privileges, other sessions' temporary sequences, and unlogged sequences
+	 * on standbys.
 	 */
-	if (pg_class_aclcheck(relid, GetUserId(), ACL_SELECT) == ACLCHECK_OK &&
+	if (seqrel && seqrel->rd_rel->relkind == RELKIND_SEQUENCE &&
+		pg_class_aclcheck(relid, GetUserId(), ACL_SELECT) == ACLCHECK_OK &&
 		!RELATION_IS_OTHER_TEMP(seqrel) &&
 		(RelationIsPermanent(seqrel) || !RecoveryInProgress()))
 	{
@@ -1849,7 +1839,8 @@ pg_get_sequence_data(PG_FUNCTION_ARGS)
 	else
 		memset(isnull, true, sizeof(isnull));
 
-	sequence_close(seqrel, NoLock);
+	if (seqrel)
+		relation_close(seqrel, AccessShareLock);
 
 	resultHeapTuple = heap_form_tuple(resultTupleDesc, values, isnull);
 	result = HeapTupleGetDatum(resultHeapTuple);
@@ -1907,56 +1898,6 @@ pg_sequence_last_value(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 }
 
-
-void
-seq_redo(XLogReaderState *record)
-{
-	XLogRecPtr	lsn = record->EndRecPtr;
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
-	Buffer		buffer;
-	Page		page;
-	Page		localpage;
-	char	   *item;
-	Size		itemsz;
-	xl_seq_rec *xlrec = (xl_seq_rec *) XLogRecGetData(record);
-	sequence_magic *sm;
-
-	if (info != XLOG_SEQ_LOG)
-		elog(PANIC, "seq_redo: unknown op code %u", info);
-
-	buffer = XLogInitBufferForRedo(record, 0);
-	page = BufferGetPage(buffer);
-
-	/*
-	 * We always reinit the page.  However, since this WAL record type is also
-	 * used for updating sequences, it's possible that a hot-standby backend
-	 * is examining the page concurrently; so we mustn't transiently trash the
-	 * buffer.  The solution is to build the correct new page contents in
-	 * local workspace and then memcpy into the buffer.  Then only bytes that
-	 * are supposed to change will change, even transiently. We must palloc
-	 * the local page for alignment reasons.
-	 */
-	localpage = (Page) palloc(BufferGetPageSize(buffer));
-
-	PageInit(localpage, BufferGetPageSize(buffer), sizeof(sequence_magic));
-	sm = (sequence_magic *) PageGetSpecialPointer(localpage);
-	sm->magic = SEQ_MAGIC;
-
-	item = (char *) xlrec + sizeof(xl_seq_rec);
-	itemsz = XLogRecGetDataLen(record) - sizeof(xl_seq_rec);
-
-	if (PageAddItem(localpage, item, itemsz, FirstOffsetNumber, false, false) == InvalidOffsetNumber)
-		elog(PANIC, "seq_redo: failed to add item to page");
-
-	PageSetLSN(localpage, lsn);
-
-	memcpy(page, localpage, BufferGetPageSize(buffer));
-	MarkBufferDirty(buffer);
-	UnlockReleaseBuffer(buffer);
-
-	pfree(localpage);
-}
-
 /*
  * Flush cached sequence information.
  */
@@ -1970,15 +1911,4 @@ ResetSequenceCaches(void)
 	}
 
 	last_used_seq = NULL;
-}
-
-/*
- * Mask a Sequence page before performing consistency checks on it.
- */
-void
-seq_mask(char *page, BlockNumber blkno)
-{
-	mask_page_lsn_and_checksum(page);
-
-	mask_unused_space(page);
 }

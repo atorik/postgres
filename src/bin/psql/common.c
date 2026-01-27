@@ -1,7 +1,7 @@
 /*
  * psql - the PostgreSQL interactive terminal
  *
- * Copyright (c) 2000-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2000-2026, PostgreSQL Global Development Group
  *
  * src/bin/psql/common.c
  */
@@ -1021,7 +1021,7 @@ PrintQueryStatus(PGresult *result, FILE *printQueryFout)
 	if (pset.logfile)
 		fprintf(pset.logfile, "%s\n", cmdstatus);
 
-	snprintf(buf, sizeof(buf), "%u", (unsigned int) PQoidValue(result));
+	snprintf(buf, sizeof(buf), "%u", PQoidValue(result));
 	SetVariable(pset.vars, "LASTOID", buf);
 }
 

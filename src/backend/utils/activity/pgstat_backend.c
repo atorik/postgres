@@ -15,7 +15,7 @@
  * PgStat_EntryRef->pending, relying on PendingBackendStats instead so as it
  * is possible to report data within critical sections.
  *
- * Copyright (c) 2001-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2001-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/utils/activity/pgstat_backend.c
@@ -252,6 +252,7 @@ pgstat_flush_backend_entry_wal(PgStat_EntryRef *entry_ref)
 	WALSTAT_ACC(wal_records, wal_usage_diff);
 	WALSTAT_ACC(wal_fpi, wal_usage_diff);
 	WALSTAT_ACC(wal_bytes, wal_usage_diff);
+	WALSTAT_ACC(wal_fpi_bytes, wal_usage_diff);
 #undef WALSTAT_ACC
 
 	/*

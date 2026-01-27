@@ -20,12 +20,14 @@ OBJS = \
 	decode.o \
 	launcher.o \
 	logical.o \
+	logicalctl.o \
 	logicalfuncs.o \
 	message.o \
 	origin.o \
 	proto.o \
 	relation.o \
 	reorderbuffer.o \
+	sequencesync.o \
 	slotsync.o \
 	snapbuild.o \
 	syncutils.o \

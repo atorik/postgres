@@ -3,7 +3,7 @@
  * backup_manifest.c
  *	  code for generating and sending a backup manifest
  *
- * Portions Copyright (c) 2010-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2010-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/backup/backup_manifest.c
@@ -242,7 +242,7 @@ AddWALInfoToBackupManifest(backup_manifest_info *manifest, XLogRecPtr startptr,
 		 * entry->end is InvalidXLogRecPtr, it means that the timeline has not
 		 * yet ended.)
 		 */
-		if (!XLogRecPtrIsInvalid(entry->end) && entry->end < startptr)
+		if (XLogRecPtrIsValid(entry->end) && entry->end < startptr)
 			continue;
 
 		/*
@@ -253,7 +253,7 @@ AddWALInfoToBackupManifest(backup_manifest_info *manifest, XLogRecPtr startptr,
 		if (first_wal_range && endtli != entry->tli)
 			ereport(ERROR,
 					errmsg("expected end timeline %u but found timeline %u",
-						   starttli, entry->tli));
+						   endtli, entry->tli));
 
 		/*
 		 * If this timeline entry matches with the timeline on which the
@@ -274,7 +274,7 @@ AddWALInfoToBackupManifest(backup_manifest_info *manifest, XLogRecPtr startptr,
 			 * better have arrived at the expected starting TLI. If not,
 			 * something's gone horribly wrong.
 			 */
-			if (XLogRecPtrIsInvalid(entry->begin))
+			if (!XLogRecPtrIsValid(entry->begin))
 				ereport(ERROR,
 						errmsg("expected start timeline %u but found timeline %u",
 							   starttli, entry->tli));
@@ -388,7 +388,7 @@ AppendStringToManifest(backup_manifest_info *manifest, const char *s)
 	Assert(manifest != NULL);
 	if (manifest->still_checksumming)
 	{
-		if (pg_cryptohash_update(manifest->manifest_ctx, (uint8 *) s, len) < 0)
+		if (pg_cryptohash_update(manifest->manifest_ctx, (const uint8 *) s, len) < 0)
 			elog(ERROR, "failed to update checksum of backup manifest: %s",
 				 pg_cryptohash_error(manifest->manifest_ctx));
 	}

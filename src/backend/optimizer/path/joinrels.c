@@ -3,7 +3,7 @@
  * joinrels.c
  *	  Routines to determine which relations should be joined
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -1990,8 +1990,7 @@ compute_partition_bounds(PlannerInfo *root, RelOptInfo *rel1,
 		Assert(nparts > 0);
 		joinrel->boundinfo = boundinfo;
 		joinrel->nparts = nparts;
-		joinrel->part_rels =
-			(RelOptInfo **) palloc0(sizeof(RelOptInfo *) * nparts);
+		joinrel->part_rels = palloc0_array(RelOptInfo *, nparts);
 	}
 	else
 	{

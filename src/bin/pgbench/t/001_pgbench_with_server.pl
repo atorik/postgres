@@ -1,5 +1,5 @@
 
-# Copyright (c) 2021-2025, PostgreSQL Global Development Group
+# Copyright (c) 2021-2026, PostgreSQL Global Development Group
 
 use strict;
 use warnings FATAL => 'all';
@@ -1834,6 +1834,28 @@ $node->pgbench(
 
 # Clean up
 $node->safe_psql('postgres', 'DROP TABLE counter;');
+
+# Test --continue-on-error
+$node->safe_psql('postgres',
+	'CREATE TABLE unique_table(i int unique);');
+
+$node->pgbench(
+	'-n -t 10 --continue-on-error --failures-detailed',
+	0,
+	[
+		qr{processed: 1/10\b},
+		qr{other failures: 9\b}
+	],
+	[],
+	'test --continue-on-error',
+	{
+		'001_continue_on_error' => q{
+		INSERT INTO unique_table VALUES(0);
+		}
+	});
+
+# Clean up
+$node->safe_psql('postgres', 'DROP TABLE unique_table;');
 
 # done
 $node->safe_psql('postgres', 'DROP TABLESPACE regress_pgbench_tap_1_ts');

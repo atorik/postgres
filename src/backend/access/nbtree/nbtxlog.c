@@ -4,7 +4,7 @@
  *	  WAL replay logic for btrees.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -469,7 +469,7 @@ btree_xlog_dedup(XLogReaderState *record)
 		BTDedupInterval *intervals;
 		Page		newpage;
 
-		state = (BTDedupState) palloc(sizeof(BTDedupStateData));
+		state = palloc_object(BTDedupStateData);
 		state->deduplicate = true;	/* unused */
 		state->nmaxitems = 0;	/* unused */
 		/* Conservatively use larger maxpostingsize than primary */

@@ -8,7 +8,7 @@
  * pager open/close functions, all that stuff came with it.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/fe_utils/print.c
@@ -3775,6 +3775,10 @@ printQuery(const PGresult *result, const printQueryOpt *opt,
 
 			if (PQgetisnull(result, r, c))
 				cell = opt->nullPrint ? opt->nullPrint : "";
+			else if (PQftype(result, c) == BOOLOID)
+				cell = (PQgetvalue(result, r, c)[0] == 't' ?
+						(opt->truePrint ? opt->truePrint : "t") :
+						(opt->falsePrint ? opt->falsePrint : "f"));
 			else
 			{
 				cell = PQgetvalue(result, r, c);
@@ -3817,6 +3821,7 @@ column_type_alignment(Oid ftype)
 		case FLOAT8OID:
 		case NUMERICOID:
 		case OIDOID:
+		case OID8OID:
 		case XIDOID:
 		case XID8OID:
 		case CIDOID:

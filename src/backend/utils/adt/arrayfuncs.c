@@ -3,7 +3,7 @@
  * arrayfuncs.c
  *	  Support functions for arrays.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -87,7 +87,7 @@ typedef struct ArrayIteratorData
 	/* current position information, updated on each iteration */
 	char	   *data_ptr;		/* our current position in the array */
 	int			current_item;	/* the item # we're at in the array */
-}			ArrayIteratorData;
+} ArrayIteratorData;
 
 static bool ReadArrayDimensions(char **srcptr, int *ndim_p,
 								int *dim, int *lBound,
@@ -333,8 +333,8 @@ array_in(PG_FUNCTION_ARGS)
 			if (!AllocSizeIsValid(nbytes))
 				ereturn(escontext, (Datum) 0,
 						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-						 errmsg("array size exceeds the maximum allowed (%d)",
-								(int) MaxAllocSize)));
+						 errmsg("array size exceeds the maximum allowed (%zu)",
+								MaxAllocSize)));
 		}
 	}
 	if (hasnulls)
@@ -492,8 +492,8 @@ ReadArrayDimensions(char **srcptr, int *ndim_p, int *dim, int *lBound,
 			pg_add_s32_overflow(ub, 1, &ub))
 			ereturn(escontext, false,
 					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-					 errmsg("array size exceeds the maximum allowed (%d)",
-							(int) MaxArraySize)));
+					 errmsg("array size exceeds the maximum allowed (%zu)",
+							MaxArraySize)));
 
 		dim[ndim] = ub;
 		ndim++;
@@ -725,8 +725,8 @@ ReadArrayStr(char **srcptr,
 					if (maxitems >= MaxArraySize)
 						ereturn(escontext, false,
 								(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-								 errmsg("array size exceeds the maximum allowed (%d)",
-										(int) MaxArraySize)));
+								 errmsg("array size exceeds the maximum allowed (%zu)",
+										MaxArraySize)));
 					maxitems = Min(maxitems * 2, MaxArraySize);
 					values = repalloc_array(values, Datum, maxitems);
 					nulls = repalloc_array(nulls, bool, maxitems);
@@ -960,8 +960,8 @@ ending_error:
  */
 void
 CopyArrayEls(ArrayType *array,
-			 Datum *values,
-			 bool *nulls,
+			 const Datum *values,
+			 const bool *nulls,
 			 int nitems,
 			 int typlen,
 			 bool typbyval,
@@ -1531,8 +1531,8 @@ ReadArrayBinary(StringInfo buf,
 			if (!AllocSizeIsValid(totbytes))
 				ereport(ERROR,
 						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-						 errmsg("array size exceeds the maximum allowed (%d)",
-								(int) MaxAllocSize)));
+						 errmsg("array size exceeds the maximum allowed (%zu)",
+								MaxAllocSize)));
 		}
 	}
 	*hasnulls = hasnull;
@@ -2257,7 +2257,7 @@ array_set_element(Datum arraydatum,
 
 		resultarray = (char *) palloc(arraytyplen);
 		memcpy(resultarray, DatumGetPointer(arraydatum), arraytyplen);
-		elt_ptr = (char *) resultarray + indx[0] * elmlen;
+		elt_ptr = resultarray + indx[0] * elmlen;
 		ArrayCastAndSet(dataValue, elmlen, elmbyval, elmalign, elt_ptr);
 		return PointerGetDatum(resultarray);
 	}
@@ -2339,8 +2339,8 @@ array_set_element(Datum arraydatum,
 				pg_add_s32_overflow(dim[0], addedbefore, &dim[0]))
 				ereport(ERROR,
 						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-						 errmsg("array size exceeds the maximum allowed (%d)",
-								(int) MaxArraySize)));
+						 errmsg("array size exceeds the maximum allowed (%zu)",
+								MaxArraySize)));
 			lb[0] = indx[0];
 			if (addedbefore > 1)
 				newhasnulls = true; /* will insert nulls */
@@ -2354,8 +2354,8 @@ array_set_element(Datum arraydatum,
 				pg_add_s32_overflow(dim[0], addedafter, &dim[0]))
 				ereport(ERROR,
 						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-						 errmsg("array size exceeds the maximum allowed (%d)",
-								(int) MaxArraySize)));
+						 errmsg("array size exceeds the maximum allowed (%zu)",
+								MaxArraySize)));
 			if (addedafter > 1)
 				newhasnulls = true; /* will insert nulls */
 		}
@@ -2418,7 +2418,7 @@ array_set_element(Datum arraydatum,
 			olditemlen = att_addlength_pointer(0, elmlen, elt_ptr);
 			olditemlen = att_align_nominal(olditemlen, elmalign);
 		}
-		lenafter = (int) (olddatasize - lenbefore - olditemlen);
+		lenafter = olddatasize - lenbefore - olditemlen;
 	}
 
 	if (isNull)
@@ -2616,8 +2616,8 @@ array_set_element_expanded(Datum arraydatum,
 				pg_add_s32_overflow(dim[0], addedbefore, &dim[0]))
 				ereport(ERROR,
 						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-						 errmsg("array size exceeds the maximum allowed (%d)",
-								(int) MaxArraySize)));
+						 errmsg("array size exceeds the maximum allowed (%zu)",
+								MaxArraySize)));
 			lb[0] = indx[0];
 			dimschanged = true;
 			if (addedbefore > 1)
@@ -2632,8 +2632,8 @@ array_set_element_expanded(Datum arraydatum,
 				pg_add_s32_overflow(dim[0], addedafter, &dim[0]))
 				ereport(ERROR,
 						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-						 errmsg("array size exceeds the maximum allowed (%d)",
-								(int) MaxArraySize)));
+						 errmsg("array size exceeds the maximum allowed (%zu)",
+								MaxArraySize)));
 			dimschanged = true;
 			if (addedafter > 1)
 				newhasnulls = true; /* will insert nulls */
@@ -2893,8 +2893,8 @@ array_set_slice(Datum arraydatum,
 				pg_add_s32_overflow(dim[i], 1, &dim[i]))
 				ereport(ERROR,
 						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-						 errmsg("array size exceeds the maximum allowed (%d)",
-								(int) MaxArraySize)));
+						 errmsg("array size exceeds the maximum allowed (%zu)",
+								MaxArraySize)));
 
 			lb[i] = lowerIndx[i];
 		}
@@ -2947,8 +2947,8 @@ array_set_slice(Datum arraydatum,
 				pg_add_s32_overflow(dim[0], addedbefore, &dim[0]))
 				ereport(ERROR,
 						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-						 errmsg("array size exceeds the maximum allowed (%d)",
-								(int) MaxArraySize)));
+						 errmsg("array size exceeds the maximum allowed (%zu)",
+								MaxArraySize)));
 			lb[0] = lowerIndx[0];
 			if (addedbefore > 1)
 				newhasnulls = true; /* will insert nulls */
@@ -2962,8 +2962,8 @@ array_set_slice(Datum arraydatum,
 				pg_add_s32_overflow(dim[0], addedafter, &dim[0]))
 				ereport(ERROR,
 						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-						 errmsg("array size exceeds the maximum allowed (%d)",
-								(int) MaxArraySize)));
+						 errmsg("array size exceeds the maximum allowed (%zu)",
+								MaxArraySize)));
 			if (addedafter > 1)
 				newhasnulls = true; /* will insert nulls */
 		}
@@ -3303,8 +3303,8 @@ array_map(Datum arrayd,
 			if (!AllocSizeIsValid(nbytes))
 				ereport(ERROR,
 						(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-						 errmsg("array size exceeds the maximum allowed (%d)",
-								(int) MaxAllocSize)));
+						 errmsg("array size exceeds the maximum allowed (%zu)",
+								MaxAllocSize)));
 		}
 	}
 
@@ -3543,8 +3543,8 @@ construct_md_array(Datum *elems,
 		if (!AllocSizeIsValid(nbytes))
 			ereport(ERROR,
 					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-					 errmsg("array size exceeds the maximum allowed (%d)",
-							(int) MaxAllocSize)));
+					 errmsg("array size exceeds the maximum allowed (%zu)",
+							MaxAllocSize)));
 	}
 
 	/* Allocate and initialize result array */
@@ -3582,7 +3582,7 @@ construct_empty_array(Oid elmtype)
 {
 	ArrayType  *result;
 
-	result = (ArrayType *) palloc0(sizeof(ArrayType));
+	result = palloc0_object(ArrayType);
 	SET_VARSIZE(result, sizeof(ArrayType));
 	result->ndim = 0;
 	result->dataoffset = 0;
@@ -3629,7 +3629,7 @@ construct_empty_expanded_array(Oid element_type,
  * to hard-wire values if the element type is hard-wired.
  */
 void
-deconstruct_array(ArrayType *array,
+deconstruct_array(const ArrayType *array,
 				  Oid elmtype,
 				  int elmlen, bool elmbyval, char elmalign,
 				  Datum **elemsp, bool **nullsp, int *nelemsp)
@@ -3645,9 +3645,9 @@ deconstruct_array(ArrayType *array,
 	Assert(ARR_ELEMTYPE(array) == elmtype);
 
 	nelems = ArrayGetNItems(ARR_NDIM(array), ARR_DIMS(array));
-	*elemsp = elems = (Datum *) palloc(nelems * sizeof(Datum));
+	*elemsp = elems = palloc_array(Datum, nelems);
 	if (nullsp)
-		*nullsp = nulls = (bool *) palloc0(nelems * sizeof(bool));
+		*nullsp = nulls = palloc0_array(bool, nelems);
 	else
 		nulls = NULL;
 	*nelemsp = nelems;
@@ -3695,7 +3695,7 @@ deconstruct_array(ArrayType *array,
  * useful when manipulating arrays from/for system catalogs.
  */
 void
-deconstruct_array_builtin(ArrayType *array,
+deconstruct_array_builtin(const ArrayType *array,
 						  Oid elmtype,
 						  Datum **elemsp, bool **nullsp, int *nelemsp)
 {
@@ -3765,7 +3765,7 @@ deconstruct_array_builtin(ArrayType *array,
  * if the array *might* contain a null.
  */
 bool
-array_contains_nulls(ArrayType *array)
+array_contains_nulls(const ArrayType *array)
 {
 	int			nelems;
 	bits8	   *bitmap;
@@ -4209,7 +4209,7 @@ hash_array(PG_FUNCTION_ARGS)
 			 * modify typentry, since that points directly into the type
 			 * cache.
 			 */
-			record_typentry = palloc0(sizeof(*record_typentry));
+			record_typentry = palloc0_object(TypeCacheEntry);
 			record_typentry->type_id = element_type;
 
 			/* fill in what we need below */
@@ -4597,7 +4597,7 @@ arraycontained(PG_FUNCTION_ARGS)
 ArrayIterator
 array_create_iterator(ArrayType *arr, int slice_ndim, ArrayMetaState *mstate)
 {
-	ArrayIterator iterator = palloc0(sizeof(ArrayIteratorData));
+	ArrayIterator iterator = palloc0_object(ArrayIteratorData);
 
 	/*
 	 * Sanity-check inputs --- caller should have got this right already
@@ -5375,8 +5375,8 @@ accumArrayResult(ArrayBuildState *astate,
 		if (!AllocSizeIsValid(astate->alen * sizeof(Datum)))
 			ereport(ERROR,
 					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-					 errmsg("array size exceeds the maximum allowed (%d)",
-							(int) MaxAllocSize)));
+					 errmsg("array size exceeds the maximum allowed (%zu)",
+							MaxAllocSize)));
 		astate->dvalues = (Datum *)
 			repalloc(astate->dvalues, astate->alen * sizeof(Datum));
 		astate->dnulls = (bool *)
@@ -5687,7 +5687,7 @@ accumArrayResultArr(ArrayBuildStateArr *astate,
 	MemoryContextSwitchTo(oldcontext);
 
 	/* Release detoasted copy if any */
-	if ((Pointer) arg != DatumGetPointer(dvalue))
+	if (arg != DatumGetPointer(dvalue))
 		pfree(arg);
 
 	return astate;
@@ -5944,7 +5944,7 @@ generate_subscripts(PG_FUNCTION_ARGS)
 		 * switch to memory context appropriate for multiple function calls
 		 */
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
-		fctx = (generate_subscripts_fctx *) palloc(sizeof(generate_subscripts_fctx));
+		fctx = palloc_object(generate_subscripts_fctx);
 
 		lb = AARR_LBOUND(v);
 		dimv = AARR_DIMS(v);
@@ -6214,8 +6214,8 @@ array_fill_internal(ArrayType *dims, ArrayType *lbs,
 			!AllocSizeIsValid(totbytes))
 			ereport(ERROR,
 					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-					 errmsg("array size exceeds the maximum allowed (%d)",
-							(int) MaxAllocSize)));
+					 errmsg("array size exceeds the maximum allowed (%zu)",
+							MaxAllocSize)));
 
 		/*
 		 * This addition can't overflow, but it might cause us to go past
@@ -6291,7 +6291,7 @@ array_unnest(PG_FUNCTION_ARGS)
 		arr = PG_GETARG_ANY_ARRAY_P(0);
 
 		/* allocate memory for user context */
-		fctx = (array_unnest_fctx *) palloc(sizeof(array_unnest_fctx));
+		fctx = palloc_object(array_unnest_fctx);
 
 		/* initialize state */
 		array_iter_setup(&fctx->iter, arr);
@@ -6558,8 +6558,8 @@ array_replace_internal(ArrayType *array,
 				if (!AllocSizeIsValid(nbytes))
 					ereport(ERROR,
 							(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-							 errmsg("array size exceeds the maximum allowed (%d)",
-									(int) MaxAllocSize)));
+							 errmsg("array size exceeds the maximum allowed (%zu)",
+									MaxAllocSize)));
 			}
 			nresult++;
 		}

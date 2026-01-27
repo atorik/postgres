@@ -26,7 +26,7 @@
  * that differ only on the length of such lists have the same queryId.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -181,7 +181,7 @@ InitJumble(void)
 {
 	JumbleState *jstate;
 
-	jstate = (JumbleState *) palloc(sizeof(JumbleState));
+	jstate = palloc_object(JumbleState);
 
 	/* Set up workspace for query jumbling */
 	jstate->jumble = (unsigned char *) palloc(JUMBLE_SIZE);
@@ -684,7 +684,7 @@ _jumbleParam(JumbleState *jstate, Node *node)
 	JUMBLE_FIELD(paramkind);
 	JUMBLE_FIELD(paramid);
 	JUMBLE_FIELD(paramtype);
-	/* paramtypmode and paramcollid are ignored */
+	/* paramtypmod and paramcollid are ignored */
 
 	if (expr->paramkind == PARAM_EXTERN)
 	{

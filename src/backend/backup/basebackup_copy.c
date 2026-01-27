@@ -16,7 +16,7 @@
  * An older method that sent each archive using a separate COPY OUT
  * operation is no longer supported.
  *
- * Portions Copyright (c) 2010-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2010-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/backup/basebackup_copy.c
@@ -107,7 +107,7 @@ static const bbsink_ops bbsink_copystream_ops = {
 bbsink *
 bbsink_copystream_new(bool send_to_client)
 {
-	bbsink_copystream *sink = palloc0(sizeof(bbsink_copystream));
+	bbsink_copystream *sink = palloc0_object(bbsink_copystream);
 
 	*((const bbsink_ops **) &sink->base.bbs_ops) = &bbsink_copystream_ops;
 	sink->send_to_client = send_to_client;

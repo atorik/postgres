@@ -3,7 +3,7 @@
  * pathnode.c
  *	  Routines to manipulate pathlists and create path nodes
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -14,9 +14,8 @@
  */
 #include "postgres.h"
 
-#include <math.h>
-
 #include "access/htup_details.h"
+#include "executor/nodeSetOp.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/extensible.h"
@@ -1261,7 +1260,8 @@ create_tidscan_path(PlannerInfo *root, RelOptInfo *rel, List *tidquals,
  */
 TidRangePath *
 create_tidrangescan_path(PlannerInfo *root, RelOptInfo *rel,
-						 List *tidrangequals, Relids required_outer)
+						 List *tidrangequals, Relids required_outer,
+						 int parallel_workers)
 {
 	TidRangePath *pathnode = makeNode(TidRangePath);
 
@@ -1270,9 +1270,9 @@ create_tidrangescan_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->path.pathtarget = rel->reltarget;
 	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
 														  required_outer);
-	pathnode->path.parallel_aware = false;
+	pathnode->path.parallel_aware = (parallel_workers > 0);
 	pathnode->path.parallel_safe = rel->consider_parallel;
-	pathnode->path.parallel_workers = 0;
+	pathnode->path.parallel_workers = parallel_workers;
 	pathnode->path.pathkeys = NIL;	/* always unordered */
 
 	pathnode->tidrangequals = tidrangequals;
@@ -3461,7 +3461,7 @@ create_setop_path(PlannerInfo *root,
 	}
 	else
 	{
-		Size		hashentrysize;
+		Size		hashtablesize;
 
 		/*
 		 * In hashed mode, we must read all the input before we can emit
@@ -3490,11 +3490,12 @@ create_setop_path(PlannerInfo *root,
 
 		/*
 		 * Also disable if it doesn't look like the hashtable will fit into
-		 * hash_mem.
+		 * hash_mem.  (Note: reject on equality, to ensure that an estimate of
+		 * SIZE_MAX disables hashing regardless of the hash_mem limit.)
 		 */
-		hashentrysize = MAXALIGN(leftpath->pathtarget->width) +
-			MAXALIGN(SizeofMinimalTupleHeader);
-		if (hashentrysize * numGroups > get_hash_memory_limit())
+		hashtablesize = EstimateSetOpHashTableSpace(numGroups,
+													leftpath->pathtarget->width);
+		if (hashtablesize >= get_hash_memory_limit())
 			pathnode->path.disabled_nodes++;
 	}
 	pathnode->path.rows = outputRows;
@@ -3862,7 +3863,7 @@ reparameterize_path(PlannerInfo *root, Path *path,
 		case T_SeqScan:
 			return create_seqscan_path(root, rel, required_outer, 0);
 		case T_SampleScan:
-			return (Path *) create_samplescan_path(root, rel, required_outer);
+			return create_samplescan_path(root, rel, required_outer);
 		case T_IndexScan:
 		case T_IndexOnlyScan:
 			{

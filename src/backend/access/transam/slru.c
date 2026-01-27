@@ -49,7 +49,7 @@
  * by re-setting the page's page_dirty flag.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/backend/access/transam/slru.c
@@ -937,7 +937,7 @@ SlruPhysicalWritePage(SlruCtl ctl, int64 pageno, int slotno, SlruWriteAll fdata)
 				max_lsn = this_lsn;
 		}
 
-		if (!XLogRecPtrIsInvalid(max_lsn))
+		if (XLogRecPtrIsValid(max_lsn))
 		{
 			/*
 			 * As noted above, elog(ERROR) is not acceptable here, so if

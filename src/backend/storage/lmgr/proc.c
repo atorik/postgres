@@ -3,7 +3,7 @@
  * proc.c
  *	  routines to manage per-process shared memory data structure
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -36,6 +36,7 @@
 #include "access/transam.h"
 #include "access/twophase.h"
 #include "access/xlogutils.h"
+#include "access/xlogwait.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
@@ -144,6 +145,7 @@ ProcGlobalShmemSize(void)
 	size = add_size(size, sizeof(PROC_HDR));
 	size = add_size(size, sizeof(slock_t));
 
+	size = add_size(size, PGSemaphoreShmemSize(ProcGlobalSemas()));
 	size = add_size(size, PGProcShmemSize());
 	size = add_size(size, FastPathLockShmemSize());
 
@@ -242,7 +244,7 @@ InitProcGlobal(void)
 	MemSet(ptr, 0, requestSize);
 
 	procs = (PGPROC *) ptr;
-	ptr = (char *) ptr + TotalProcs * sizeof(PGPROC);
+	ptr = ptr + TotalProcs * sizeof(PGPROC);
 
 	ProcGlobal->allProcs = procs;
 	/* XXX allProcCount isn't really all of them; it excludes prepared xacts */
@@ -256,13 +258,13 @@ InitProcGlobal(void)
 	 * how hotly they are accessed.
 	 */
 	ProcGlobal->xids = (TransactionId *) ptr;
-	ptr = (char *) ptr + (TotalProcs * sizeof(*ProcGlobal->xids));
+	ptr = ptr + (TotalProcs * sizeof(*ProcGlobal->xids));
 
 	ProcGlobal->subxidStates = (XidCacheStatus *) ptr;
-	ptr = (char *) ptr + (TotalProcs * sizeof(*ProcGlobal->subxidStates));
+	ptr = ptr + (TotalProcs * sizeof(*ProcGlobal->subxidStates));
 
 	ProcGlobal->statusFlags = (uint8 *) ptr;
-	ptr = (char *) ptr + (TotalProcs * sizeof(*ProcGlobal->statusFlags));
+	ptr = ptr + (TotalProcs * sizeof(*ProcGlobal->statusFlags));
 
 	/* make sure wer didn't overflow */
 	Assert((ptr > (char *) procs) && (ptr <= (char *) procs + requestSize));
@@ -285,6 +287,9 @@ InitProcGlobal(void)
 
 	/* For asserts checking we did not overflow. */
 	fpEndPtr = fpPtr + requestSize;
+
+	/* Reserve space for semaphores. */
+	PGReserveSemaphores(ProcGlobalSemas());
 
 	for (i = 0; i < TotalProcs; i++)
 	{
@@ -947,6 +952,11 @@ ProcKill(int code, Datum arg)
 	 */
 	LWLockReleaseAll();
 
+	/*
+	 * Cleanup waiting for LSN if any.
+	 */
+	WaitLSNCleanup();
+
 	/* Cancel any pending condition variable sleep, too */
 	ConditionVariableCancelSleep();
 
@@ -1025,10 +1035,6 @@ ProcKill(int code, Datum arg)
 	ProcGlobal->spins_per_delay = update_spins_per_delay(ProcGlobal->spins_per_delay);
 
 	SpinLockRelease(ProcStructLock);
-
-	/* wake autovac launcher if needed -- see comments in FreeWorkerInfo */
-	if (AutovacuumLauncherPid != 0)
-		kill(AutovacuumLauncherPid, SIGUSR2);
 }
 
 /*
@@ -1988,7 +1994,7 @@ ProcSendSignal(ProcNumber procNumber)
 	if (procNumber < 0 || procNumber >= ProcGlobal->allProcCount)
 		elog(ERROR, "procNumber out of range");
 
-	SetLatch(&ProcGlobal->allProcs[procNumber].procLatch);
+	SetLatch(&GetPGProcByNumber(procNumber)->procLatch);
 }
 
 /*

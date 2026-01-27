@@ -2,7 +2,7 @@
  * brin_pageops.c
  *		Page-handling routines for BRIN indexes
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -891,7 +891,11 @@ brin_initialize_empty_new_buffer(Relation idxrel, Buffer buffer)
 	page = BufferGetPage(buffer);
 	brin_page_init(page, BRIN_PAGETYPE_REGULAR);
 	MarkBufferDirty(buffer);
-	log_newpage_buffer(buffer, true);
+
+	/* XLOG stuff */
+	if (RelationNeedsWAL(idxrel))
+		log_newpage_buffer(buffer, true);
+
 	END_CRIT_SECTION();
 
 	/*

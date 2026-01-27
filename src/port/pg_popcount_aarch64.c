@@ -3,7 +3,7 @@
  * pg_popcount_aarch64.c
  *	  Holds the AArch64 popcount implementations.
  *
- * Copyright (c) 2025, PostgreSQL Global Development Group
+ * Copyright (c) 2025-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/port/pg_popcount_aarch64.c
@@ -12,9 +12,7 @@
  */
 #include "c.h"
 
-#include "port/pg_bitutils.h"
-
-#ifdef POPCNT_AARCH64
+#ifdef USE_NEON
 
 #include <arm_neon.h>
 
@@ -23,8 +21,14 @@
 
 #if defined(HAVE_ELF_AUX_INFO) || defined(HAVE_GETAUXVAL)
 #include <sys/auxv.h>
+/* Ancient glibc releases don't include the HWCAPxxx macros in sys/auxv.h */
+#if defined(__linux__) && !defined(HWCAP_SVE)
+#include <asm/hwcap.h>
 #endif
 #endif
+#endif
+
+#include "port/pg_bitutils.h"
 
 /*
  * The Neon versions are built regardless of whether we are building the SVE
@@ -379,7 +383,7 @@ pg_popcount_neon(const char *buf, int bytes)
 	 */
 	for (; bytes >= sizeof(uint64); bytes -= sizeof(uint64))
 	{
-		popcnt += pg_popcount64(*((uint64 *) buf));
+		popcnt += pg_popcount64(*((const uint64 *) buf));
 		buf += sizeof(uint64);
 	}
 
@@ -461,7 +465,7 @@ pg_popcount_masked_neon(const char *buf, int bytes, bits8 mask)
 	 */
 	for (; bytes >= sizeof(uint64); bytes -= sizeof(uint64))
 	{
-		popcnt += pg_popcount64(*((uint64 *) buf) & mask64);
+		popcnt += pg_popcount64(*((const uint64 *) buf) & mask64);
 		buf += sizeof(uint64);
 	}
 
@@ -474,4 +478,4 @@ pg_popcount_masked_neon(const char *buf, int bytes, bits8 mask)
 	return popcnt;
 }
 
-#endif							/* POPCNT_AARCH64 */
+#endif							/* USE_NEON */

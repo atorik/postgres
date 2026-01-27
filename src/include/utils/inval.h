@@ -4,7 +4,7 @@
  *	  POSTGRES cache invalidation dispatcher definitions.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/inval.h
@@ -61,8 +61,7 @@ extern void CacheInvalidateHeapTuple(Relation relation,
 									 HeapTuple tuple,
 									 HeapTuple newtuple);
 extern void CacheInvalidateHeapTupleInplace(Relation relation,
-											HeapTuple tuple,
-											HeapTuple newtuple);
+											HeapTuple key_equivalent_tuple);
 
 extern void CacheInvalidateCatalog(Oid catalogId);
 

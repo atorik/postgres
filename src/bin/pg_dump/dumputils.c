@@ -5,7 +5,7 @@
  * Basically this is stuff that is useful in both pg_dump and pg_dumpall.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/bin/pg_dump/dumputils.c
@@ -730,6 +730,7 @@ bool
 variable_is_guc_list_quote(const char *name)
 {
 	if (pg_strcasecmp(name, "local_preload_libraries") == 0 ||
+		pg_strcasecmp(name, "oauth_validator_libraries") == 0 ||
 		pg_strcasecmp(name, "search_path") == 0 ||
 		pg_strcasecmp(name, "session_preload_libraries") == 0 ||
 		pg_strcasecmp(name, "shared_preload_libraries") == 0 ||
@@ -781,7 +782,7 @@ SplitGUCList(char *rawstring, char separator,
 		nextp++;				/* skip leading whitespace */
 
 	if (*nextp == '\0')
-		return true;			/* allow empty string */
+		return true;			/* empty string represents empty list */
 
 	/* At the top of the loop, we are at start of a new identifier. */
 	do
@@ -893,6 +894,7 @@ makeAlterConfigCommand(PGconn *conn, const char *configitem,
 	 * elements as string literals.  (The elements may be double-quoted as-is,
 	 * but we can't just feed them to the SQL parser; it would do the wrong
 	 * thing with elements that are zero-length or longer than NAMEDATALEN.)
+	 * Also, we need a special case for empty lists.
 	 *
 	 * Variables that are not so marked should just be emitted as simple
 	 * string literals.  If the variable is not known to
@@ -908,6 +910,9 @@ makeAlterConfigCommand(PGconn *conn, const char *configitem,
 		/* this shouldn't fail really */
 		if (SplitGUCList(pos, ',', &namelist))
 		{
+			/* Special case: represent an empty list as NULL */
+			if (*namelist == NULL)
+				appendPQExpBufferStr(buf, "NULL");
 			for (nameptr = namelist; *nameptr; nameptr++)
 			{
 				if (nameptr != namelist)

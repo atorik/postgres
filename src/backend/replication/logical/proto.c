@@ -3,7 +3,7 @@
  * proto.c
  *		logical replication protocol functions
  *
- * Copyright (c) 2015-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2015-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		src/backend/replication/logical/proto.c
@@ -64,7 +64,7 @@ logicalrep_read_begin(StringInfo in, LogicalRepBeginData *begin_data)
 {
 	/* read fields */
 	begin_data->final_lsn = pq_getmsgint64(in);
-	if (begin_data->final_lsn == InvalidXLogRecPtr)
+	if (!XLogRecPtrIsValid(begin_data->final_lsn))
 		elog(ERROR, "final_lsn not set in begin message");
 	begin_data->committime = pq_getmsgint64(in);
 	begin_data->xid = pq_getmsgint(in, 4);
@@ -135,10 +135,10 @@ logicalrep_read_begin_prepare(StringInfo in, LogicalRepPreparedTxnData *begin_da
 {
 	/* read fields */
 	begin_data->prepare_lsn = pq_getmsgint64(in);
-	if (begin_data->prepare_lsn == InvalidXLogRecPtr)
+	if (!XLogRecPtrIsValid(begin_data->prepare_lsn))
 		elog(ERROR, "prepare_lsn not set in begin prepare message");
 	begin_data->end_lsn = pq_getmsgint64(in);
-	if (begin_data->end_lsn == InvalidXLogRecPtr)
+	if (!XLogRecPtrIsValid(begin_data->end_lsn))
 		elog(ERROR, "end_lsn not set in begin prepare message");
 	begin_data->prepare_time = pq_getmsgint64(in);
 	begin_data->xid = pq_getmsgint(in, 4);
@@ -207,10 +207,10 @@ logicalrep_read_prepare_common(StringInfo in, char *msgtype,
 
 	/* read fields */
 	prepare_data->prepare_lsn = pq_getmsgint64(in);
-	if (prepare_data->prepare_lsn == InvalidXLogRecPtr)
+	if (!XLogRecPtrIsValid(prepare_data->prepare_lsn))
 		elog(ERROR, "prepare_lsn is not set in %s message", msgtype);
 	prepare_data->end_lsn = pq_getmsgint64(in);
-	if (prepare_data->end_lsn == InvalidXLogRecPtr)
+	if (!XLogRecPtrIsValid(prepare_data->end_lsn))
 		elog(ERROR, "end_lsn is not set in %s message", msgtype);
 	prepare_data->prepare_time = pq_getmsgint64(in);
 	prepare_data->xid = pq_getmsgint(in, 4);
@@ -274,10 +274,10 @@ logicalrep_read_commit_prepared(StringInfo in, LogicalRepCommitPreparedTxnData *
 
 	/* read fields */
 	prepare_data->commit_lsn = pq_getmsgint64(in);
-	if (prepare_data->commit_lsn == InvalidXLogRecPtr)
+	if (!XLogRecPtrIsValid(prepare_data->commit_lsn))
 		elog(ERROR, "commit_lsn is not set in commit prepared message");
 	prepare_data->end_lsn = pq_getmsgint64(in);
-	if (prepare_data->end_lsn == InvalidXLogRecPtr)
+	if (!XLogRecPtrIsValid(prepare_data->end_lsn))
 		elog(ERROR, "end_lsn is not set in commit prepared message");
 	prepare_data->commit_time = pq_getmsgint64(in);
 	prepare_data->xid = pq_getmsgint(in, 4);
@@ -333,10 +333,10 @@ logicalrep_read_rollback_prepared(StringInfo in,
 
 	/* read fields */
 	rollback_data->prepare_end_lsn = pq_getmsgint64(in);
-	if (rollback_data->prepare_end_lsn == InvalidXLogRecPtr)
+	if (!XLogRecPtrIsValid(rollback_data->prepare_end_lsn))
 		elog(ERROR, "prepare_end_lsn is not set in rollback prepared message");
 	rollback_data->rollback_end_lsn = pq_getmsgint64(in);
-	if (rollback_data->rollback_end_lsn == InvalidXLogRecPtr)
+	if (!XLogRecPtrIsValid(rollback_data->rollback_end_lsn))
 		elog(ERROR, "rollback_end_lsn is not set in rollback prepared message");
 	rollback_data->prepare_time = pq_getmsgint64(in);
 	rollback_data->rollback_time = pq_getmsgint64(in);
@@ -697,7 +697,7 @@ logicalrep_write_rel(StringInfo out, TransactionId xid, Relation rel,
 LogicalRepRelation *
 logicalrep_read_rel(StringInfo in)
 {
-	LogicalRepRelation *rel = palloc(sizeof(LogicalRepRelation));
+	LogicalRepRelation *rel = palloc_object(LogicalRepRelation);
 
 	rel->remoteid = pq_getmsgint(in, 4);
 
@@ -871,7 +871,7 @@ logicalrep_read_tuple(StringInfo in, LogicalRepTupleData *tuple)
 
 	/* Allocate space for per-column values; zero out unused StringInfoDatas */
 	tuple->colvalues = (StringInfoData *) palloc0(natts * sizeof(StringInfoData));
-	tuple->colstatus = (char *) palloc(natts * sizeof(char));
+	tuple->colstatus = palloc_array(char, natts);
 	tuple->ncols = natts;
 
 	/* Read the data */
@@ -994,8 +994,8 @@ logicalrep_read_attrs(StringInfo in, LogicalRepRelation *rel)
 	Bitmapset  *attkeys = NULL;
 
 	natts = pq_getmsgint(in, 2);
-	attnames = palloc(natts * sizeof(char *));
-	atttyps = palloc(natts * sizeof(Oid));
+	attnames = palloc_array(char *, natts);
+	atttyps = palloc_array(Oid, natts);
 
 	/* read the attributes */
 	for (i = 0; i < natts; i++)

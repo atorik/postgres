@@ -3,7 +3,7 @@
  * shmem.c
  *	  create shared memory and initialize shared memory data structures.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -65,6 +65,7 @@
 
 #include "postgres.h"
 
+#include "common/int.h"
 #include "fmgr.h"
 #include "funcapi.h"
 #include "miscadmin.h"
@@ -76,6 +77,7 @@
 #include "utils/builtins.h"
 
 static void *ShmemAllocRaw(Size size, Size *allocated_size);
+static void *ShmemAllocUnlocked(Size size);
 
 /* shared memory global variables */
 
@@ -234,7 +236,7 @@ ShmemAllocRaw(Size size, Size *allocated_size)
  *
  * We consider maxalign, rather than cachealign, sufficient here.
  */
-void *
+static void *
 ShmemAllocUnlocked(Size size)
 {
 	Size		newStart;
@@ -494,9 +496,7 @@ add_size(Size s1, Size s2)
 {
 	Size		result;
 
-	result = s1 + s2;
-	/* We are assuming Size is an unsigned type here... */
-	if (result < s1 || result < s2)
+	if (pg_add_size_overflow(s1, s2, &result))
 		ereport(ERROR,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("requested shared memory size overflows size_t")));
@@ -511,11 +511,7 @@ mul_size(Size s1, Size s2)
 {
 	Size		result;
 
-	if (s1 == 0 || s2 == 0)
-		return 0;
-	result = s1 * s2;
-	/* We are assuming Size is an unsigned type here... */
-	if (result / s2 != s1)
+	if (pg_mul_size_overflow(s1, s2, &result))
 		ereport(ERROR,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("requested shared memory size overflows size_t")));
@@ -603,7 +599,7 @@ pg_get_shmem_allocations_numa(PG_FUNCTION_ARGS)
 	InitMaterializedSRF(fcinfo, 0);
 
 	max_nodes = pg_numa_get_max_node();
-	nodes = palloc(sizeof(Size) * (max_nodes + 1));
+	nodes = palloc_array(Size, max_nodes + 2);
 
 	/*
 	 * Shared memory allocations can vary in size and may not align with OS
@@ -628,8 +624,8 @@ pg_get_shmem_allocations_numa(PG_FUNCTION_ARGS)
 	 * them using only fraction of the total pages.
 	 */
 	shm_total_page_count = (ShmemSegHdr->totalsize / os_page_size) + 1;
-	page_ptrs = palloc0(sizeof(void *) * shm_total_page_count);
-	pages_status = palloc(sizeof(int) * shm_total_page_count);
+	page_ptrs = palloc0_array(void *, shm_total_page_count);
+	pages_status = palloc_array(int, shm_total_page_count);
 
 	if (firstNumaTouch)
 		elog(DEBUG1, "NUMA: page-faulting shared memory segments for proper NUMA readouts");
@@ -639,7 +635,6 @@ pg_get_shmem_allocations_numa(PG_FUNCTION_ARGS)
 	hash_seq_init(&hstat, ShmemIndex);
 
 	/* output all allocated entries */
-	memset(nulls, 0, sizeof(nulls));
 	while ((ent = (ShmemIndexEnt *) hash_seq_search(&hstat)) != NULL)
 	{
 		int			i;
@@ -688,21 +683,32 @@ pg_get_shmem_allocations_numa(PG_FUNCTION_ARGS)
 			elog(ERROR, "failed NUMA pages inquiry status: %m");
 
 		/* Count number of NUMA nodes used for this shared memory entry */
-		memset(nodes, 0, sizeof(Size) * (max_nodes + 1));
+		memset(nodes, 0, sizeof(Size) * (max_nodes + 2));
 
 		for (i = 0; i < shm_ent_page_count; i++)
 		{
 			int			s = pages_status[i];
 
 			/* Ensure we are adding only valid index to the array */
-			if (s < 0 || s > max_nodes)
+			if (s >= 0 && s <= max_nodes)
 			{
-				elog(ERROR, "invalid NUMA node id outside of allowed range "
-					 "[0, " UINT64_FORMAT "]: %d", max_nodes, s);
+				/* valid NUMA node */
+				nodes[s]++;
+				continue;
+			}
+			else if (s == -2)
+			{
+				/* -2 means ENOENT (e.g. page was moved to swap) */
+				nodes[max_nodes + 1]++;
+				continue;
 			}
 
-			nodes[s]++;
+			elog(ERROR, "invalid NUMA node id outside of allowed range "
+				 "[0, " UINT64_FORMAT "]: %d", max_nodes, s);
 		}
+
+		/* no NULLs for regular nodes */
+		memset(nulls, 0, sizeof(nulls));
 
 		/*
 		 * Add one entry for each NUMA node, including those without allocated
@@ -717,6 +723,14 @@ pg_get_shmem_allocations_numa(PG_FUNCTION_ARGS)
 			tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,
 								 values, nulls);
 		}
+
+		/* The last entry is used for pages without a NUMA node. */
+		nulls[1] = true;
+		values[0] = CStringGetTextDatum(ent->key);
+		values[2] = Int64GetDatum(nodes[max_nodes + 1] * os_page_size);
+
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,
+							 values, nulls);
 	}
 
 	LWLockRelease(ShmemIndexLock);

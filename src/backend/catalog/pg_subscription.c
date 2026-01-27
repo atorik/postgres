@@ -3,7 +3,7 @@
  * pg_subscription.c
  *		replication subscriptions
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -89,7 +89,7 @@ GetSubscription(Oid subid, bool missing_ok)
 
 	subform = (Form_pg_subscription) GETSTRUCT(tup);
 
-	sub = (Subscription *) palloc(sizeof(Subscription));
+	sub = palloc_object(Subscription);
 	sub->oid = subid;
 	sub->dbid = subform->subdbid;
 	sub->skiplsn = subform->subskiplsn;
@@ -293,7 +293,7 @@ AddSubscriptionRelState(Oid subid, Oid relid, char state,
 	values[Anum_pg_subscription_rel_srsubid - 1] = ObjectIdGetDatum(subid);
 	values[Anum_pg_subscription_rel_srrelid - 1] = ObjectIdGetDatum(relid);
 	values[Anum_pg_subscription_rel_srsubstate - 1] = CharGetDatum(state);
-	if (sublsn != InvalidXLogRecPtr)
+	if (XLogRecPtrIsValid(sublsn))
 		values[Anum_pg_subscription_rel_srsublsn - 1] = LSNGetDatum(sublsn);
 	else
 		nulls[Anum_pg_subscription_rel_srsublsn - 1] = true;
@@ -354,7 +354,7 @@ UpdateSubscriptionRelState(Oid subid, Oid relid, char state,
 							  ObjectIdGetDatum(relid),
 							  ObjectIdGetDatum(subid));
 	if (!HeapTupleIsValid(tup))
-		elog(ERROR, "subscription table %u in subscription %u does not exist",
+		elog(ERROR, "subscription relation %u in subscription %u does not exist",
 			 relid, subid);
 
 	/* Update the tuple. */
@@ -366,7 +366,7 @@ UpdateSubscriptionRelState(Oid subid, Oid relid, char state,
 	values[Anum_pg_subscription_rel_srsubstate - 1] = CharGetDatum(state);
 
 	replaces[Anum_pg_subscription_rel_srsublsn - 1] = true;
-	if (sublsn != InvalidXLogRecPtr)
+	if (XLogRecPtrIsValid(sublsn))
 		values[Anum_pg_subscription_rel_srsublsn - 1] = LSNGetDatum(sublsn);
 	else
 		nulls[Anum_pg_subscription_rel_srsublsn - 1] = true;
@@ -618,7 +618,7 @@ GetSubscriptionRelations(Oid subid, bool tables, bool sequences,
 			 relkind == RELKIND_PARTITIONED_TABLE) && !tables)
 			continue;
 
-		relstate = (SubscriptionRelState *) palloc(sizeof(SubscriptionRelState));
+		relstate = palloc_object(SubscriptionRelState);
 		relstate->relid = subrel->srrelid;
 		relstate->state = subrel->srsubstate;
 		d = SysCacheGetAttr(SUBSCRIPTIONRELMAP, tup,

@@ -3,7 +3,7 @@
  * pgoutput.c
  *		Logical Replication output plugin
  *
- * Copyright (c) 2012-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2012-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		  src/backend/replication/pgoutput/pgoutput.c
@@ -346,7 +346,11 @@ parse_output_parameters(List *options, PGOutputData *data)
 						 errmsg("conflicting or redundant options")));
 			publication_names_given = true;
 
-			if (!SplitIdentifierString(strVal(defel->arg), ',',
+			/*
+			 * Pass a copy of the DefElem->arg since SplitIdentifierString
+			 * modifies its input.
+			 */
+			if (!SplitIdentifierString(pstrdup(strVal(defel->arg)), ',',
 									   &data->publication_names))
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_NAME),
@@ -447,7 +451,7 @@ static void
 pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 				 bool is_init)
 {
-	PGOutputData *data = palloc0(sizeof(PGOutputData));
+	PGOutputData *data = palloc0_object(PGOutputData);
 	static bool publication_callback_registered = false;
 	MemoryContextCallback *mcallback;
 
@@ -468,7 +472,7 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 	 * Ensure to cleanup RelationSyncCache even when logical decoding invoked
 	 * via SQL interface ends up with an error.
 	 */
-	mcallback = palloc0(sizeof(MemoryContextCallback));
+	mcallback = palloc0_object(MemoryContextCallback);
 	mcallback->func = pgoutput_memory_context_reset;
 	MemoryContextRegisterResetCallback(ctx->context, mcallback);
 

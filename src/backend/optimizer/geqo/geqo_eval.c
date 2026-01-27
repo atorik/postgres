@@ -3,7 +3,7 @@
  * geqo_eval.c
  *	  Routines to evaluate query trees
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/backend/optimizer/geqo/geqo_eval.c
@@ -23,7 +23,6 @@
 
 #include <float.h>
 #include <limits.h>
-#include <math.h>
 
 #include "optimizer/geqo.h"
 #include "optimizer/joininfo.h"
@@ -191,7 +190,7 @@ gimme_tree(PlannerInfo *root, Gene *tour, int num_gene)
 										  cur_rel_index - 1);
 
 		/* Make it into a single-rel clump */
-		cur_clump = (Clump *) palloc(sizeof(Clump));
+		cur_clump = palloc_object(Clump);
 		cur_clump->joinrel = cur_rel;
 		cur_clump->size = 1;
 

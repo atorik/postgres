@@ -3,7 +3,7 @@
  * varlena.c
  *	  Functions for the variable-length built-in types.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -92,7 +92,7 @@ typedef struct
 	int			last_returned;	/* Last comparison result (cache) */
 	bool		cache_blob;		/* Does buf2 contain strxfrm() blob, etc? */
 	bool		collate_c;
-	Oid			typid;			/* Actual datatype (text/bpchar/bytea/name) */
+	Oid			typid;			/* Actual datatype (text/bpchar/name) */
 	hyperLogLogState abbr_card; /* Abbreviated key cardinality state */
 	hyperLogLogState full_card; /* Full key cardinality state */
 	double		prop_card;		/* Required cardinality proportion */
@@ -1111,6 +1111,7 @@ text_position_next_internal(char *start_ptr, TextPositionState *state)
 	const char *hptr;
 
 	Assert(start_ptr >= haystack && start_ptr <= haystack_end);
+	Assert(needle_len > 0);
 
 	state->last_match_len_tmp = needle_len;
 
@@ -1123,19 +1124,26 @@ text_position_next_internal(char *start_ptr, TextPositionState *state)
 		 * needle under the given collation.
 		 *
 		 * Note, the found substring could have a different length than the
-		 * needle, including being empty.  Callers that want to skip over the
-		 * found string need to read the length of the found substring from
-		 * last_match_len rather than just using the length of their needle.
+		 * needle.  Callers that want to skip over the found string need to
+		 * read the length of the found substring from last_match_len rather
+		 * than just using the length of their needle.
 		 *
 		 * Most callers will require "greedy" semantics, meaning that we need
 		 * to find the longest such substring, not the shortest.  For callers
 		 * that don't need greedy semantics, we can finish on the first match.
+		 *
+		 * This loop depends on the assumption that the needle is nonempty and
+		 * any matching substring must also be nonempty.  (Even if the
+		 * collation would accept an empty match, returning one would send
+		 * callers that search for successive matches into an infinite loop.)
 		 */
 		const char *result_hptr = NULL;
 
 		hptr = start_ptr;
 		while (hptr < haystack_end)
 		{
+			const char *test_end;
+
 			/*
 			 * First check the common case that there is a match in the
 			 * haystack of exactly the length of the needle.
@@ -1146,11 +1154,13 @@ text_position_next_internal(char *start_ptr, TextPositionState *state)
 				return (char *) hptr;
 
 			/*
-			 * Else check if any of the possible substrings starting at hptr
-			 * are equal to the needle.
+			 * Else check if any of the non-empty substrings starting at hptr
+			 * compare equal to the needle.
 			 */
-			for (const char *test_end = hptr; test_end < haystack_end; test_end += pg_mblen(test_end))
+			test_end = hptr;
+			do
 			{
+				test_end += pg_mblen(test_end);
 				if (pg_strncoll(hptr, (test_end - hptr), needle, needle_len, state->locale) == 0)
 				{
 					state->last_match_len_tmp = (test_end - hptr);
@@ -1158,7 +1168,8 @@ text_position_next_internal(char *start_ptr, TextPositionState *state)
 					if (!state->greedy)
 						break;
 				}
-			}
+			} while (test_end < haystack_end);
+
 			if (result_hptr)
 				break;
 
@@ -1606,10 +1617,8 @@ bttextsortsupport(PG_FUNCTION_ARGS)
  * Includes locale support, and support for BpChar semantics (i.e. removing
  * trailing spaces before comparison).
  *
- * Relies on the assumption that text, VarChar, BpChar, and bytea all have the
- * same representation.  Callers that always use the C collation (e.g.
- * non-collatable type callers like bytea) may have NUL bytes in their strings;
- * this will not work with any other collation, though.
+ * Relies on the assumption that text, VarChar, and BpChar all have the
+ * same representation.
  */
 void
 varstr_sortsupport(SortSupport ssup, Oid typid, Oid collid)
@@ -1692,7 +1701,7 @@ varstr_sortsupport(SortSupport ssup, Oid typid, Oid collid)
 	 */
 	if (abbreviate || !collate_c)
 	{
-		sss = palloc(sizeof(VarStringSortSupport));
+		sss = palloc_object(VarStringSortSupport);
 		sss->buf1 = palloc(TEXTBUFLEN);
 		sss->buflen1 = TEXTBUFLEN;
 		sss->buf2 = palloc(TEXTBUFLEN);
@@ -1972,7 +1981,7 @@ varstrfastcmp_locale(char *a1p, int len1, char *a2p, int len2, SortSupport ssup)
  * representation.  Our encoding strategy is simple -- pack the first 8 bytes
  * of a strxfrm() blob into a Datum (on little-endian machines, the 8 bytes are
  * stored in reverse order), and treat it as an unsigned integer.  When the "C"
- * locale is used, or in case of bytea, just memcpy() from original instead.
+ * locale is used just memcpy() from original instead.
  */
 static Datum
 varstr_abbrev_convert(Datum original, SortSupport ssup)
@@ -1999,30 +2008,8 @@ varstr_abbrev_convert(Datum original, SortSupport ssup)
 
 	/*
 	 * If we're using the C collation, use memcpy(), rather than strxfrm(), to
-	 * abbreviate keys.  The full comparator for the C locale is always
-	 * memcmp().  It would be incorrect to allow bytea callers (callers that
-	 * always force the C collation -- bytea isn't a collatable type, but this
-	 * approach is convenient) to use strxfrm().  This is because bytea
-	 * strings may contain NUL bytes.  Besides, this should be faster, too.
-	 *
-	 * More generally, it's okay that bytea callers can have NUL bytes in
-	 * strings because abbreviated cmp need not make a distinction between
-	 * terminating NUL bytes, and NUL bytes representing actual NULs in the
-	 * authoritative representation.  Hopefully a comparison at or past one
-	 * abbreviated key's terminating NUL byte will resolve the comparison
-	 * without consulting the authoritative representation; specifically, some
-	 * later non-NUL byte in the longer string can resolve the comparison
-	 * against a subsequent terminating NUL in the shorter string.  There will
-	 * usually be what is effectively a "length-wise" resolution there and
-	 * then.
-	 *
-	 * If that doesn't work out -- if all bytes in the longer string
-	 * positioned at or past the offset of the smaller string's (first)
-	 * terminating NUL are actually representative of NUL bytes in the
-	 * authoritative binary string (perhaps with some *terminating* NUL bytes
-	 * towards the end of the longer string iff it happens to still be small)
-	 * -- then an authoritative tie-breaker will happen, and do the right
-	 * thing: explicitly consider string length.
+	 * abbreviate keys.  The full comparator for the C locale is also
+	 * memcmp().  This should be faster than strxfrm().
 	 */
 	if (sss->collate_c)
 		memcpy(pres, authoritative_data, Min(len, max_prefix_bytes));
@@ -2104,9 +2091,6 @@ varstr_abbrev_convert(Datum original, SortSupport ssup)
 		 * strxfrm() blob is itself NUL terminated, leaving no danger of
 		 * misinterpreting any NUL bytes not intended to be interpreted as
 		 * logically representing termination.
-		 *
-		 * (Actually, even if there were NUL bytes in the blob it would be
-		 * okay.  See remarks on bytea case above.)
 		 */
 		memcpy(pres, sss->buf2, Min(max_prefix_bytes, bsize));
 	}
@@ -2187,10 +2171,10 @@ varstr_abbrev_abort(int memtupcount, SortSupport ssup)
 	 * NULLs are generally disregarded, if only NULL values were seen so far,
 	 * that might misrepresent costs if we failed to clamp.
 	 */
-	if (abbrev_distinct <= 1.0)
+	if (abbrev_distinct < 1.0)
 		abbrev_distinct = 1.0;
 
-	if (key_distinct <= 1.0)
+	if (key_distinct < 1.0)
 		key_distinct = 1.0;
 
 	/*
@@ -2283,7 +2267,9 @@ varstr_abbrev_abort(int memtupcount, SortSupport ssup)
 Datum
 btvarstrequalimage(PG_FUNCTION_ARGS)
 {
-	/* Oid		opcintype = PG_GETARG_OID(0); */
+#ifdef NOT_USED
+	Oid			opcintype = PG_GETARG_OID(0);
+#endif
 	Oid			collid = PG_GET_COLLATION();
 	pg_locale_t locale;
 
@@ -2753,7 +2739,7 @@ SplitIdentifierString(char *rawstring, char separator,
 		nextp++;				/* skip leading whitespace */
 
 	if (*nextp == '\0')
-		return true;			/* allow empty string */
+		return true;			/* empty string represents empty list */
 
 	/* At the top of the loop, we are at start of a new identifier. */
 	do
@@ -2880,7 +2866,7 @@ SplitDirectoriesString(char *rawstring, char separator,
 		nextp++;				/* skip leading whitespace */
 
 	if (*nextp == '\0')
-		return true;			/* allow empty string */
+		return true;			/* empty string represents empty list */
 
 	/* At the top of the loop, we are at start of a new directory. */
 	do
@@ -3001,7 +2987,7 @@ SplitGUCList(char *rawstring, char separator,
 		nextp++;				/* skip leading whitespace */
 
 	if (*nextp == '\0')
-		return true;			/* allow empty string */
+		return true;			/* empty string represents empty list */
 
 	/* At the top of the loop, we are at start of a new identifier. */
 	do
@@ -5397,11 +5383,12 @@ unicode_version(PG_FUNCTION_ARGS)
 Datum
 icu_unicode_version(PG_FUNCTION_ARGS)
 {
-#ifdef USE_ICU
-	PG_RETURN_TEXT_P(cstring_to_text(U_UNICODE_VERSION));
-#else
-	PG_RETURN_NULL();
-#endif
+	const char *version = pg_icu_unicode_version();
+
+	if (version)
+		PG_RETURN_TEXT_P(cstring_to_text(version));
+	else
+		PG_RETURN_NULL();
 }
 
 /*
@@ -5419,12 +5406,12 @@ unicode_assigned(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errmsg("Unicode categorization can only be performed if server encoding is UTF8")));
 
-	/* convert to pg_wchar */
+	/* convert to char32_t */
 	size = pg_mbstrlen_with_len(VARDATA_ANY(input), VARSIZE_ANY_EXHDR(input));
 	p = (unsigned char *) VARDATA_ANY(input);
 	for (int i = 0; i < size; i++)
 	{
-		pg_wchar	uchar = utf8_to_unicode(p);
+		char32_t	uchar = utf8_to_unicode(p);
 		int			category = unicode_category(uchar);
 
 		if (category == PG_U_UNASSIGNED)
@@ -5443,24 +5430,24 @@ unicode_normalize_func(PG_FUNCTION_ARGS)
 	char	   *formstr = text_to_cstring(PG_GETARG_TEXT_PP(1));
 	UnicodeNormalizationForm form;
 	int			size;
-	pg_wchar   *input_chars;
-	pg_wchar   *output_chars;
+	char32_t   *input_chars;
+	char32_t   *output_chars;
 	unsigned char *p;
 	text	   *result;
 	int			i;
 
 	form = unicode_norm_form_from_string(formstr);
 
-	/* convert to pg_wchar */
+	/* convert to char32_t */
 	size = pg_mbstrlen_with_len(VARDATA_ANY(input), VARSIZE_ANY_EXHDR(input));
-	input_chars = palloc((size + 1) * sizeof(pg_wchar));
+	input_chars = palloc((size + 1) * sizeof(char32_t));
 	p = (unsigned char *) VARDATA_ANY(input);
 	for (i = 0; i < size; i++)
 	{
 		input_chars[i] = utf8_to_unicode(p);
 		p += pg_utf_mblen(p);
 	}
-	input_chars[i] = (pg_wchar) '\0';
+	input_chars[i] = (char32_t) '\0';
 	Assert((char *) p == VARDATA_ANY(input) + VARSIZE_ANY_EXHDR(input));
 
 	/* action */
@@ -5468,7 +5455,7 @@ unicode_normalize_func(PG_FUNCTION_ARGS)
 
 	/* convert back to UTF-8 string */
 	size = 0;
-	for (pg_wchar *wp = output_chars; *wp; wp++)
+	for (char32_t *wp = output_chars; *wp; wp++)
 	{
 		unsigned char buf[4];
 
@@ -5480,7 +5467,7 @@ unicode_normalize_func(PG_FUNCTION_ARGS)
 	SET_VARSIZE(result, size + VARHDRSZ);
 
 	p = (unsigned char *) VARDATA_ANY(result);
-	for (pg_wchar *wp = output_chars; *wp; wp++)
+	for (char32_t *wp = output_chars; *wp; wp++)
 	{
 		unicode_to_utf8(*wp, p);
 		p += pg_utf_mblen(p);
@@ -5509,8 +5496,8 @@ unicode_is_normalized(PG_FUNCTION_ARGS)
 	char	   *formstr = text_to_cstring(PG_GETARG_TEXT_PP(1));
 	UnicodeNormalizationForm form;
 	int			size;
-	pg_wchar   *input_chars;
-	pg_wchar   *output_chars;
+	char32_t   *input_chars;
+	char32_t   *output_chars;
 	unsigned char *p;
 	int			i;
 	UnicodeNormalizationQC quickcheck;
@@ -5519,16 +5506,16 @@ unicode_is_normalized(PG_FUNCTION_ARGS)
 
 	form = unicode_norm_form_from_string(formstr);
 
-	/* convert to pg_wchar */
+	/* convert to char32_t */
 	size = pg_mbstrlen_with_len(VARDATA_ANY(input), VARSIZE_ANY_EXHDR(input));
-	input_chars = palloc((size + 1) * sizeof(pg_wchar));
+	input_chars = palloc((size + 1) * sizeof(char32_t));
 	p = (unsigned char *) VARDATA_ANY(input);
 	for (i = 0; i < size; i++)
 	{
 		input_chars[i] = utf8_to_unicode(p);
 		p += pg_utf_mblen(p);
 	}
-	input_chars[i] = (pg_wchar) '\0';
+	input_chars[i] = (char32_t) '\0';
 	Assert((char *) p == VARDATA_ANY(input) + VARSIZE_ANY_EXHDR(input));
 
 	/* quick check (see UAX #15) */
@@ -5542,11 +5529,11 @@ unicode_is_normalized(PG_FUNCTION_ARGS)
 	output_chars = unicode_normalize(form, input_chars);
 
 	output_size = 0;
-	for (pg_wchar *wp = output_chars; *wp; wp++)
+	for (char32_t *wp = output_chars; *wp; wp++)
 		output_size++;
 
 	result = (size == output_size) &&
-		(memcmp(input_chars, output_chars, size * sizeof(pg_wchar)) == 0);
+		(memcmp(input_chars, output_chars, size * sizeof(char32_t)) == 0);
 
 	PG_RETURN_BOOL(result);
 }
@@ -5602,7 +5589,7 @@ unistr(PG_FUNCTION_ARGS)
 	int			len;
 	StringInfoData str;
 	text	   *result;
-	pg_wchar	pair_first = 0;
+	char16_t	pair_first = 0;
 	char		cbuf[MAX_UNICODE_EQUIVALENT_STRING + 1];
 
 	instr = VARDATA_ANY(input_text);
@@ -5626,7 +5613,7 @@ unistr(PG_FUNCTION_ARGS)
 			else if ((len >= 5 && isxdigits_n(instr + 1, 4)) ||
 					 (len >= 6 && instr[1] == 'u' && isxdigits_n(instr + 2, 4)))
 			{
-				pg_wchar	unicode;
+				char32_t	unicode;
 				int			offset = instr[1] == 'u' ? 2 : 1;
 
 				unicode = hexval_n(instr + offset, 4);
@@ -5662,7 +5649,7 @@ unistr(PG_FUNCTION_ARGS)
 			}
 			else if (len >= 8 && instr[1] == '+' && isxdigits_n(instr + 2, 6))
 			{
-				pg_wchar	unicode;
+				char32_t	unicode;
 
 				unicode = hexval_n(instr + 2, 6);
 
@@ -5697,7 +5684,7 @@ unistr(PG_FUNCTION_ARGS)
 			}
 			else if (len >= 10 && instr[1] == 'U' && isxdigits_n(instr + 2, 8))
 			{
-				pg_wchar	unicode;
+				char32_t	unicode;
 
 				unicode = hexval_n(instr + 2, 8);
 

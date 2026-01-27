@@ -3,7 +3,7 @@
  * encode.c
  *	  Various data encoding/decoding things.
  *
- * Copyright (c) 2001-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2001-2026, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -64,7 +64,9 @@ binary_encode(PG_FUNCTION_ARGS)
 	if (enc == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("unrecognized encoding: \"%s\"", namebuf)));
+				 errmsg("unrecognized encoding: \"%s\"", namebuf),
+				 errhint("Valid encodings are \"%s\", \"%s\", \"%s\", and \"%s\".",
+						 "base64", "base64url", "escape", "hex")));
 
 	dataptr = VARDATA_ANY(data);
 	datalen = VARSIZE_ANY_EXHDR(data);
@@ -112,7 +114,9 @@ binary_decode(PG_FUNCTION_ARGS)
 	if (enc == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("unrecognized encoding: \"%s\"", namebuf)));
+				 errmsg("unrecognized encoding: \"%s\"", namebuf),
+				 errhint("Valid encodings are \"%s\", \"%s\", \"%s\", and \"%s\".",
+						 "base64", "base64url", "escape", "hex")));
 
 	dataptr = VARDATA_ANY(data);
 	datalen = VARSIZE_ANY_EXHDR(data);

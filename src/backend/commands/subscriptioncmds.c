@@ -3,7 +3,7 @@
  * subscriptioncmds.c
  *		subscription catalog manipulation functions
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -393,7 +393,7 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 				lsn = DatumGetLSN(DirectFunctionCall1(pg_lsn_in,
 													  CStringGetDatum(lsn_str)));
 
-				if (XLogRecPtrIsInvalid(lsn))
+				if (!XLogRecPtrIsValid(lsn))
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("invalid WAL location (LSN): %s", lsn_str)));
@@ -491,20 +491,20 @@ static void
 check_publications(WalReceiverConn *wrconn, List *publications)
 {
 	WalRcvExecResult *res;
-	StringInfo	cmd;
+	StringInfoData cmd;
 	TupleTableSlot *slot;
 	List	   *publicationsCopy = NIL;
 	Oid			tableRow[1] = {TEXTOID};
 
-	cmd = makeStringInfo();
-	appendStringInfoString(cmd, "SELECT t.pubname FROM\n"
+	initStringInfo(&cmd);
+	appendStringInfoString(&cmd, "SELECT t.pubname FROM\n"
 						   " pg_catalog.pg_publication t WHERE\n"
 						   " t.pubname IN (");
-	GetPublicationsStr(publications, cmd, true);
-	appendStringInfoChar(cmd, ')');
+	GetPublicationsStr(publications, &cmd, true);
+	appendStringInfoChar(&cmd, ')');
 
-	res = walrcv_exec(wrconn, cmd->data, 1, tableRow);
-	destroyStringInfo(cmd);
+	res = walrcv_exec(wrconn, cmd.data, 1, tableRow);
+	pfree(cmd.data);
 
 	if (res->status != WALRCV_OK_TUPLES)
 		ereport(ERROR,
@@ -535,15 +535,17 @@ check_publications(WalReceiverConn *wrconn, List *publications)
 	if (list_length(publicationsCopy))
 	{
 		/* Prepare the list of non-existent publication(s) for error message. */
-		StringInfo	pubnames = makeStringInfo();
+		StringInfoData pubnames;
 
-		GetPublicationsStr(publicationsCopy, pubnames, false);
+		initStringInfo(&pubnames);
+
+		GetPublicationsStr(publicationsCopy, &pubnames, false);
 		ereport(WARNING,
 				errcode(ERRCODE_UNDEFINED_OBJECT),
 				errmsg_plural("publication %s does not exist on the publisher",
 							  "publications %s do not exist on the publisher",
 							  list_length(publicationsCopy),
-							  pubnames->data));
+							  pubnames.data));
 	}
 }
 
@@ -564,7 +566,7 @@ publicationListToArray(List *publist)
 								   ALLOCSET_DEFAULT_SIZES);
 	oldcxt = MemoryContextSwitchTo(memcxt);
 
-	datums = (Datum *) palloc(sizeof(Datum) * list_length(publist));
+	datums = palloc_array(Datum, list_length(publist));
 
 	check_duplicates_in_publist(publist, datums);
 
@@ -678,7 +680,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	}
 
 	/*
-	 * Ensure that system configuration paramters are set appropriately to
+	 * Ensure that system configuration parameters are set appropriately to
 	 * support retain_dead_tuples and max_retention_duration.
 	 */
 	CheckSubDeadTupleRetention(true, !opts.enabled, WARNING,
@@ -1053,7 +1055,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 			{
 				char		state;
 				XLogRecPtr	statelsn;
-				SubRemoveRels *remove_rel = palloc(sizeof(SubRemoveRels));
+				SubRemoveRels *remove_rel = palloc_object(SubRemoveRels);
 
 				/*
 				 * Lock pg_subscription_rel with AccessExclusiveLock to
@@ -1082,7 +1084,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 
 				sub_remove_rels = lappend(sub_remove_rels, remove_rel);
 
-				logicalrep_worker_stop(sub->oid, relid);
+				logicalrep_worker_stop(WORKERTYPE_TABLESYNC, sub->oid, relid);
 
 				/*
 				 * For READY state, we would have already dropped the
@@ -1097,10 +1099,10 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 					 *
 					 * It is possible that the origin is not yet created for
 					 * tablesync worker, this can happen for the states before
-					 * SUBREL_STATE_FINISHEDCOPY. The tablesync worker or
-					 * apply worker can also concurrently try to drop the
-					 * origin and by this time the origin might be already
-					 * removed. For these reasons, passing missing_ok = true.
+					 * SUBREL_STATE_DATASYNC. The tablesync worker or apply
+					 * worker can also concurrently try to drop the origin and
+					 * by this time the origin might be already removed. For
+					 * these reasons, passing missing_ok = true.
 					 */
 					ReplicationOriginNameForLogicalRep(sub->oid, relid, originname,
 													   sizeof(originname));
@@ -1120,10 +1122,10 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 		 * to be at the end because otherwise if there is an error while doing
 		 * the database operations we won't be able to rollback dropped slots.
 		 */
-		foreach_ptr(SubRemoveRels, rel, sub_remove_rels)
+		foreach_ptr(SubRemoveRels, sub_remove_rel, sub_remove_rels)
 		{
-			if (rel->state != SUBREL_STATE_READY &&
-				rel->state != SUBREL_STATE_SYNCDONE)
+			if (sub_remove_rel->state != SUBREL_STATE_READY &&
+				sub_remove_rel->state != SUBREL_STATE_SYNCDONE)
 			{
 				char		syncslotname[NAMEDATALEN] = {0};
 
@@ -1137,7 +1139,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 				 * dropped slots and fail. For these reasons, we allow
 				 * missing_ok = true for the drop.
 				 */
-				ReplicationSlotNameForTablesync(sub->oid, rel->relid,
+				ReplicationSlotNameForTablesync(sub->oid, sub_remove_rel->relid,
 												syncslotname, sizeof(syncslotname));
 				ReplicationSlotDropAtPubNode(wrconn, syncslotname, true);
 			}
@@ -1285,7 +1287,7 @@ CheckAlterSubOption(Subscription *sub, const char *option,
 	 * retreat in the calculated xmin, necessitating additional handling.
 	 *
 	 * XXX To address the above race conditions, we can define
-	 * oldest_nonremovable_xid as FullTransactionID and adds the check to
+	 * oldest_nonremovable_xid as FullTransactionId and adds the check to
 	 * disallow retreating the conflict slot's xmin. For now, we kept the
 	 * implementation simple by disallowing change to the retain_dead_tuples,
 	 * but in the future we can change this after some more analysis.
@@ -1635,7 +1637,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 				}
 
 				/*
-				 * Ensure that system configuration paramters are set
+				 * Ensure that system configuration parameters are set
 				 * appropriately to support retain_dead_tuples and
 				 * max_retention_duration.
 				 */
@@ -1893,7 +1895,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 				 * If the user sets subskiplsn, we do a sanity check to make
 				 * sure that the specified LSN is a probable value.
 				 */
-				if (!XLogRecPtrIsInvalid(opts.lsn))
+				if (XLogRecPtrIsValid(opts.lsn))
 				{
 					RepOriginId originid;
 					char		originname[NAMEDATALEN];
@@ -1905,7 +1907,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					remote_lsn = replorigin_get_progress(originid, false);
 
 					/* Check the given LSN is at least a future LSN */
-					if (!XLogRecPtrIsInvalid(remote_lsn) && opts.lsn < remote_lsn)
+					if (XLogRecPtrIsValid(remote_lsn) && opts.lsn < remote_lsn)
 						ereport(ERROR,
 								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 								 errmsg("skip WAL location (LSN %X/%08X) must be greater than origin LSN %X/%08X",
@@ -2134,7 +2136,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	{
 		LogicalRepWorker *w = (LogicalRepWorker *) lfirst(lc);
 
-		logicalrep_worker_stop(w->subid, w->relid);
+		logicalrep_worker_stop(w->type, w->subid, w->relid);
 	}
 	list_free(subworkers);
 
@@ -2172,7 +2174,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 		 *
 		 * It is possible that the origin is not yet created for tablesync
 		 * worker so passing missing_ok = true. This can happen for the states
-		 * before SUBREL_STATE_FINISHEDCOPY.
+		 * before SUBREL_STATE_DATASYNC.
 		 */
 		ReplicationOriginNameForLogicalRep(subid, relid, originname,
 										   sizeof(originname));
@@ -2597,33 +2599,30 @@ check_publications_origin_tables(WalReceiverConn *wrconn, List *publications,
 	 */
 	if (publist)
 	{
-		StringInfo	pubnames = makeStringInfo();
-		StringInfo	err_msg = makeStringInfo();
-		StringInfo	err_hint = makeStringInfo();
+		StringInfoData pubnames;
 
 		/* Prepare the list of publication(s) for warning message. */
-		GetPublicationsStr(publist, pubnames, false);
+		initStringInfo(&pubnames);
+		GetPublicationsStr(publist, &pubnames, false);
 
 		if (check_table_sync)
-		{
-			appendStringInfo(err_msg, _("subscription \"%s\" requested copy_data with origin = NONE but might copy data that had a different origin"),
-							 subname);
-			appendStringInfoString(err_hint, _("Verify that initial data copied from the publisher tables did not come from other origins."));
-		}
+			ereport(WARNING,
+					errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("subscription \"%s\" requested copy_data with origin = NONE but might copy data that had a different origin",
+						   subname),
+					errdetail_plural("The subscription subscribes to a publication (%s) that contains tables that are written to by other subscriptions.",
+									 "The subscription subscribes to publications (%s) that contain tables that are written to by other subscriptions.",
+									 list_length(publist), pubnames.data),
+					errhint("Verify that initial data copied from the publisher tables did not come from other origins."));
 		else
-		{
-			appendStringInfo(err_msg, _("subscription \"%s\" enabled retain_dead_tuples but might not reliably detect conflicts for changes from different origins"),
-							 subname);
-			appendStringInfoString(err_hint, _("Consider using origin = NONE or disabling retain_dead_tuples."));
-		}
-
-		ereport(WARNING,
-				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				errmsg_internal("%s", err_msg->data),
-				errdetail_plural("The subscription subscribes to a publication (%s) that contains tables that are written to by other subscriptions.",
-								 "The subscription subscribes to publications (%s) that contain tables that are written to by other subscriptions.",
-								 list_length(publist), pubnames->data),
-				errhint_internal("%s", err_hint->data));
+			ereport(WARNING,
+					errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("subscription \"%s\" enabled retain_dead_tuples but might not reliably detect conflicts for changes from different origins",
+						   subname),
+					errdetail_plural("The subscription subscribes to a publication (%s) that contains tables that are written to by other subscriptions.",
+									 "The subscription subscribes to publications (%s) that contain tables that are written to by other subscriptions.",
+									 list_length(publist), pubnames.data),
+					errhint("Consider using origin = NONE or disabling retain_dead_tuples."));
 	}
 
 	ExecDropSingleTupleTableSlot(slot);
@@ -2650,9 +2649,11 @@ check_publications_origin_sequences(WalReceiverConn *wrconn, List *publications,
 	/*
 	 * Enable sequence synchronization checks only when origin is 'none' , to
 	 * ensure that sequence data from other origins is not inadvertently
-	 * copied.
+	 * copied. This check is necessary if the publisher is running PG19 or
+	 * later, where logical replication sequence synchronization is supported.
 	 */
-	if (!copydata || pg_strcasecmp(origin, LOGICALREP_ORIGIN_NONE) != 0)
+	if (!copydata || pg_strcasecmp(origin, LOGICALREP_ORIGIN_NONE) != 0 ||
+		walrcv_server_version(wrconn) < 190000)
 		return;
 
 	initStringInfo(&cmd);
@@ -2714,24 +2715,20 @@ check_publications_origin_sequences(WalReceiverConn *wrconn, List *publications,
 	 */
 	if (publist)
 	{
-		StringInfo	pubnames = makeStringInfo();
-		StringInfo	err_msg = makeStringInfo();
-		StringInfo	err_hint = makeStringInfo();
+		StringInfoData pubnames;
 
 		/* Prepare the list of publication(s) for warning message. */
-		GetPublicationsStr(publist, pubnames, false);
-
-		appendStringInfo(err_msg, _("subscription \"%s\" requested copy_data with origin = NONE but might copy data that had a different origin"),
-						 subname);
-		appendStringInfoString(err_hint, _("Verify that initial data copied from the publisher sequences did not come from other origins."));
+		initStringInfo(&pubnames);
+		GetPublicationsStr(publist, &pubnames, false);
 
 		ereport(WARNING,
 				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				errmsg_internal("%s", err_msg->data),
+				errmsg("subscription \"%s\" requested copy_data with origin = NONE but might copy data that had a different origin",
+					   subname),
 				errdetail_plural("The subscription subscribes to a publication (%s) that contains sequences that are written to by other subscriptions.",
 								 "The subscription subscribes to publications (%s) that contain sequences that are written to by other subscriptions.",
-								 list_length(publist), pubnames->data),
-				errhint_internal("%s", err_hint->data));
+								 list_length(publist), pubnames.data),
+				errhint("Verify that initial data copied from the publisher sequences did not come from other origins."));
 	}
 
 	ExecDropSingleTupleTableSlot(slot);
@@ -2758,7 +2755,7 @@ check_pub_dead_tuple_retention(WalReceiverConn *wrconn)
 	bool		isnull;
 	bool		remote_in_recovery;
 
-	if (walrcv_server_version(wrconn) < 19000)
+	if (walrcv_server_version(wrconn) < 190000)
 		ereport(ERROR,
 				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				errmsg("cannot enable retain_dead_tuples if the publisher is running a version earlier than PostgreSQL 19"));
@@ -2885,12 +2882,13 @@ fetch_relation_list(WalReceiverConn *wrconn, List *publications)
 	int			server_version = walrcv_server_version(wrconn);
 	bool		check_columnlist = (server_version >= 150000);
 	int			column_count = check_columnlist ? 4 : 3;
-	StringInfo	pub_names = makeStringInfo();
+	StringInfoData pub_names;
 
 	initStringInfo(&cmd);
+	initStringInfo(&pub_names);
 
 	/* Build the pub_names comma-separated string. */
-	GetPublicationsStr(publications, pub_names, true);
+	GetPublicationsStr(publications, &pub_names, true);
 
 	/* Get the list of relations from the publisher */
 	if (server_version >= 160000)
@@ -2917,7 +2915,7 @@ fetch_relation_list(WalReceiverConn *wrconn, List *publications)
 						 "                FROM pg_publication\n"
 						 "                WHERE pubname IN ( %s )) AS gpt\n"
 						 "             ON gpt.relid = c.oid\n",
-						 pub_names->data);
+						 pub_names.data);
 
 		/* From version 19, inclusion of sequences in the target is supported */
 		if (server_version >= 190000)
@@ -2926,7 +2924,7 @@ fetch_relation_list(WalReceiverConn *wrconn, List *publications)
 							 "  SELECT DISTINCT s.schemaname, s.sequencename, " CppAsString2(RELKIND_SEQUENCE) "::\"char\" AS relkind, NULL::int2vector AS attrs\n"
 							 "  FROM pg_catalog.pg_publication_sequences s\n"
 							 "  WHERE s.pubname IN ( %s )",
-							 pub_names->data);
+							 pub_names.data);
 	}
 	else
 	{
@@ -2939,10 +2937,10 @@ fetch_relation_list(WalReceiverConn *wrconn, List *publications)
 
 		appendStringInfo(&cmd, "FROM pg_catalog.pg_publication_tables t\n"
 						 " WHERE t.pubname IN ( %s )",
-						 pub_names->data);
+						 pub_names.data);
 	}
 
-	destroyStringInfo(pub_names);
+	pfree(pub_names.data);
 
 	res = walrcv_exec(wrconn, cmd.data, column_count, tableRow);
 	pfree(cmd.data);

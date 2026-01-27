@@ -4,7 +4,7 @@
  *	  Tuple macros used by both index tuples and heap tuples.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/access/tupmacs.h
@@ -190,7 +190,7 @@ fetch_att(const void *T, bool attbyval, int attlen)
 	: \
 	( \
 		AssertMacro((attlen) == -2), \
-		(cur_offset) + (strlen((char *) (attptr)) + 1) \
+		(cur_offset) + (strlen((const char *) (attptr)) + 1) \
 	)) \
 )
 

@@ -61,7 +61,7 @@
  * does block 60.
  *
  *
- * Portions Copyright (c) 2024-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2024-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -283,7 +283,7 @@ read_stream_start_pending_read(ReadStream *stream)
 			/*
 			 * Sequential:  Issue advice until the preadv() calls have caught
 			 * up with the first advice issued for this sequential region, and
-			 * then stay of the way of the kernel's own read-ahead.
+			 * then stay out of the way of the kernel's own read-ahead.
 			 */
 			if (stream->seq_until_processed != InvalidBlockNumber)
 				flags |= READ_BUFFERS_ISSUE_ADVICE;

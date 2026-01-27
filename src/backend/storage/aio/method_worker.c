@@ -18,7 +18,7 @@
  * This method of AIO is available in all builds on all operating systems, and
  * is the default.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -55,7 +55,6 @@
 typedef struct PgAioWorkerSubmissionQueue
 {
 	uint32		size;
-	uint32		mask;
 	uint32		head;
 	uint32		tail;
 	int			sqes[FLEXIBLE_ARRAY_MEMBER];

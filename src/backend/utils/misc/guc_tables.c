@@ -4,13 +4,13 @@
  *
  * Static tables for the Grand Unified Configuration scheme.
  *
- * Many of these tables are const.  However, ConfigureNamesBool[]
- * and so on are not, because the structs in those arrays are actually
- * the live per-variable state data that guc.c manipulates.  While many of
- * their fields are intended to be constant, some fields change at runtime.
+ * Many of these tables are const.  However, ConfigureNames[] is not, because
+ * the structs in it are actually the live per-variable state data that guc.c
+ * manipulates.  While many of their fields are intended to be constant, some
+ * fields change at runtime.
  *
  *
- * Copyright (c) 2000-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2000-2026, PostgreSQL Global Development Group
  * Written by Peter Eisentraut <peter_e@gmx.net>.
  *
  * IDENTIFICATION
@@ -529,10 +529,10 @@ bool		row_security;
 bool		check_function_bodies = true;
 
 /*
- * This GUC exists solely for backward compatibility, check its definition for
- * details.
+ * These GUCs exist solely for backward compatibility.
  */
 static bool default_with_oids = false;
+static bool standard_conforming_strings = true;
 
 bool		current_role_is_superuser;
 
@@ -617,6 +617,7 @@ static int	shared_memory_size_mb;
 static int	shared_memory_size_in_huge_pages;
 static int	wal_block_size;
 static int	num_os_semaphores;
+static int	effective_wal_level = WAL_LEVEL_REPLICA;
 static bool data_checksums;
 static bool integer_datetimes;
 
@@ -626,6 +627,13 @@ static bool integer_datetimes;
 #define DEFAULT_ASSERT_ENABLED false
 #endif
 static bool assert_enabled = DEFAULT_ASSERT_ENABLED;
+
+#ifdef EXEC_BACKEND
+#define EXEC_BACKEND_ENABLED true
+#else
+#define EXEC_BACKEND_ENABLED false
+#endif
+static bool exec_backend_enabled = EXEC_BACKEND_ENABLED;
 
 static char *recovery_target_timeline_string;
 static char *recovery_target_string;

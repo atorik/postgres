@@ -3,7 +3,7 @@
  * explain_dr.c
  *	  Explain DestReceiver to measure serialization overhead
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994-5, Regents of the University of California
  *
  * IDENTIFICATION
@@ -276,7 +276,7 @@ CreateExplainSerializeDestReceiver(ExplainState *es)
 {
 	SerializeDestReceiver *self;
 
-	self = (SerializeDestReceiver *) palloc0(sizeof(SerializeDestReceiver));
+	self = palloc0_object(SerializeDestReceiver);
 
 	self->pub.receiveSlot = serializeAnalyzeReceive;
 	self->pub.rStartup = serializeAnalyzeStartup;

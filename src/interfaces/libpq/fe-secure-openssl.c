@@ -4,7 +4,7 @@
  *	  OpenSSL support
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -694,7 +694,7 @@ static unsigned char alpn_protos[] = PG_ALPN_PROTOCOL_VECTOR;
  * 3.5 introduced stub function to set the callback for OpenSSL compatibility
  * but the callback is never invoked.
  *
- * Error messages added to the connection object wont be printed anywhere if
+ * Error messages added to the connection object won't be printed anywhere if
  * the connection is successful.  Errors in processing keylogging are printed
  * to stderr to overcome this.
  */

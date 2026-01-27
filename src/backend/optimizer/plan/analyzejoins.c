@@ -11,7 +11,7 @@
  * is that we have to work harder to clean up after ourselves when we modify
  * the query, since the derived data structures have to be updated too.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -31,6 +31,7 @@
 #include "optimizer/placeholder.h"
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
+#include "parser/parse_agg.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
 
@@ -1175,6 +1176,8 @@ query_is_distinct_for(Query *query, List *colnos, List *opids)
 	}
 	else if (query->groupingSets)
 	{
+		List	   *gsets;
+
 		/*
 		 * If we have grouping sets with expressions, we probably don't have
 		 * uniqueness and analysis would be hard. Punt.
@@ -1184,15 +1187,17 @@ query_is_distinct_for(Query *query, List *colnos, List *opids)
 
 		/*
 		 * If we have no groupClause (therefore no grouping expressions), we
-		 * might have one or many empty grouping sets. If there's just one,
-		 * then we're returning only one row and are certainly unique. But
-		 * otherwise, we know we're certainly not unique.
+		 * might have one or many empty grouping sets.  If there's just one,
+		 * or if the DISTINCT clause is used on the GROUP BY, then we're
+		 * returning only one row and are certainly unique.  But otherwise, we
+		 * know we're certainly not unique.
 		 */
-		if (list_length(query->groupingSets) == 1 &&
-			((GroupingSet *) linitial(query->groupingSets))->kind == GROUPING_SET_EMPTY)
+		if (query->groupDistinct)
 			return true;
-		else
-			return false;
+
+		gsets = expand_grouping_sets(query->groupingSets, false, -1);
+
+		return (list_length(gsets) == 1);
 	}
 	else
 	{
@@ -1683,14 +1688,14 @@ add_non_redundant_clauses(PlannerInfo *root,
 }
 
 /*
- * A custom callback for ChangeVarNodesExtended() providing
- * Self-join elimination (SJE) related functionality
+ * A custom callback for ChangeVarNodesExtended() providing Self-join
+ * elimination (SJE) related functionality
  *
- * SJE needs to skip the RangeTblRef node
- * type.  During SJE's last step, remove_rel_from_joinlist() removes
- * remaining RangeTblRefs with target relid.  If ChangeVarNodes() replaces
- * the target relid before, remove_rel_from_joinlist() fails to identify
- * the nodes to delete.
+ * SJE needs to skip the RangeTblRef node type.  During SJE's last
+ * step, remove_rel_from_joinlist() removes remaining RangeTblRefs
+ * with target relid.  If ChangeVarNodes() replaces the target relid
+ * before, remove_rel_from_joinlist() would fail to identify the nodes
+ * to delete.
  *
  * SJE also needs to change the relids within RestrictInfo's.
  */
@@ -1769,8 +1774,8 @@ replace_relid_callback(Node *node, ChangeVarNodes_context *context)
 			/*
 			 * For self-join elimination, changing varnos could transform
 			 * "t1.a = t2.a" into "t1.a = t1.a".  That is always true as long
-			 * as "t1.a" is not null.  We use qual() to check for such a case,
-			 * and then we replace the qual for a check for not null
+			 * as "t1.a" is not null.  We use equal() to check for such a
+			 * case, and then we replace the qual with a check for not null
 			 * (NullTest).
 			 */
 			if (leftOp != NULL && equal(leftOp, rightOp))
@@ -2280,7 +2285,7 @@ remove_self_joins_one_group(PlannerInfo *root, Relids relids)
 				continue;
 
 			/*
-			 * Remove rrel ReloptInfo from the planner structures and the
+			 * Remove rrel RelOptInfo from the planner structures and the
 			 * corresponding row mark.
 			 */
 			remove_self_join_rel(root, kmark, rmark, krel, rrel, restrictlist);
@@ -2358,8 +2363,7 @@ remove_self_joins_recurse(PlannerInfo *root, List *joinlist, Relids toRemove)
 	 * In order to find relations with the same oid we first build an array of
 	 * candidates and then sort it by oid.
 	 */
-	candidates = (SelfJoinCandidate *) palloc(sizeof(SelfJoinCandidate) *
-											  numRels);
+	candidates = palloc_array(SelfJoinCandidate, numRels);
 	i = -1;
 	j = 0;
 	while ((i = bms_next_member(relids, i)) >= 0)

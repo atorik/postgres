@@ -6,7 +6,7 @@
  * access control decisions recently used, and reduce number of kernel
  * invocations to avoid unnecessary performance hit.
  *
- * Copyright (c) 2011-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2011-2026, PostgreSQL Global Development Group
  *
  * -------------------------------------------------------------------------
  */
@@ -257,7 +257,7 @@ sepgsql_avc_compute(const char *scontext, const char *tcontext, uint16 tclass)
 	 */
 	oldctx = MemoryContextSwitchTo(avc_mem_cxt);
 
-	cache = palloc0(sizeof(avc_cache));
+	cache = palloc0_object(avc_cache);
 
 	cache->hash = hash;
 	cache->scontext = pstrdup(scontext);

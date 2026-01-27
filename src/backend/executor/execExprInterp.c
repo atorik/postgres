@@ -46,7 +46,7 @@
  * exported rather than being "static" in this file.)
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -3107,7 +3107,7 @@ ExecEvalParamExtern(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
 
 /*
  * Set value of a param (currently always PARAM_EXEC) from
- * state->res{value,null}.
+ * op->res{value,null}.
  */
 void
 ExecEvalParamSet(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
@@ -3119,8 +3119,8 @@ ExecEvalParamSet(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
 	/* Shouldn't have a pending evaluation anymore */
 	Assert(prm->execPlan == NULL);
 
-	prm->value = state->resvalue;
-	prm->isnull = state->resnull;
+	prm->value = *op->resvalue;
+	prm->isnull = *op->resnull;
 }
 
 /*
@@ -3283,7 +3283,7 @@ ExecEvalNextValueExpr(ExprState *state, ExprEvalStep *op)
 			*op->resvalue = Int32GetDatum((int32) newval);
 			break;
 		case INT8OID:
-			*op->resvalue = Int64GetDatum((int64) newval);
+			*op->resvalue = Int64GetDatum(newval);
 			break;
 		default:
 			elog(ERROR, "unsupported sequence type %u",

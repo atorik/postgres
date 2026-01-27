@@ -6,7 +6,7 @@
  * with the walreceiver process. Functions implementing walreceiver itself
  * are in walreceiver.c.
  *
- * Portions Copyright (c) 2010-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2010-2026, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -119,6 +119,20 @@ WalRcvRunning(void)
 		return false;
 }
 
+/* Return the state of the walreceiver. */
+WalRcvState
+WalRcvGetState(void)
+{
+	WalRcvData *walrcv = WalRcv;
+	WalRcvState state;
+
+	SpinLockAcquire(&walrcv->mutex);
+	state = walrcv->walRcvState;
+	SpinLockRelease(&walrcv->mutex);
+
+	return state;
+}
+
 /*
  * Is walreceiver running and streaming (or at least attempting to connect,
  * or starting up)?
@@ -165,7 +179,7 @@ WalRcvStreaming(void)
 	}
 
 	if (state == WALRCV_STREAMING || state == WALRCV_STARTING ||
-		state == WALRCV_RESTARTING)
+		state == WALRCV_CONNECTING || state == WALRCV_RESTARTING)
 		return true;
 	else
 		return false;
@@ -197,6 +211,7 @@ ShutdownWalRcv(void)
 			stopped = true;
 			break;
 
+		case WALRCV_CONNECTING:
 		case WALRCV_STREAMING:
 		case WALRCV_WAITING:
 		case WALRCV_RESTARTING:
@@ -301,7 +316,7 @@ RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr, const char *conninfo,
 	 * If this is the first startup of walreceiver (on this timeline),
 	 * initialize flushedUpto and latestChunkStart to the starting point.
 	 */
-	if (walrcv->receiveStart == 0 || walrcv->receivedTLI != tli)
+	if (!XLogRecPtrIsValid(walrcv->receiveStart) || walrcv->receivedTLI != tli)
 	{
 		walrcv->flushedUpto = recptr;
 		walrcv->receivedTLI = tli;

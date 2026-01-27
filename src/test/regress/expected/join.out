@@ -3081,6 +3081,33 @@ select * from tbl_rs t1 join
 (6 rows)
 
 --
+-- regression test for bug with parallel-hash-right-semi join
+--
+begin;
+-- encourage use of parallel plans
+set local parallel_setup_cost=0;
+set local parallel_tuple_cost=0;
+set local min_parallel_table_scan_size=0;
+set local max_parallel_workers_per_gather=4;
+-- ensure we don't get parallel hash right semi join
+explain (costs off)
+select * from tenk1 t1
+where exists (select 1 from tenk1 t2 where fivethous = t1.fivethous)
+and t1.fivethous < 5;
+                    QUERY PLAN                    
+--------------------------------------------------
+ Gather
+   Workers Planned: 4
+   ->  Parallel Hash Semi Join
+         Hash Cond: (t1.fivethous = t2.fivethous)
+         ->  Parallel Seq Scan on tenk1 t1
+               Filter: (fivethous < 5)
+         ->  Parallel Hash
+               ->  Parallel Seq Scan on tenk1 t2
+(8 rows)
+
+rollback;
+--
 -- regression test for bug #13908 (hash join with skew tuples & nbatch increase)
 --
 set work_mem to '64kB';
@@ -3276,10 +3303,13 @@ where not exists (
 );
                        QUERY PLAN                        
 ---------------------------------------------------------
- Hash Anti Join
-   Hash Cond: (t1.c1 = t2.c2)
-   ->  Seq Scan on tt4x t1
-   ->  Hash
+ Merge Anti Join
+   Merge Cond: (t1.c1 = t2.c2)
+   ->  Sort
+         Sort Key: t1.c1
+         ->  Seq Scan on tt4x t1
+   ->  Sort
+         Sort Key: t2.c2
          ->  Merge Right Join
                Merge Cond: (t5.c1 = t3.c2)
                ->  Merge Join
@@ -3300,7 +3330,7 @@ where not exists (
                            ->  Sort
                                  Sort Key: t3.c1
                                  ->  Seq Scan on tt4x t3
-(24 rows)
+(27 rows)
 
 --
 -- regression test for problems of the sort depicted in bug #3494
@@ -6134,6 +6164,40 @@ select d.* from d left join (select * from b group by b.id, b.c_id) s
  Seq Scan on d
 (1 row)
 
+-- check that join removal works for a left join when joining a subquery
+-- that is guaranteed to be unique by GROUPING SETS
+explain (costs off)
+select d.* from d left join (select 1 as x from b group by ()) s
+  on d.a = s.x;
+  QUERY PLAN   
+---------------
+ Seq Scan on d
+(1 row)
+
+explain (costs off)
+select d.* from d left join (select 1 as x from b group by grouping sets(())) s
+  on d.a = s.x;
+  QUERY PLAN   
+---------------
+ Seq Scan on d
+(1 row)
+
+explain (costs off)
+select d.* from d left join (select 1 as x from b group by grouping sets(()), grouping sets(())) s
+  on d.a = s.x;
+  QUERY PLAN   
+---------------
+ Seq Scan on d
+(1 row)
+
+explain (costs off)
+select d.* from d left join (select 1 as x from b group by distinct grouping sets((), ())) s
+  on d.a = s.x;
+  QUERY PLAN   
+---------------
+ Seq Scan on d
+(1 row)
+
 -- similarly, but keying off a DISTINCT clause
 explain (costs off)
 select d.* from d left join (select distinct * from b) s
@@ -6161,6 +6225,55 @@ select d.* from d left join (select * from b group by b.id, b.c_id) s
          Sort Key: d.a
          ->  Seq Scan on d
 (8 rows)
+
+-- join removal is not possible when the GROUP BY contains non-empty grouping
+-- sets or multiple empty grouping sets
+explain (costs off)
+select d.* from d left join (select 1 as x from b group by rollup(x)) s
+  on d.a = s.x;
+           QUERY PLAN            
+---------------------------------
+ Hash Left Join
+   Hash Cond: (d.a = (1))
+   ->  Seq Scan on d
+   ->  Hash
+         ->  MixedAggregate
+               Hash Key: 1
+               Group Key: ()
+               ->  Seq Scan on b
+(8 rows)
+
+explain (costs off)
+select d.* from d left join (select 1 as x from b group by grouping sets((), ())) s
+  on d.a = s.x;
+               QUERY PLAN                
+-----------------------------------------
+ Hash Left Join
+   Hash Cond: (d.a = (1))
+   ->  Seq Scan on d
+   ->  Hash
+         ->  Append
+               ->  Result
+                     Replaces: Aggregate
+               ->  Result
+                     Replaces: Aggregate
+(9 rows)
+
+explain (costs off)
+select d.* from d left join (select 1 as x from b group by grouping sets((), grouping sets(()))) s
+  on d.a = s.x;
+               QUERY PLAN                
+-----------------------------------------
+ Hash Left Join
+   Hash Cond: (d.a = (1))
+   ->  Seq Scan on d
+   ->  Hash
+         ->  Append
+               ->  Result
+                     Replaces: Aggregate
+               ->  Result
+                     Replaces: Aggregate
+(9 rows)
 
 -- similarly, but keying off a DISTINCT clause
 explain (costs off)
@@ -6767,10 +6880,10 @@ where ss.a = ss.phv and f1 = 0;
              QUERY PLAN             
 ------------------------------------
  Nested Loop
-   ->  Seq Scan on int4_tbl
-         Filter: (f1 = 0)
    ->  Seq Scan on parttbl1 parttbl
          Filter: (a = 12)
+   ->  Seq Scan on int4_tbl
+         Filter: (f1 = 0)
 (5 rows)
 
 select * from
@@ -9203,19 +9316,19 @@ select * from fkest f1
   join fkest f2 on (f1.x = f2.x and f1.x10 = f2.x10b and f1.x100 = f2.x100)
   join fkest f3 on f1.x = f3.x
   where f1.x100 = 2;
-                     QUERY PLAN                      
------------------------------------------------------
+                        QUERY PLAN                         
+-----------------------------------------------------------
  Hash Join
-   Hash Cond: ((f2.x = f1.x) AND (f2.x10b = f1.x10))
+   Hash Cond: (f1.x = f3.x)
    ->  Hash Join
-         Hash Cond: (f3.x = f2.x)
-         ->  Seq Scan on fkest f3
+         Hash Cond: ((f2.x = f1.x) AND (f2.x10b = f1.x10))
+         ->  Seq Scan on fkest f2
+               Filter: (x100 = 2)
          ->  Hash
-               ->  Seq Scan on fkest f2
+               ->  Seq Scan on fkest f1
                      Filter: (x100 = 2)
    ->  Hash
-         ->  Seq Scan on fkest f1
-               Filter: (x100 = 2)
+         ->  Seq Scan on fkest f3
 (11 rows)
 
 rollback;
@@ -9520,7 +9633,7 @@ left join j2 on j1.id1 = j2.id1 where j1.id2 = 1;
          Output: j2.id1, j2.id2
 (8 rows)
 
-create unique index j1_id2_idx on j1(id2) where id2 is not null;
+create unique index j1_id2_idx on j1(id2) where id2 > 0;
 -- ensure we don't use a partial unique index as unique proofs
 explain (verbose, costs off)
 select * from j1
@@ -9769,6 +9882,29 @@ GROUP BY s.c1, s.c2;
 (7 rows)
 
 DROP TABLE group_tbl;
+-- Test that we ignore PlaceHolderVars when looking up statistics
+EXPLAIN (COSTS OFF)
+SELECT t1.unique1 FROM tenk1 t1 LEFT JOIN
+  (SELECT *, 42 AS phv FROM tenk1 t2) ss ON t1.unique2 = ss.unique2
+WHERE ss.unique1 = ss.phv AND t1.unique1 < 100;
+                    QUERY PLAN                    
+--------------------------------------------------
+ Nested Loop
+   ->  Seq Scan on tenk1 t2
+         Filter: (unique1 = 42)
+   ->  Index Scan using tenk1_unique2 on tenk1 t1
+         Index Cond: (unique2 = t2.unique2)
+         Filter: (unique1 < 100)
+(6 rows)
+
+SELECT t1.unique1 FROM tenk1 t1 LEFT JOIN
+  (SELECT *, 42 AS phv FROM tenk1 t2) ss ON t1.unique2 = ss.unique2
+WHERE ss.unique1 = ss.phv AND t1.unique1 < 100;
+ unique1 
+---------
+      42
+(1 row)
+
 --
 -- Test for a nested loop join involving index scan, transforming OR-clauses
 -- to SAOP.

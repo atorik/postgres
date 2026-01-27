@@ -3,7 +3,7 @@
  * dict_ispell.c
  *		Ispell dictionary interface
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -37,7 +37,7 @@ dispell_init(PG_FUNCTION_ARGS)
 				stoploaded = false;
 	ListCell   *l;
 
-	d = (DictISpell *) palloc0(sizeof(DictISpell));
+	d = palloc0_object(DictISpell);
 
 	NIStartBuild(&(d->obj));
 

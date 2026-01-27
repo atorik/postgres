@@ -4,7 +4,7 @@
  *	  Functions to convert stored expressions/querytrees back to
  *	  source text
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -1281,7 +1281,7 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 	Form_pg_index idxrec;
 	Form_pg_class idxrelrec;
 	Form_pg_am	amrec;
-	IndexAmRoutine *amroutine;
+	const IndexAmRoutine *amroutine;
 	List	   *indexprs;
 	ListCell   *indexpr_item;
 	List	   *context;
@@ -3087,7 +3087,8 @@ pg_get_functiondef(PG_FUNCTION_ARGS)
 				 * string literals.  (The elements may be double-quoted as-is,
 				 * but we can't just feed them to the SQL parser; it would do
 				 * the wrong thing with elements that are zero-length or
-				 * longer than NAMEDATALEN.)
+				 * longer than NAMEDATALEN.)  Also, we need a special case for
+				 * empty lists.
 				 *
 				 * Variables that are not so marked should just be emitted as
 				 * simple string literals.  If the variable is not known to
@@ -3105,6 +3106,9 @@ pg_get_functiondef(PG_FUNCTION_ARGS)
 						/* this shouldn't fail really */
 						elog(ERROR, "invalid list syntax in proconfig item");
 					}
+					/* Special case: represent an empty list as NULL */
+					if (namelist == NIL)
+						appendStringInfoString(&buf, "NULL");
 					foreach(lc, namelist)
 					{
 						char	   *curname = (char *) lfirst(lc);
@@ -3709,7 +3713,7 @@ deparse_context_for(const char *aliasname, Oid relid)
 	deparse_namespace *dpns;
 	RangeTblEntry *rte;
 
-	dpns = (deparse_namespace *) palloc0(sizeof(deparse_namespace));
+	dpns = palloc0_object(deparse_namespace);
 
 	/* Build a minimal RTE for the rel */
 	rte = makeNode(RangeTblEntry);
@@ -3753,7 +3757,7 @@ deparse_context_for_plan_tree(PlannedStmt *pstmt, List *rtable_names)
 {
 	deparse_namespace *dpns;
 
-	dpns = (deparse_namespace *) palloc0(sizeof(deparse_namespace));
+	dpns = palloc0_object(deparse_namespace);
 
 	/* Initialize fields that stay the same across the whole plan tree */
 	dpns->rtable = pstmt->rtable;
@@ -9657,7 +9661,7 @@ get_rule_expr(Node *node, deparse_context *context,
 				bool		need_parens;
 
 				/*
-				 * Parenthesize the argument unless it's an SubscriptingRef or
+				 * Parenthesize the argument unless it's a SubscriptingRef or
 				 * another FieldSelect.  Note in particular that it would be
 				 * WRONG to not parenthesize a Var argument; simplicity is not
 				 * the issue here, having the right number of names is.
@@ -10147,7 +10151,7 @@ get_rule_expr(Node *node, deparse_context *context,
 
 						if (needcomma)
 							appendStringInfoString(buf, ", ");
-						get_rule_expr((Node *) e, context, true);
+						get_rule_expr(e, context, true);
 						appendStringInfo(buf, " AS %s",
 										 quote_identifier(map_xml_name_to_sql_identifier(argname)));
 						needcomma = true;
@@ -11824,16 +11828,14 @@ simple_quote_literal(StringInfo buf, const char *val)
 	const char *valptr;
 
 	/*
-	 * We form the string literal according to the prevailing setting of
-	 * standard_conforming_strings; we never use E''. User is responsible for
-	 * making sure result is used correctly.
+	 * We always form the string literal according to standard SQL rules.
 	 */
 	appendStringInfoChar(buf, '\'');
 	for (valptr = val; *valptr; valptr++)
 	{
 		char		ch = *valptr;
 
-		if (SQL_STR_DOUBLE(ch, !standard_conforming_strings))
+		if (SQL_STR_DOUBLE(ch, false))
 			appendStringInfoChar(buf, ch);
 		appendStringInfoChar(buf, ch);
 	}
@@ -13707,25 +13709,26 @@ char *
 get_range_partbound_string(List *bound_datums)
 {
 	deparse_context context;
-	StringInfo	buf = makeStringInfo();
+	StringInfoData buf;
 	ListCell   *cell;
 	char	   *sep;
 
+	initStringInfo(&buf);
 	memset(&context, 0, sizeof(deparse_context));
-	context.buf = buf;
+	context.buf = &buf;
 
-	appendStringInfoChar(buf, '(');
+	appendStringInfoChar(&buf, '(');
 	sep = "";
 	foreach(cell, bound_datums)
 	{
 		PartitionRangeDatum *datum =
 			lfirst_node(PartitionRangeDatum, cell);
 
-		appendStringInfoString(buf, sep);
+		appendStringInfoString(&buf, sep);
 		if (datum->kind == PARTITION_RANGE_DATUM_MINVALUE)
-			appendStringInfoString(buf, "MINVALUE");
+			appendStringInfoString(&buf, "MINVALUE");
 		else if (datum->kind == PARTITION_RANGE_DATUM_MAXVALUE)
-			appendStringInfoString(buf, "MAXVALUE");
+			appendStringInfoString(&buf, "MAXVALUE");
 		else
 		{
 			Const	   *val = castNode(Const, datum->value);
@@ -13734,7 +13737,7 @@ get_range_partbound_string(List *bound_datums)
 		}
 		sep = ", ";
 	}
-	appendStringInfoChar(buf, ')');
+	appendStringInfoChar(&buf, ')');
 
-	return buf->data;
+	return buf.data;
 }

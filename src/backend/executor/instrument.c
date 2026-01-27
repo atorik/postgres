@@ -4,7 +4,7 @@
  *	 functions for instrumentation of plan execution
  *
  *
- * Copyright (c) 2001-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2001-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/executor/instrument.c
@@ -120,7 +120,7 @@ InstrStopNode(Instrumentation *instr, double nTuples)
 	if (!instr->running)
 	{
 		instr->running = true;
-		instr->firsttuple = INSTR_TIME_GET_DOUBLE(instr->counter);
+		instr->firsttuple = instr->counter;
 	}
 	else
 	{
@@ -129,7 +129,7 @@ InstrStopNode(Instrumentation *instr, double nTuples)
 		 * this might be the first tuple
 		 */
 		if (instr->async_mode && save_tuplecount < 1.0)
-			instr->firsttuple = INSTR_TIME_GET_DOUBLE(instr->counter);
+			instr->firsttuple = instr->counter;
 	}
 }
 
@@ -145,8 +145,6 @@ InstrUpdateTupleCount(Instrumentation *instr, double nTuples)
 void
 InstrEndLoop(Instrumentation *instr)
 {
-	double		totaltime;
-
 	/* Skip if nothing has happened, or already shut down */
 	if (!instr->running)
 		return;
@@ -155,10 +153,8 @@ InstrEndLoop(Instrumentation *instr)
 		elog(ERROR, "InstrEndLoop called on running node");
 
 	/* Accumulate per-cycle statistics into totals */
-	totaltime = INSTR_TIME_GET_DOUBLE(instr->counter);
-
-	instr->startup += instr->firsttuple;
-	instr->total += totaltime;
+	INSTR_TIME_ADD(instr->startup, instr->firsttuple);
+	INSTR_TIME_ADD(instr->total, instr->counter);
 	instr->ntuples += instr->tuplecount;
 	instr->nloops += 1;
 
@@ -166,7 +162,7 @@ InstrEndLoop(Instrumentation *instr)
 	instr->running = false;
 	INSTR_TIME_SET_ZERO(instr->starttime);
 	INSTR_TIME_SET_ZERO(instr->counter);
-	instr->firsttuple = 0;
+	INSTR_TIME_SET_ZERO(instr->firsttuple);
 	instr->tuplecount = 0;
 }
 
@@ -179,14 +175,15 @@ InstrAggNode(Instrumentation *dst, Instrumentation *add)
 		dst->running = true;
 		dst->firsttuple = add->firsttuple;
 	}
-	else if (dst->running && add->running && dst->firsttuple > add->firsttuple)
+	else if (dst->running && add->running &&
+			 INSTR_TIME_LT(dst->firsttuple, add->firsttuple))
 		dst->firsttuple = add->firsttuple;
 
 	INSTR_TIME_ADD(dst->counter, add->counter);
 
 	dst->tuplecount += add->tuplecount;
-	dst->startup += add->startup;
-	dst->total += add->total;
+	INSTR_TIME_ADD(dst->startup, add->startup);
+	INSTR_TIME_ADD(dst->total, add->total);
 	dst->ntuples += add->ntuples;
 	dst->ntuples2 += add->ntuples2;
 	dst->nloops += add->nloops;
@@ -353,6 +350,7 @@ WalUsageAdd(WalUsage *dst, WalUsage *add)
 	dst->wal_bytes += add->wal_bytes;
 	dst->wal_records += add->wal_records;
 	dst->wal_fpi += add->wal_fpi;
+	dst->wal_fpi_bytes += add->wal_fpi_bytes;
 	dst->wal_buffers_full += add->wal_buffers_full;
 }
 
@@ -362,5 +360,6 @@ WalUsageAccumDiff(WalUsage *dst, const WalUsage *add, const WalUsage *sub)
 	dst->wal_bytes += add->wal_bytes - sub->wal_bytes;
 	dst->wal_records += add->wal_records - sub->wal_records;
 	dst->wal_fpi += add->wal_fpi - sub->wal_fpi;
+	dst->wal_fpi_bytes += add->wal_fpi_bytes - sub->wal_fpi_bytes;
 	dst->wal_buffers_full += add->wal_buffers_full - sub->wal_buffers_full;
 }

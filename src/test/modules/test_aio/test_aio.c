@@ -8,7 +8,7 @@
  * It'd not generally be safe to export these functions to SQL, but for a test
  * that's fine.
  *
- * Copyright (c) 2020-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2020-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/test/modules/test_aio/test_aio.c
@@ -308,8 +308,9 @@ create_toy_buffer(Relation rel, BlockNumber blkno)
 {
 	Buffer		buf;
 	BufferDesc *buf_hdr;
-	uint32		buf_state;
+	uint64		buf_state;
 	bool		was_pinned = false;
+	uint64		unset_bits = 0;
 
 	/* place buffer in shared buffers without erroring out */
 	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_ZERO_AND_LOCK, NULL);
@@ -318,7 +319,7 @@ create_toy_buffer(Relation rel, BlockNumber blkno)
 	if (RelationUsesLocalBuffers(rel))
 	{
 		buf_hdr = GetLocalBufferDescriptor(-buf - 1);
-		buf_state = pg_atomic_read_u32(&buf_hdr->state);
+		buf_state = pg_atomic_read_u64(&buf_hdr->state);
 	}
 	else
 	{
@@ -334,12 +335,17 @@ create_toy_buffer(Relation rel, BlockNumber blkno)
 	if (BUF_STATE_GET_REFCOUNT(buf_state) > 1)
 		was_pinned = true;
 	else
-		buf_state &= ~(BM_VALID | BM_DIRTY);
+		unset_bits |= BM_VALID | BM_DIRTY;
 
 	if (RelationUsesLocalBuffers(rel))
-		pg_atomic_unlocked_write_u32(&buf_hdr->state, buf_state);
+	{
+		buf_state &= ~unset_bits;
+		pg_atomic_unlocked_write_u64(&buf_hdr->state, buf_state);
+	}
 	else
-		UnlockBufHdr(buf_hdr, buf_state);
+	{
+		UnlockBufHdrExt(buf_hdr, buf_state, 0, unset_bits, 0);
+	}
 
 	if (was_pinned)
 		elog(ERROR, "toy buffer %d was already pinned",
@@ -483,7 +489,7 @@ invalidate_rel_block(PG_FUNCTION_ARGS)
 
 			LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 
-			if (pg_atomic_read_u32(&buf_hdr->state) & BM_DIRTY)
+			if (pg_atomic_read_u64(&buf_hdr->state) & BM_DIRTY)
 			{
 				if (BufferIsLocal(buf))
 					FlushLocalBuffer(buf_hdr, NULL);
@@ -566,7 +572,7 @@ buffer_call_terminate_io(PG_FUNCTION_ARGS)
 	bool		io_error = PG_GETARG_BOOL(3);
 	bool		release_aio = PG_GETARG_BOOL(4);
 	bool		clear_dirty = false;
-	uint32		set_flag_bits = 0;
+	uint64		set_flag_bits = 0;
 
 	if (io_error)
 		set_flag_bits |= BM_IO_ERROR;

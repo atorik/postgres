@@ -9,7 +9,7 @@
  *	  more likely to break across PostgreSQL releases than code that uses
  *	  only the official API.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/interfaces/libpq/libpq-int.h
@@ -563,7 +563,16 @@ struct pg_conn
 	pg_prng_state prng_state;	/* prng state for load balancing connections */
 
 
-	/* Buffer for data received from backend and not yet processed */
+	/*
+	 * Buffer for data received from backend and not yet processed.
+	 *
+	 * NB: We rely on a maximum inBufSize/outBufSize of INT_MAX (and therefore
+	 * an INT_MAX upper bound on the size of any and all packet contents) to
+	 * avoid overflow; for example in reportErrorPosition(). Changing the type
+	 * would require not only an adjustment to the overflow protection in
+	 * pqCheck{In,Out}BufferSpace(), but also a careful audit of all libpq
+	 * code that uses ints during size calculations.
+	 */
 	char	   *inBuffer;		/* currently allocated buffer */
 	int			inBufSize;		/* allocated size of buffer */
 	int			inStart;		/* offset to first unconsumed data in buffer */

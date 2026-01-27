@@ -23,7 +23,7 @@
  * aggregate function over all rows in the current row's window frame.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -109,7 +109,7 @@ typedef struct WindowStatePerFuncData
 	uint8		ignore_nulls;	/* ignore nulls */
 
 	WindowObject winobj;		/* object used in window function API */
-}			WindowStatePerFuncData;
+} WindowStatePerFuncData;
 
 /*
  * For plain aggregate window functions, we also have one of these.
@@ -239,7 +239,7 @@ static void put_notnull_info(WindowObject winobj,
 #define NN_POS_TO_BYTES(pos)	((pos) / NN_ITEM_PER_VAR)
 /* bytes offset to map position */
 #define NN_BYTES_TO_POS(bytes)	((bytes) * NN_ITEM_PER_VAR)
-/* caculate shift bits */
+/* calculate shift bits */
 #define	NN_SHIFT(pos)	((pos) % NN_ITEM_PER_VAR) * NN_BITS_PER_MEMBER
 
 /*
@@ -2661,14 +2661,14 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 	numfuncs = winstate->numfuncs;
 	numaggs = winstate->numaggs;
 	econtext = winstate->ss.ps.ps_ExprContext;
-	econtext->ecxt_aggvalues = (Datum *) palloc0(sizeof(Datum) * numfuncs);
-	econtext->ecxt_aggnulls = (bool *) palloc0(sizeof(bool) * numfuncs);
+	econtext->ecxt_aggvalues = palloc0_array(Datum, numfuncs);
+	econtext->ecxt_aggnulls = palloc0_array(bool, numfuncs);
 
 	/*
 	 * allocate per-wfunc/per-agg state information.
 	 */
-	perfunc = (WindowStatePerFunc) palloc0(sizeof(WindowStatePerFuncData) * numfuncs);
-	peragg = (WindowStatePerAgg) palloc0(sizeof(WindowStatePerAggData) * numaggs);
+	perfunc = palloc0_array(WindowStatePerFuncData, numfuncs);
+	peragg = palloc0_array(WindowStatePerAggData, numaggs);
 	winstate->perfunc = perfunc;
 	winstate->peragg = peragg;
 
@@ -3287,7 +3287,7 @@ window_gettupleslot(WindowObject winobj, int64 pos, TupleTableSlot *slot)
 }
 
 /* gettuple_eval_partition
- * get tuple in a patition and evaluate the window function's argument
+ * get tuple in a partition and evaluate the window function's argument
  * expression on it.
  */
 static Datum
@@ -3467,8 +3467,8 @@ init_notnull_info(WindowObject winobj, WindowStatePerFunc perfuncstate)
 
 	if (winobj->ignore_nulls == PARSER_IGNORE_NULLS)
 	{
-		winobj->notnull_info = palloc0(sizeof(uint8 *) * numargs);
-		winobj->num_notnull_info = palloc0(sizeof(int64) * numargs);
+		winobj->notnull_info = palloc0_array(uint8 *, numargs);
+		winobj->num_notnull_info = palloc0_array(int64, numargs);
 	}
 }
 

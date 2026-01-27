@@ -6,7 +6,7 @@
  * for developers.  If you edit any of these, be sure to do a *full*
  * rebuild (and an initdb if noted).
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/pg_config_manual.h
@@ -18,6 +18,16 @@
  * without the --wal-segsize option.  It must be a valid segment size.
  */
 #define DEFAULT_XLOG_SEG_SIZE	(16*1024*1024)
+
+/*
+ * SLRU segment size.  A page is the same BLCKSZ as is used everywhere else in
+ * Postgres.  The segment size can be chosen somewhat arbitrarily; we make it
+ * 32 pages by default, or 256Kb, i.e. 1M transactions for CLOG or 64K
+ * transactions for SUBTRANS.
+ *
+ * Changing this requires an initdb.
+ */
+#define SLRU_PAGES_PER_SEGMENT	32
 
 /*
  * Maximum length for identifiers (e.g. table names, column names,

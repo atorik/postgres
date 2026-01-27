@@ -3,7 +3,7 @@
  * explain.c
  *	  Explain query execution plans
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994-5, Regents of the University of California
  *
  * IDENTIFICATION
@@ -1192,7 +1192,8 @@ report_triggers(ResultRelInfo *rInfo, bool show_relname, ExplainState *es)
 				appendStringInfo(es->str, " on %s", relname);
 			if (es->timing)
 				appendStringInfo(es->str, ": time=%.3f calls=%.0f\n",
-								 1000.0 * instr->total, instr->ntuples);
+								 INSTR_TIME_GET_MILLISEC(instr->total),
+								 instr->ntuples);
 			else
 				appendStringInfo(es->str, ": calls=%.0f\n", instr->ntuples);
 		}
@@ -1203,7 +1204,8 @@ report_triggers(ResultRelInfo *rInfo, bool show_relname, ExplainState *es)
 				ExplainPropertyText("Constraint Name", conname, es);
 			ExplainPropertyText("Relation", relname, es);
 			if (es->timing)
-				ExplainPropertyFloat("Time", "ms", 1000.0 * instr->total, 3,
+				ExplainPropertyFloat("Time", "ms",
+									 INSTR_TIME_GET_MILLISEC(instr->total), 3,
 									 es);
 			ExplainPropertyFloat("Calls", NULL, instr->ntuples, 0, es);
 		}
@@ -1891,8 +1893,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		planstate->instrument && planstate->instrument->nloops > 0)
 	{
 		double		nloops = planstate->instrument->nloops;
-		double		startup_ms = 1000.0 * planstate->instrument->startup / nloops;
-		double		total_ms = 1000.0 * planstate->instrument->total / nloops;
+		double		startup_ms = INSTR_TIME_GET_MILLISEC(planstate->instrument->startup) / nloops;
+		double		total_ms = INSTR_TIME_GET_MILLISEC(planstate->instrument->total) / nloops;
 		double		rows = planstate->instrument->ntuples / nloops;
 
 		if (es->format == EXPLAIN_FORMAT_TEXT)
@@ -1957,8 +1959,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 
 			if (nloops <= 0)
 				continue;
-			startup_ms = 1000.0 * instrument->startup / nloops;
-			total_ms = 1000.0 * instrument->total / nloops;
+			startup_ms = INSTR_TIME_GET_MILLISEC(instrument->startup) / nloops;
+			total_ms = INSTR_TIME_GET_MILLISEC(instrument->total) / nloops;
 			rows = instrument->ntuples / nloops;
 
 			ExplainOpenWorker(n, es);
@@ -4398,7 +4400,8 @@ show_wal_usage(ExplainState *es, const WalUsage *usage)
 	{
 		/* Show only positive counter values. */
 		if ((usage->wal_records > 0) || (usage->wal_fpi > 0) ||
-			(usage->wal_bytes > 0) || (usage->wal_buffers_full > 0))
+			(usage->wal_bytes > 0) || (usage->wal_buffers_full > 0) ||
+			(usage->wal_fpi_bytes > 0))
 		{
 			ExplainIndentText(es);
 			appendStringInfoString(es->str, "WAL:");
@@ -4412,6 +4415,9 @@ show_wal_usage(ExplainState *es, const WalUsage *usage)
 			if (usage->wal_bytes > 0)
 				appendStringInfo(es->str, " bytes=%" PRIu64,
 								 usage->wal_bytes);
+			if (usage->wal_fpi_bytes > 0)
+				appendStringInfo(es->str, " fpi bytes=%" PRIu64,
+								 usage->wal_fpi_bytes);
 			if (usage->wal_buffers_full > 0)
 				appendStringInfo(es->str, " buffers full=%" PRId64,
 								 usage->wal_buffers_full);
@@ -4426,6 +4432,8 @@ show_wal_usage(ExplainState *es, const WalUsage *usage)
 							   usage->wal_fpi, es);
 		ExplainPropertyUInteger("WAL Bytes", NULL,
 								usage->wal_bytes, es);
+		ExplainPropertyUInteger("WAL FPI Bytes", NULL,
+								usage->wal_fpi_bytes, es);
 		ExplainPropertyInteger("WAL Buffers Full", NULL,
 							   usage->wal_buffers_full, es);
 	}
@@ -5089,7 +5097,7 @@ ExplainCreateWorkersState(int num_workers)
 {
 	ExplainWorkersState *wstate;
 
-	wstate = (ExplainWorkersState *) palloc(sizeof(ExplainWorkersState));
+	wstate = palloc_object(ExplainWorkersState);
 	wstate->num_workers = num_workers;
 	wstate->worker_inited = (bool *) palloc0(num_workers * sizeof(bool));
 	wstate->worker_str = (StringInfoData *)

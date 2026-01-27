@@ -3,7 +3,7 @@
  *
  *	information support functions
  *
- *	Copyright (c) 2010-2025, PostgreSQL Global Development Group
+ *	Copyright (c) 2010-2026, PostgreSQL Global Development Group
  *	src/bin/pg_upgrade/info.c
  */
 
@@ -601,8 +601,6 @@ process_rel_infos(DbInfo *dbinfo, PGresult *res, void *arg)
 	char	   *last_namespace = NULL;
 	char	   *last_tablespace = NULL;
 
-	AssertVariableIsOfType(&process_rel_infos, UpgradeTaskProcessCB);
-
 	for (int relnum = 0; relnum < ntups; relnum++)
 	{
 		RelInfo    *curr = &relinfos[num_rels++];
@@ -726,9 +724,6 @@ process_old_cluster_logical_slot_infos(DbInfo *dbinfo, PGresult *res, void *arg)
 {
 	LogicalSlotInfo *slotinfos = NULL;
 	int			num_slots = PQntuples(res);
-
-	AssertVariableIsOfType(&process_old_cluster_logical_slot_infos,
-						   UpgradeTaskProcessCB);
 
 	if (num_slots)
 	{

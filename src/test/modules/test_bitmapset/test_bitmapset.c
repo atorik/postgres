@@ -6,7 +6,7 @@
  * This module tests the Bitmapset implementation in PostgreSQL, covering
  * all public API functions.
  *
- * Copyright (c) 2025, PostgreSQL Global Development Group
+ * Copyright (c) 2025-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		src/test/modules/test_bitmapset/test_bitmapset.c
@@ -622,7 +622,7 @@ test_random_operations(PG_FUNCTION_ARGS)
 	 * still possible if all the operations hit the "0" case during phase 4
 	 * where multiple operation types are mixed together.
 	 */
-	members = palloc(sizeof(int) * num_ops);
+	members = palloc_array(int, num_ops);
 
 	/* Phase 1: Random insertions in first set */
 	for (int i = 0; i < num_ops / 2; i++)

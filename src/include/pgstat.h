@@ -3,7 +3,7 @@
  *
  *	Definitions for the PostgreSQL cumulative statistics system.
  *
- *	Copyright (c) 2001-2025, PostgreSQL Global Development Group
+ *	Copyright (c) 2001-2026, PostgreSQL Global Development Group
  *
  *	src/include/pgstat.h
  * ----------
@@ -16,6 +16,7 @@
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
 #include "replication/conflict.h"
+#include "replication/worker_internal.h"
 #include "utils/backend_progress.h" /* for backward compatibility */	/* IWYU pragma: export */
 #include "utils/backend_status.h"	/* for backward compatibility */	/* IWYU pragma: export */
 #include "utils/pgstat_kind.h"
@@ -108,7 +109,8 @@ typedef struct PgStat_FunctionCallUsage
 typedef struct PgStat_BackendSubEntry
 {
 	PgStat_Counter apply_error_count;
-	PgStat_Counter sync_error_count;
+	PgStat_Counter sync_seq_error_count;
+	PgStat_Counter sync_table_error_count;
 	PgStat_Counter conflict_count[CONFLICT_NUM_TYPES];
 } PgStat_BackendSubEntry;
 
@@ -212,7 +214,7 @@ typedef struct PgStat_TableXactStatus
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BCB9
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BCBB
 
 typedef struct PgStat_ArchiverStats
 {
@@ -398,6 +400,8 @@ typedef struct PgStat_StatReplSlotEntry
 	PgStat_Counter mem_exceeded_count;
 	PgStat_Counter total_txns;
 	PgStat_Counter total_bytes;
+	PgStat_Counter slotsync_skip_count;
+	TimestampTz slotsync_last_skip;
 	TimestampTz stat_reset_timestamp;
 } PgStat_StatReplSlotEntry;
 
@@ -416,7 +420,8 @@ typedef struct PgStat_SLRUStats
 typedef struct PgStat_StatSubEntry
 {
 	PgStat_Counter apply_error_count;
-	PgStat_Counter sync_error_count;
+	PgStat_Counter sync_seq_error_count;
+	PgStat_Counter sync_table_error_count;
 	PgStat_Counter conflict_count[CONFLICT_NUM_TYPES];
 	TimestampTz stat_reset_timestamp;
 } PgStat_StatSubEntry;
@@ -473,6 +478,7 @@ typedef struct PgStat_WalCounters
 	PgStat_Counter wal_records;
 	PgStat_Counter wal_fpi;
 	uint64		wal_bytes;
+	uint64		wal_fpi_bytes;
 	PgStat_Counter wal_buffers_full;
 } PgStat_WalCounters;
 
@@ -663,8 +669,8 @@ extern void pgstat_init_relation(Relation rel);
 extern void pgstat_assoc_relation(Relation rel);
 extern void pgstat_unlink_relation(Relation rel);
 
-extern void pgstat_report_vacuum(Oid tableoid, bool shared,
-								 PgStat_Counter livetuples, PgStat_Counter deadtuples,
+extern void pgstat_report_vacuum(Relation rel, PgStat_Counter livetuples,
+								 PgStat_Counter deadtuples,
 								 TimestampTz starttime);
 extern void pgstat_report_analyze(Relation rel,
 								  PgStat_Counter livetuples, PgStat_Counter deadtuples,
@@ -741,6 +747,7 @@ extern PgStat_TableStatus *find_tabstat_entry(Oid rel_id);
 extern void pgstat_reset_replslot(const char *name);
 struct ReplicationSlot;
 extern void pgstat_report_replslot(struct ReplicationSlot *slot, const PgStat_StatReplSlotEntry *repSlotStat);
+extern void pgstat_report_replslotsync(struct ReplicationSlot *slot);
 extern void pgstat_create_replslot(struct ReplicationSlot *slot);
 extern void pgstat_acquire_replslot(struct ReplicationSlot *slot);
 extern void pgstat_drop_replslot(struct ReplicationSlot *slot);
@@ -768,7 +775,8 @@ extern PgStat_SLRUStats *pgstat_fetch_slru(void);
  * Functions in pgstat_subscription.c
  */
 
-extern void pgstat_report_subscription_error(Oid subid, bool is_apply_error);
+extern void pgstat_report_subscription_error(Oid subid,
+											 LogicalRepWorkerType wtype);
 extern void pgstat_report_subscription_conflict(Oid subid, ConflictType type);
 extern void pgstat_create_subscription(Oid subid);
 extern void pgstat_drop_subscription(Oid subid);

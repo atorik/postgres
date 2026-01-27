@@ -12,7 +12,7 @@
  * example.  For the most part, however, code outside the core planner
  * should not need to include any optimizer/ header except this one.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/optimizer/optimizer.h
@@ -82,7 +82,6 @@ extern PGDLLIMPORT int effective_cache_size;
 
 extern double clamp_row_est(double nrows);
 extern int32 clamp_width_est(int64 tuple_width);
-extern long clamp_cardinality_to_long(Cardinality x);
 
 /* in path/indxpath.c: */
 
@@ -148,6 +147,9 @@ extern Expr *evaluate_expr(Expr *expr, Oid result_type, int32 result_typmod,
 
 extern bool var_is_nonnullable(PlannerInfo *root, Var *var, bool use_rel_info);
 
+extern bool expr_is_nonnullable(PlannerInfo *root, Expr *expr,
+								bool use_rel_info);
+
 extern List *expand_function_arguments(List *args, bool include_out_arguments,
 									   Oid result_type,
 									   HeapTuple func_tuple);
@@ -191,8 +193,6 @@ extern SortGroupClause *get_sortgroupref_clause_noerr(Index sortref,
 											 * output list */
 #define PVC_RECURSE_PLACEHOLDERS	0x0020	/* recurse into PlaceHolderVar
 											 * arguments */
-#define PVC_INCLUDE_CONVERTROWTYPES	0x0040	/* include ConvertRowtypeExprs in
-											 * output list */
 
 extern Bitmapset *pull_varnos(PlannerInfo *root, Node *node);
 extern Bitmapset *pull_varnos_of_level(PlannerInfo *root, Node *node, int levelsup);

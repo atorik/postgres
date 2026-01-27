@@ -45,7 +45,7 @@
  * and we'd like to still refer to them via C struct offsets.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -103,7 +103,7 @@ static HTAB *missing_cache = NULL;
 static uint32
 missing_hash(const void *key, Size keysize)
 {
-	const missing_cache_key *entry = (missing_cache_key *) key;
+	const missing_cache_key *entry = key;
 
 	return hash_bytes((const unsigned char *) DatumGetPointer(entry->value), entry->len);
 }
@@ -111,8 +111,8 @@ missing_hash(const void *key, Size keysize)
 static int
 missing_match(const void *key1, const void *key2, Size keysize)
 {
-	const missing_cache_key *entry1 = (missing_cache_key *) key1;
-	const missing_cache_key *entry2 = (missing_cache_key *) key2;
+	const missing_cache_key *entry1 = key1;
+	const missing_cache_key *entry2 = key2;
 
 	if (entry1->len != entry2->len)
 		return entry1->len > entry2->len ? 1 : -1;
@@ -123,7 +123,7 @@ missing_match(const void *key1, const void *key2, Size keysize)
 }
 
 static void
-init_missing_cache()
+init_missing_cache(void)
 {
 	HASHCTL		hash_ctl;
 
@@ -1230,8 +1230,8 @@ heap_modify_tuple(HeapTuple tuple,
 	 * O(N^2) if there are many non-replaced columns, so it seems better to
 	 * err on the side of linear cost.
 	 */
-	values = (Datum *) palloc(numberOfAttributes * sizeof(Datum));
-	isnull = (bool *) palloc(numberOfAttributes * sizeof(bool));
+	values = palloc_array(Datum, numberOfAttributes);
+	isnull = palloc_array(bool, numberOfAttributes);
 
 	heap_deform_tuple(tuple, tupleDesc, values, isnull);
 
@@ -1292,8 +1292,8 @@ heap_modify_tuple_by_cols(HeapTuple tuple,
 	 * allocate and fill values and isnull arrays from the tuple, then replace
 	 * selected columns from the input arrays.
 	 */
-	values = (Datum *) palloc(numberOfAttributes * sizeof(Datum));
-	isnull = (bool *) palloc(numberOfAttributes * sizeof(bool));
+	values = palloc_array(Datum, numberOfAttributes);
+	isnull = palloc_array(bool, numberOfAttributes);
 
 	heap_deform_tuple(tuple, tupleDesc, values, isnull);
 
@@ -1502,7 +1502,6 @@ heap_form_minimal_tuple(TupleDesc tupleDescriptor,
 	 * Allocate and zero the space needed.
 	 */
 	mem = palloc0(len + extra);
-	memset(mem, 0, extra);
 	tuple = (MinimalTuple) (mem + extra);
 
 	/*

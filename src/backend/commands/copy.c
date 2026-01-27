@@ -3,7 +3,7 @@
  * copy.c
  *		Implements the COPY utility command
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -28,6 +28,7 @@
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
+#include "nodes/miscnodes.h"
 #include "optimizer/optimizer.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_collate.h"
@@ -133,6 +134,9 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 
 		if (stmt->whereClause)
 		{
+			Bitmapset  *expr_attrs = NULL;
+			int			i;
+
 			/* add nsitem to query namespace */
 			addNSItemToQuery(pstate, nsitem, false, true, true);
 
@@ -144,6 +148,42 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 
 			/* we have to fix its collations too */
 			assign_expr_collations(pstate, whereClause);
+
+			/*
+			 * Examine all the columns in the WHERE clause expression.  When
+			 * the whole-row reference is present, examine all the columns of
+			 * the table.
+			 */
+			pull_varattnos(whereClause, 1, &expr_attrs);
+			if (bms_is_member(0 - FirstLowInvalidHeapAttributeNumber, expr_attrs))
+			{
+				expr_attrs = bms_add_range(expr_attrs,
+										   1 - FirstLowInvalidHeapAttributeNumber,
+										   RelationGetNumberOfAttributes(rel) - FirstLowInvalidHeapAttributeNumber);
+				expr_attrs = bms_del_member(expr_attrs, 0 - FirstLowInvalidHeapAttributeNumber);
+			}
+
+			i = -1;
+			while ((i = bms_next_member(expr_attrs, i)) >= 0)
+			{
+				AttrNumber	attno = i + FirstLowInvalidHeapAttributeNumber;
+
+				Assert(attno != 0);
+
+				/*
+				 * Prohibit generated columns in the WHERE clause.  Stored
+				 * generated columns are not yet computed when the filtering
+				 * happens.  Virtual generated columns could probably work (we
+				 * would need to expand them somewhere around here), but for
+				 * now we keep them consistent with the stored variant.
+				 */
+				if (TupleDescAttr(RelationGetDescr(rel), attno - 1)->attgenerated)
+					ereport(ERROR,
+							errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
+							errmsg("generated columns are not supported in COPY FROM WHERE conditions"),
+							errdetail("Column \"%s\" is a generated column.",
+									  get_attname(RelationGetRelid(rel), attno, false)));
+			}
 
 			whereClause = eval_const_expressions(NULL, whereClause);
 
@@ -328,12 +368,15 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 /*
  * Extract the CopyFormatOptions.header_line value from a DefElem.
  *
- * Parses the HEADER option for COPY, which can be a boolean, a non-negative
- * integer (number of lines to skip), or the special value "match".
+ * Parses the HEADER option for COPY, which can be a boolean, an integer greater
+ * than or equal to zero (number of lines to skip), or the special value
+ * "match".
  */
 static int
 defGetCopyHeaderOption(DefElem *def, bool is_from)
 {
+	int			ival = COPY_HEADER_FALSE;
+
 	/*
 	 * If no parameter value given, assume "true" is meant.
 	 */
@@ -341,28 +384,14 @@ defGetCopyHeaderOption(DefElem *def, bool is_from)
 		return COPY_HEADER_TRUE;
 
 	/*
-	 * Allow 0, 1, "true", "false", "on", "off", a non-negative integer, or
-	 * "match".
+	 * Allow an integer value greater than or equal to zero (integers
+	 * specified as strings are also accepted, mainly for file_fdw foreign
+	 * table options), "true", "false", "on", "off", or "match".
 	 */
 	switch (nodeTag(def->arg))
 	{
 		case T_Integer:
-			{
-				int			ival = intVal(def->arg);
-
-				if (ival < 0)
-					ereport(ERROR,
-							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							 errmsg("a negative integer value cannot be "
-									"specified for %s", def->defname)));
-
-				if (!is_from && ival > 1)
-					ereport(ERROR,
-							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							 errmsg("cannot use multi-line header in COPY TO")));
-
-				return ival;
-			}
+			ival = intVal(def->arg);
 			break;
 		default:
 			{
@@ -389,15 +418,38 @@ defGetCopyHeaderOption(DefElem *def, bool is_from)
 										sval)));
 					return COPY_HEADER_MATCH;
 				}
+				else
+				{
+					ErrorSaveContext escontext = {T_ErrorSaveContext};
+
+					/* Check if the header is a valid integer */
+					ival = pg_strtoint32_safe(sval, (Node *) &escontext);
+					if (escontext.error_occurred)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+						/*- translator: first %s is the name of a COPY option, e.g. ON_ERROR,
+						second %s is the special value "match" for that option */
+								 errmsg("%s requires a Boolean value, an integer "
+										"value greater than or equal to zero, "
+										"or the string \"%s\"",
+										def->defname, "match")));
+				}
 			}
 			break;
 	}
-	ereport(ERROR,
-			(errcode(ERRCODE_SYNTAX_ERROR),
-			 errmsg("%s requires a Boolean value, a non-negative integer, "
-					"or the string \"match\"",
-					def->defname)));
-	return COPY_HEADER_FALSE;	/* keep compiler quiet */
+
+	if (ival < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("a negative integer value cannot be "
+						"specified for %s", def->defname)));
+
+	if (!is_from && ival > 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot use multi-line header in COPY TO")));
+
+	return ival;
 }
 
 /*
@@ -449,7 +501,7 @@ defGetCopyRejectLimitOption(DefElem *def)
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("%s requires a numeric value",
 						def->defname)));
-	else if (nodeTag(def->arg) == T_String)
+	else if (IsA(def->arg, String))
 		reject_limit = pg_strtoint64(strVal(def->arg));
 	else
 		reject_limit = defGetInt64(def);
@@ -522,7 +574,7 @@ ProcessCopyOptions(ParseState *pstate,
 
 	/* Support external use for option sanity checking */
 	if (opts_out == NULL)
-		opts_out = (CopyFormatOptions *) palloc0(sizeof(CopyFormatOptions));
+		opts_out = palloc0_object(CopyFormatOptions);
 
 	opts_out->file_encoding = -1;
 

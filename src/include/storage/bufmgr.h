@@ -4,7 +4,7 @@
  *	  POSTGRES buffer manager definitions.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/storage/bufmgr.h
@@ -200,9 +200,25 @@ extern PGDLLIMPORT int32 *LocalRefCount;
 /*
  * Buffer content lock modes (mode argument for LockBuffer())
  */
-#define BUFFER_LOCK_UNLOCK		0
-#define BUFFER_LOCK_SHARE		1
-#define BUFFER_LOCK_EXCLUSIVE	2
+typedef enum BufferLockMode
+{
+	BUFFER_LOCK_UNLOCK,
+
+	/*
+	 * A share lock conflicts with exclusive locks.
+	 */
+	BUFFER_LOCK_SHARE,
+
+	/*
+	 * A share-exclusive lock conflicts with itself and exclusive locks.
+	 */
+	BUFFER_LOCK_SHARE_EXCLUSIVE,
+
+	/*
+	 * An exclusive lock conflicts with every other lock type.
+	 */
+	BUFFER_LOCK_EXCLUSIVE,
+} BufferLockMode;
 
 
 /*
@@ -238,7 +254,7 @@ extern void WaitReadBuffers(ReadBuffersOperation *operation);
 extern void ReleaseBuffer(Buffer buffer);
 extern void UnlockReleaseBuffer(Buffer buffer);
 extern bool BufferIsLockedByMe(Buffer buffer);
-extern bool BufferIsLockedByMeInMode(Buffer buffer, int mode);
+extern bool BufferIsLockedByMeInMode(Buffer buffer, BufferLockMode mode);
 extern bool BufferIsDirty(Buffer buffer);
 extern void MarkBufferDirty(Buffer buffer);
 extern void IncrBufferRefCount(Buffer buffer);
@@ -299,7 +315,24 @@ extern void BufferGetTag(Buffer buffer, RelFileLocator *rlocator,
 extern void MarkBufferDirtyHint(Buffer buffer, bool buffer_std);
 
 extern void UnlockBuffers(void);
-extern void LockBuffer(Buffer buffer, int mode);
+extern void UnlockBuffer(Buffer buffer);
+extern void LockBufferInternal(Buffer buffer, BufferLockMode mode);
+
+/*
+ * Handling BUFFER_LOCK_UNLOCK in bufmgr.c leads to sufficiently worse branch
+ * prediction to impact performance. Therefore handle that switch here, where
+ * most of the time `mode` will be a constant and thus can be optimized out by
+ * the compiler.
+ */
+static inline void
+LockBuffer(Buffer buffer, BufferLockMode mode)
+{
+	if (mode == BUFFER_LOCK_UNLOCK)
+		UnlockBuffer(buffer);
+	else
+		LockBufferInternal(buffer, mode);
+}
+
 extern bool ConditionalLockBuffer(Buffer buffer);
 extern void LockBufferForCleanup(Buffer buffer);
 extern bool ConditionalLockBufferForCleanup(Buffer buffer);
@@ -323,6 +356,14 @@ extern void EvictRelUnpinnedBuffers(Relation rel,
 									int32 *buffers_evicted,
 									int32 *buffers_flushed,
 									int32 *buffers_skipped);
+extern bool MarkDirtyUnpinnedBuffer(Buffer buf, bool *buffer_already_dirty);
+extern void MarkDirtyRelUnpinnedBuffers(Relation rel,
+										int32 *buffers_dirtied,
+										int32 *buffers_already_dirty,
+										int32 *buffers_skipped);
+extern void MarkDirtyAllUnpinnedBuffers(int32 *buffers_dirtied,
+										int32 *buffers_already_dirty,
+										int32 *buffers_skipped);
 
 /* in buf_init.c */
 extern void BufferManagerShmemInit(void);

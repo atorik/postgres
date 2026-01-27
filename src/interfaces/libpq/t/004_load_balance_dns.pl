@@ -1,4 +1,4 @@
-# Copyright (c) 2023-2025, PostgreSQL Global Development Group
+# Copyright (c) 2023-2026, PostgreSQL Global Development Group
 use strict;
 use warnings FATAL => 'all';
 use Config;
@@ -126,7 +126,7 @@ $node2->stop();
 # working one.
 $node3->connect_ok(
 	"host=pg-loadbalancetest port=$port load_balance_hosts=disable",
-	"load_balance_hosts=disable continues until it connects to the a working node",
+	"load_balance_hosts=disable continues until it connects to a working node",
 	sql => "SELECT 'connect3'",
 	log_like => [qr/statement: SELECT 'connect3'/]);
 
@@ -136,7 +136,7 @@ foreach my $i (1 .. 5)
 {
 	$node3->connect_ok(
 		"host=pg-loadbalancetest port=$port load_balance_hosts=random",
-		"load_balance_hosts=random continues until it connects to the a working node",
+		"load_balance_hosts=random continues until it connects to a working node",
 		sql => "SELECT 'connect4'",
 		log_like => [qr/statement: SELECT 'connect4'/]);
 }

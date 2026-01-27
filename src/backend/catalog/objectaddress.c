@@ -3,7 +3,7 @@
  * objectaddress.c
  *	  functions for working with ObjectAddresses
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -6144,8 +6144,8 @@ strlist_to_textarray(List *list)
 								   ALLOCSET_DEFAULT_SIZES);
 	oldcxt = MemoryContextSwitchTo(memcxt);
 
-	datums = (Datum *) palloc(sizeof(Datum) * list_length(list));
-	nulls = palloc(sizeof(bool) * list_length(list));
+	datums = palloc_array(Datum, list_length(list));
+	nulls = palloc_array(bool, list_length(list));
 
 	foreach(cell, list)
 	{

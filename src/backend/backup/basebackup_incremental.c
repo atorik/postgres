@@ -10,7 +10,7 @@
  * backup manifest supplied by the user taking the incremental backup
  * and extract the required information from it.
  *
- * Portions Copyright (c) 2010-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2010-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/backup/basebackup_incremental.c
@@ -157,7 +157,7 @@ CreateIncrementalBackupInfo(MemoryContext mcxt)
 
 	oldcontext = MemoryContextSwitchTo(mcxt);
 
-	ib = palloc0(sizeof(IncrementalBackupInfo));
+	ib = palloc0_object(IncrementalBackupInfo);
 	ib->mcxt = mcxt;
 	initStringInfo(&ib->buf);
 
@@ -169,7 +169,7 @@ CreateIncrementalBackupInfo(MemoryContext mcxt)
 	 */
 	ib->manifest_files = backup_file_create(mcxt, 10000, NULL);
 
-	context = palloc0(sizeof(JsonManifestParseContext));
+	context = palloc0_object(JsonManifestParseContext);
 	/* Parse the manifest. */
 	context->private_data = ib;
 	context->version_cb = manifest_process_version;
@@ -519,7 +519,7 @@ PrepareForIncrementalBackup(IncrementalBackupInfo *ib,
 		if (!WalSummariesAreComplete(tli_wslist, tli_start_lsn, tli_end_lsn,
 									 &tli_missing_lsn))
 		{
-			if (XLogRecPtrIsInvalid(tli_missing_lsn))
+			if (!XLogRecPtrIsValid(tli_missing_lsn))
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 						 errmsg("WAL summaries are required on timeline %u from %X/%08X to %X/%08X, but no summaries for that timeline and LSN range exist",
@@ -850,8 +850,22 @@ GetFileBackupMethod(IncrementalBackupInfo *ib, const char *path,
 	{
 		unsigned	relative_limit = limit_block - segno * RELSEG_SIZE;
 
+		/*
+		 * We can't set a truncation_block_length in excess of the limit block
+		 * number (relativized to the current segment). To do so would be to
+		 * treat blocks from older backups as valid current contents even if
+		 * they were subsequently truncated away.
+		 */
 		if (*truncation_block_length < relative_limit)
 			*truncation_block_length = relative_limit;
+
+		/*
+		 * We also can't set a truncation_block_length in excess of the
+		 * segment size, since the reconstructed file can't be larger than
+		 * that.
+		 */
+		if (*truncation_block_length > RELSEG_SIZE)
+			*truncation_block_length = RELSEG_SIZE;
 	}
 
 	/* Send it incrementally. */
@@ -916,7 +930,7 @@ GetIncrementalFileSize(unsigned num_blocks_required)
 static uint32
 hash_string_pointer(const char *s)
 {
-	unsigned char *ss = (unsigned char *) s;
+	const unsigned char *ss = (const unsigned char *) s;
 
 	return hash_bytes(ss, strlen(s));
 }
@@ -993,7 +1007,7 @@ manifest_process_wal_range(JsonManifestParseContext *context,
 						   XLogRecPtr end_lsn)
 {
 	IncrementalBackupInfo *ib = context->private_data;
-	backup_wal_range *range = palloc(sizeof(backup_wal_range));
+	backup_wal_range *range = palloc_object(backup_wal_range);
 
 	range->tli = tli;
 	range->start_lsn = start_lsn;
@@ -1035,8 +1049,8 @@ manifest_report_error(JsonManifestParseContext *context, const char *fmt,...)
 static int
 compare_block_numbers(const void *a, const void *b)
 {
-	BlockNumber aa = *(BlockNumber *) a;
-	BlockNumber bb = *(BlockNumber *) b;
+	BlockNumber aa = *(const BlockNumber *) a;
+	BlockNumber bb = *(const BlockNumber *) b;
 
 	return pg_cmp_u32(aa, bb);
 }

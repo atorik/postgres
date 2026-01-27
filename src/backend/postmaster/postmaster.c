@@ -32,7 +32,7 @@
  *	  clients.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -854,9 +854,9 @@ PostmasterMain(int argc, char *argv[])
 	if (summarize_wal && wal_level == WAL_LEVEL_MINIMAL)
 		ereport(ERROR,
 				(errmsg("WAL cannot be summarized when \"wal_level\" is \"minimal\"")));
-	if (sync_replication_slots && wal_level < WAL_LEVEL_LOGICAL)
+	if (sync_replication_slots && wal_level == WAL_LEVEL_MINIMAL)
 		ereport(ERROR,
-				(errmsg("replication slot synchronization (\"sync_replication_slots\" = on) requires \"wal_level\" >= \"logical\"")));
+				(errmsg("replication slot synchronization (\"sync_replication_slots\" = on) requires \"wal_level\" to be \"replica\" or \"logical\"")));
 
 	/*
 	 * Other one-time internal sanity checks can go here, if they are fast.
@@ -880,7 +880,7 @@ PostmasterMain(int argc, char *argv[])
 	/* For debugging: display postmaster environment */
 	if (message_level_is_interesting(DEBUG3))
 	{
-#if !defined(WIN32) || defined(_MSC_VER)
+#if !defined(WIN32)
 		extern char **environ;
 #endif
 		char	  **p;
@@ -2665,6 +2665,14 @@ CleanupBackend(PMChild *bp,
 		BackgroundWorkerStopNotifications(bp_pid);
 
 	/*
+	 * If it was an autovacuum worker, wake up the launcher so that it can
+	 * immediately launch a new worker or rebalance to cost limit setting of
+	 * the remaining workers.
+	 */
+	if (bp_bkend_type == B_AUTOVAC_WORKER && AutoVacLauncherPMChild != NULL)
+		signal_child(AutoVacLauncherPMChild, SIGUSR2);
+
+	/*
 	 * If it was a background worker, also update its RegisteredBgWorker
 	 * entry.
 	 */
@@ -3391,7 +3399,7 @@ LaunchMissingBackgroundProcesses(void)
 			Shutdown <= SmartShutdown)
 		{
 			WalReceiverPMChild = StartChildProcess(B_WAL_RECEIVER);
-			if (WalReceiverPMChild != 0)
+			if (WalReceiverPMChild != NULL)
 				WalReceiverRequested = false;
 			/* else leave the flag set, so we'll try again later */
 		}
@@ -4562,7 +4570,7 @@ pgwin32_register_deadchild_callback(HANDLE procHandle, DWORD procId)
 {
 	win32_deadchild_waitinfo *childinfo;
 
-	childinfo = palloc(sizeof(win32_deadchild_waitinfo));
+	childinfo = palloc_object(win32_deadchild_waitinfo);
 	childinfo->procHandle = procHandle;
 	childinfo->procId = procId;
 

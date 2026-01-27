@@ -3,7 +3,7 @@
  * origin.c
  *	  Logical replication progress tracking support.
  *
- * Copyright (c) 2013-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2013-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/replication/logical/origin.c
@@ -15,7 +15,7 @@
  * * A facility to efficiently store and persist replication progress in an
  *	 efficient and durable manner.
  *
- * Replication origin consist out of a descriptive, user defined, external
+ * Replication origin consists of a descriptive, user defined, external
  * name and a short, thus space efficient, internal 2 byte one. This split
  * exists because replication origin have to be stored in WAL and shared
  * memory and long descriptors would be inefficient.  For now only use 2 bytes
@@ -129,6 +129,9 @@ typedef struct ReplicationState
 	 * PID of backend that's acquired slot, or 0 if none.
 	 */
 	int			acquired_by;
+
+	/* Count of processes that are currently using this origin. */
+	int			refcount;
 
 	/*
 	 * Condition variable that's signaled when acquired_by changes.
@@ -383,16 +386,19 @@ restart:
 		if (state->roident == roident)
 		{
 			/* found our slot, is it busy? */
-			if (state->acquired_by != 0)
+			if (state->refcount > 0)
 			{
 				ConditionVariable *cv;
 
 				if (nowait)
 					ereport(ERROR,
 							(errcode(ERRCODE_OBJECT_IN_USE),
-							 errmsg("could not drop replication origin with ID %d, in use by PID %d",
-									state->roident,
-									state->acquired_by)));
+							 (state->acquired_by != 0)
+							 ? errmsg("could not drop replication origin with ID %d, in use by PID %d",
+									  state->roident,
+									  state->acquired_by)
+							 : errmsg("could not drop replication origin with ID %d, in use by another process",
+									  state->roident)));
 
 				/*
 				 * We must wait and then retry.  Since we don't know which CV
@@ -789,20 +795,19 @@ StartupReplicationOrigin(void)
 
 		readBytes = read(fd, &disk_state, sizeof(disk_state));
 
-		/* no further data */
-		if (readBytes == sizeof(crc))
-		{
-			/* not pretty, but simple ... */
-			file_crc = *(pg_crc32c *) &disk_state;
-			break;
-		}
-
 		if (readBytes < 0)
 		{
 			ereport(PANIC,
 					(errcode_for_file_access(),
 					 errmsg("could not read file \"%s\": %m",
 							path)));
+		}
+
+		/* no further data */
+		if (readBytes == sizeof(crc))
+		{
+			memcpy(&file_crc, &disk_state, sizeof(file_crc));
+			break;
 		}
 
 		if (readBytes != sizeof(disk_state))
@@ -960,13 +965,16 @@ replorigin_advance(RepOriginId node,
 		LWLockAcquire(&replication_state->lock, LW_EXCLUSIVE);
 
 		/* Make sure it's not used by somebody else */
-		if (replication_state->acquired_by != 0)
+		if (replication_state->refcount > 0)
 		{
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_IN_USE),
-					 errmsg("replication origin with ID %d is already active for PID %d",
-							replication_state->roident,
-							replication_state->acquired_by)));
+					 (replication_state->acquired_by != 0)
+					 ? errmsg("replication origin with ID %d is already active for PID %d",
+							  replication_state->roident,
+							  replication_state->acquired_by)
+					 : errmsg("replication origin with ID %d is already active in another process",
+							  replication_state->roident)));
 		}
 
 		break;
@@ -984,8 +992,8 @@ replorigin_advance(RepOriginId node,
 		/* initialize new slot */
 		LWLockAcquire(&free_state->lock, LW_EXCLUSIVE);
 		replication_state = free_state;
-		Assert(replication_state->remote_lsn == InvalidXLogRecPtr);
-		Assert(replication_state->local_lsn == InvalidXLogRecPtr);
+		Assert(!XLogRecPtrIsValid(replication_state->remote_lsn));
+		Assert(!XLogRecPtrIsValid(replication_state->local_lsn));
 		replication_state->roident = node;
 	}
 
@@ -1020,7 +1028,7 @@ replorigin_advance(RepOriginId node,
 	 */
 	if (go_backward || replication_state->remote_lsn < remote_commit)
 		replication_state->remote_lsn = remote_commit;
-	if (local_commit != InvalidXLogRecPtr &&
+	if (XLogRecPtrIsValid(local_commit) &&
 		(go_backward || replication_state->local_lsn < local_commit))
 		replication_state->local_lsn = local_commit;
 	LWLockRelease(&replication_state->lock);
@@ -1064,10 +1072,41 @@ replorigin_get_progress(RepOriginId node, bool flush)
 
 	LWLockRelease(ReplicationOriginLock);
 
-	if (flush && local_lsn != InvalidXLogRecPtr)
+	if (flush && XLogRecPtrIsValid(local_lsn))
 		XLogFlush(local_lsn);
 
 	return remote_lsn;
+}
+
+/* Helper function to reset the session replication origin */
+static void
+replorigin_session_reset_internal(void)
+{
+	ConditionVariable *cv;
+
+	Assert(session_replication_state != NULL);
+
+	LWLockAcquire(ReplicationOriginLock, LW_EXCLUSIVE);
+
+	/* The origin must be held by at least one process at this point. */
+	Assert(session_replication_state->refcount > 0);
+
+	/*
+	 * Reset the PID only if the current session is the first to set up this
+	 * origin. This avoids clearing the first process's PID when any other
+	 * session releases the origin.
+	 */
+	if (session_replication_state->acquired_by == MyProcPid)
+		session_replication_state->acquired_by = 0;
+
+	session_replication_state->refcount--;
+
+	cv = &session_replication_state->origin_cv;
+	session_replication_state = NULL;
+
+	LWLockRelease(ReplicationOriginLock);
+
+	ConditionVariableBroadcast(cv);
 }
 
 /*
@@ -1077,25 +1116,10 @@ replorigin_get_progress(RepOriginId node, bool flush)
 static void
 ReplicationOriginExitCleanup(int code, Datum arg)
 {
-	ConditionVariable *cv = NULL;
-
 	if (session_replication_state == NULL)
 		return;
 
-	LWLockAcquire(ReplicationOriginLock, LW_EXCLUSIVE);
-
-	if (session_replication_state->acquired_by == MyProcPid)
-	{
-		cv = &session_replication_state->origin_cv;
-
-		session_replication_state->acquired_by = 0;
-		session_replication_state = NULL;
-	}
-
-	LWLockRelease(ReplicationOriginLock);
-
-	if (cv)
-		ConditionVariableBroadcast(cv);
+	replorigin_session_reset_internal();
 }
 
 /*
@@ -1175,6 +1199,18 @@ replorigin_session_setup(RepOriginId node, int acquired_by)
 							node, acquired_by)));
 		}
 
+		/*
+		 * The origin is in use, but PID is not recorded. This can happen if
+		 * the process that originally acquired the origin exited without
+		 * releasing it. To ensure correctness, other processes cannot acquire
+		 * the origin until all processes currently using it have released it.
+		 */
+		else if (curstate->acquired_by == 0 && curstate->refcount > 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_IN_USE),
+					 errmsg("replication origin with ID %d is already active in another process",
+							curstate->roident)));
+
 		/* ok, found slot */
 		session_replication_state = curstate;
 		break;
@@ -1197,8 +1233,8 @@ replorigin_session_setup(RepOriginId node, int acquired_by)
 
 		/* initialize new slot */
 		session_replication_state = &replication_states[free_slot];
-		Assert(session_replication_state->remote_lsn == InvalidXLogRecPtr);
-		Assert(session_replication_state->local_lsn == InvalidXLogRecPtr);
+		Assert(!XLogRecPtrIsValid(session_replication_state->remote_lsn));
+		Assert(!XLogRecPtrIsValid(session_replication_state->local_lsn));
 		session_replication_state->roident = node;
 	}
 
@@ -1206,9 +1242,21 @@ replorigin_session_setup(RepOriginId node, int acquired_by)
 	Assert(session_replication_state->roident != InvalidRepOriginId);
 
 	if (acquired_by == 0)
+	{
 		session_replication_state->acquired_by = MyProcPid;
+		Assert(session_replication_state->refcount == 0);
+	}
 	else
+	{
+		/*
+		 * Sanity check: the origin must already be acquired by the process
+		 * passed as input, and at least one process must be using it.
+		 */
 		Assert(session_replication_state->acquired_by == acquired_by);
+		Assert(session_replication_state->refcount > 0);
+	}
+
+	session_replication_state->refcount++;
 
 	LWLockRelease(ReplicationOriginLock);
 
@@ -1225,8 +1273,6 @@ replorigin_session_setup(RepOriginId node, int acquired_by)
 void
 replorigin_session_reset(void)
 {
-	ConditionVariable *cv;
-
 	Assert(max_active_replication_origins != 0);
 
 	if (session_replication_state == NULL)
@@ -1234,15 +1280,22 @@ replorigin_session_reset(void)
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("no replication origin is configured")));
 
-	LWLockAcquire(ReplicationOriginLock, LW_EXCLUSIVE);
+	/*
+	 * Restrict explicit resetting of the replication origin if it was first
+	 * acquired by this process and others are still using it. While the
+	 * system handles this safely (as happens if the first session exits
+	 * without calling reset), it is best to avoid doing so.
+	 */
+	if (session_replication_state->acquired_by == MyProcPid &&
+		session_replication_state->refcount > 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("cannot reset replication origin with ID %d because it is still in use by other processes",
+						session_replication_state->roident),
+				 errdetail("This session is the first process for this replication origin, and other processes are currently sharing it."),
+				 errhint("Reset the replication origin in all other processes before retrying.")));
 
-	session_replication_state->acquired_by = 0;
-	cv = &session_replication_state->origin_cv;
-	session_replication_state = NULL;
-
-	LWLockRelease(ReplicationOriginLock);
-
-	ConditionVariableBroadcast(cv);
+	replorigin_session_reset_internal();
 }
 
 /*
@@ -1282,7 +1335,7 @@ replorigin_session_get_progress(bool flush)
 	local_lsn = session_replication_state->local_lsn;
 	LWLockRelease(&session_replication_state->lock);
 
-	if (flush && local_lsn != InvalidXLogRecPtr)
+	if (flush && XLogRecPtrIsValid(local_lsn))
 		XLogFlush(local_lsn);
 
 	return remote_lsn;
@@ -1454,7 +1507,7 @@ pg_replication_origin_session_progress(PG_FUNCTION_ARGS)
 
 	remote_lsn = replorigin_session_get_progress(flush);
 
-	if (remote_lsn == InvalidXLogRecPtr)
+	if (!XLogRecPtrIsValid(remote_lsn))
 		PG_RETURN_NULL();
 
 	PG_RETURN_LSN(remote_lsn);
@@ -1543,7 +1596,7 @@ pg_replication_origin_progress(PG_FUNCTION_ARGS)
 
 	remote_lsn = replorigin_get_progress(roident, flush);
 
-	if (remote_lsn == InvalidXLogRecPtr)
+	if (!XLogRecPtrIsValid(remote_lsn))
 		PG_RETURN_NULL();
 
 	PG_RETURN_LSN(remote_lsn);

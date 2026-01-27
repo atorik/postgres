@@ -4,7 +4,7 @@
  *	  support for the POSTGRES executor module
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/executor/executor.h
@@ -138,10 +138,10 @@ extern TupleHashTable BuildTupleHashTable(PlanState *parent,
 										  const Oid *eqfuncoids,
 										  FmgrInfo *hashfunctions,
 										  Oid *collations,
-										  long nbuckets,
+										  double nelements,
 										  Size additionalsize,
 										  MemoryContext metacxt,
-										  MemoryContext tablecxt,
+										  MemoryContext tuplescxt,
 										  MemoryContext tempcxt,
 										  bool use_variable_hash_iv);
 extern TupleHashEntry LookupTupleHashEntry(TupleHashTable hashtable,
@@ -157,6 +157,9 @@ extern TupleHashEntry FindTupleHashEntry(TupleHashTable hashtable,
 										 ExprState *eqcomp,
 										 ExprState *hashexpr);
 extern void ResetTupleHashTable(TupleHashTable hashtable);
+extern Size EstimateTupleHashTableSpace(double nentries,
+										Size tupleWidth,
+										Size additionalsize);
 
 #ifndef FRONTEND
 /*
@@ -401,7 +404,7 @@ ExecEvalExpr(ExprState *state,
  * Like ExecEvalExpr(), but for cases where no return value is expected,
  * because the side-effects of expression evaluation are what's desired. This
  * is e.g. used for projection and aggregate transition computation.
-
+ *
  * Evaluate expression identified by "state" in the execution context
  * given by "econtext".
  *
@@ -745,11 +748,11 @@ extern List *ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 extern bool ExecCheckIndexConstraints(ResultRelInfo *resultRelInfo,
 									  TupleTableSlot *slot,
 									  EState *estate, ItemPointer conflictTid,
-									  ItemPointer tupleid,
+									  const ItemPointerData *tupleid,
 									  List *arbiterIndexes);
 extern void check_exclusion_constraint(Relation heap, Relation index,
 									   IndexInfo *indexInfo,
-									   ItemPointer tupleid,
+									   const ItemPointerData *tupleid,
 									   const Datum *values, const bool *isnull,
 									   EState *estate, bool newIndex);
 

@@ -4,7 +4,7 @@
  *
  * Routines to support SELinux labels (security context)
  *
- * Copyright (c) 2010-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2010-2026, PostgreSQL Global Development Group
  *
  * -------------------------------------------------------------------------
  */
@@ -145,7 +145,7 @@ sepgsql_set_client_label(const char *new_label)
 	 */
 	oldcxt = MemoryContextSwitchTo(CurTransactionContext);
 
-	plabel = palloc0(sizeof(pending_label));
+	plabel = palloc0_object(pending_label);
 	plabel->subid = GetCurrentSubTransactionId();
 	if (new_label)
 		plabel->label = pstrdup(new_label);

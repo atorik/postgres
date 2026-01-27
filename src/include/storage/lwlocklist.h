@@ -10,7 +10,7 @@
  *
  * Also, generate-lwlocknames.pl processes this file to create lwlocknames.h.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -85,6 +85,8 @@ PG_LWLOCK(50, DSMRegistry)
 PG_LWLOCK(51, InjectionPoint)
 PG_LWLOCK(52, SerialControl)
 PG_LWLOCK(53, AioWorkerSubmissionQueue)
+PG_LWLOCK(54, WaitLSN)
+PG_LWLOCK(55, LogicalDecodingControl)
 
 /*
  * There also exist several built-in LWLock tranches.  As with the predefined
@@ -100,9 +102,9 @@ PG_LWLOCKTRANCHE(SUBTRANS_BUFFER, SubtransBuffer)
 PG_LWLOCKTRANCHE(MULTIXACTOFFSET_BUFFER, MultiXactOffsetBuffer)
 PG_LWLOCKTRANCHE(MULTIXACTMEMBER_BUFFER, MultiXactMemberBuffer)
 PG_LWLOCKTRANCHE(NOTIFY_BUFFER, NotifyBuffer)
+PG_LWLOCKTRANCHE(NOTIFY_CHANNEL_HASH, NotifyChannelHash)
 PG_LWLOCKTRANCHE(SERIAL_BUFFER, SerialBuffer)
 PG_LWLOCKTRANCHE(WAL_INSERT, WALInsert)
-PG_LWLOCKTRANCHE(BUFFER_CONTENT, BufferContent)
 PG_LWLOCKTRANCHE(REPLICATION_ORIGIN_STATE, ReplicationOriginState)
 PG_LWLOCKTRANCHE(REPLICATION_SLOT_IO, ReplicationSlotIO)
 PG_LWLOCKTRANCHE(LOCK_FASTPATH, LockFastPath)

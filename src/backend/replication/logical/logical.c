@@ -2,7 +2,7 @@
  * logical.c
  *	   PostgreSQL logical decoding coordination
  *
- * Copyright (c) 2012-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2012-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/replication/logical/logical.c
@@ -117,31 +117,20 @@ CheckLogicalDecodingRequirements(void)
 	 * needs the same check.
 	 */
 
-	if (wal_level < WAL_LEVEL_LOGICAL)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("logical decoding requires \"wal_level\" >= \"logical\"")));
-
 	if (MyDatabaseId == InvalidOid)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("logical decoding requires a database connection")));
 
-	if (RecoveryInProgress())
-	{
-		/*
-		 * This check may have race conditions, but whenever
-		 * XLOG_PARAMETER_CHANGE indicates that wal_level has changed, we
-		 * verify that there are no existing logical replication slots. And to
-		 * avoid races around creating a new slot,
-		 * CheckLogicalDecodingRequirements() is called once before creating
-		 * the slot, and once when logical decoding is initially starting up.
-		 */
-		if (GetActiveWalLevelOnStandby() < WAL_LEVEL_LOGICAL)
-			ereport(ERROR,
-					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-					 errmsg("logical decoding on standby requires \"wal_level\" >= \"logical\" on the primary")));
-	}
+	/* CheckSlotRequirements() has already checked if wal_level >= 'replica' */
+	Assert(wal_level >= WAL_LEVEL_REPLICA);
+
+	/* Check if logical decoding is available on standby */
+	if (RecoveryInProgress() && !IsLogicalDecodingEnabled())
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("logical decoding on standby requires \"effective_wal_level\" >= \"logical\" on the primary"),
+				 errhint("Set \"wal_level\" >= \"logical\" or create at least one logical slot when \"wal_level\" = \"replica\".")));
 }
 
 /*
@@ -172,7 +161,7 @@ StartupDecodingContext(List *output_plugin_options,
 									"Logical decoding context",
 									ALLOCSET_DEFAULT_SIZES);
 	old_context = MemoryContextSwitchTo(context);
-	ctx = palloc0(sizeof(LogicalDecodingContext));
+	ctx = palloc0_object(LogicalDecodingContext);
 
 	ctx->context = context;
 
@@ -388,7 +377,7 @@ CreateInitDecodingContext(const char *plugin,
 	slot->data.plugin = plugin_name;
 	SpinLockRelease(&slot->mutex);
 
-	if (XLogRecPtrIsInvalid(restart_lsn))
+	if (!XLogRecPtrIsValid(restart_lsn))
 		ReplicationSlotReserveWal();
 	else
 	{
@@ -405,11 +394,11 @@ CreateInitDecodingContext(const char *plugin,
 	 * without further interlock its return value might immediately be out of
 	 * date.
 	 *
-	 * So we have to acquire the ProcArrayLock to prevent computation of new
-	 * xmin horizons by other backends, get the safe decoding xid, and inform
-	 * the slot machinery about the new limit. Once that's done the
-	 * ProcArrayLock can be released as the slot machinery now is
-	 * protecting against vacuum.
+	 * So we have to acquire both the ReplicationSlotControlLock and the
+	 * ProcArrayLock to prevent concurrent computation and update of new xmin
+	 * horizons by other backends, get the safe decoding xid, and inform the
+	 * slot machinery about the new limit. Once that's done both locks can be
+	 * released as the slot machinery now is protecting against vacuum.
 	 *
 	 * Note that, temporarily, the data, not just the catalog, xmin has to be
 	 * reserved if a data snapshot is to be exported.  Otherwise the initial
@@ -422,6 +411,7 @@ CreateInitDecodingContext(const char *plugin,
 	 *
 	 * ----
 	 */
+	LWLockAcquire(ReplicationSlotControlLock, LW_EXCLUSIVE);
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
 
 	xmin_horizon = GetOldestSafeDecodingTransactionId(!need_full_snapshot);
@@ -436,6 +426,7 @@ CreateInitDecodingContext(const char *plugin,
 	ReplicationSlotsComputeRequiredXmin(true);
 
 	LWLockRelease(ProcArrayLock);
+	LWLockRelease(ReplicationSlotControlLock);
 
 	ReplicationSlotMarkDirty();
 	ReplicationSlotSave();
@@ -546,9 +537,9 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 
 	/* slot must be valid to allow decoding */
 	Assert(slot->data.invalidated == RS_INVAL_NONE);
-	Assert(slot->data.restart_lsn != InvalidXLogRecPtr);
+	Assert(XLogRecPtrIsValid(slot->data.restart_lsn));
 
-	if (start_lsn == InvalidXLogRecPtr)
+	if (!XLogRecPtrIsValid(start_lsn))
 	{
 		/* continue from last position */
 		start_lsn = slot->data.confirmed_flush;
@@ -757,7 +748,7 @@ output_plugin_error_callback(void *arg)
 	LogicalErrorCallbackState *state = (LogicalErrorCallbackState *) arg;
 
 	/* not all callbacks have an associated LSN  */
-	if (state->report_location != InvalidXLogRecPtr)
+	if (XLogRecPtrIsValid(state->report_location))
 		errcontext("slot \"%s\", output plugin \"%s\", in the %s callback, associated LSN %X/%08X",
 				   NameStr(state->ctx->slot->data.name),
 				   NameStr(state->ctx->slot->data.plugin),
@@ -1711,7 +1702,7 @@ LogicalIncreaseXminForSlot(XLogRecPtr current_lsn, TransactionId xmin)
 	 * Only increase if the previous values have been applied, otherwise we
 	 * might never end up updating if the receiver acks too slowly.
 	 */
-	else if (slot->candidate_xmin_lsn == InvalidXLogRecPtr)
+	else if (!XLogRecPtrIsValid(slot->candidate_xmin_lsn))
 	{
 		slot->candidate_catalog_xmin = xmin;
 		slot->candidate_xmin_lsn = current_lsn;
@@ -1749,8 +1740,8 @@ LogicalIncreaseRestartDecodingForSlot(XLogRecPtr current_lsn, XLogRecPtr restart
 	slot = MyReplicationSlot;
 
 	Assert(slot != NULL);
-	Assert(restart_lsn != InvalidXLogRecPtr);
-	Assert(current_lsn != InvalidXLogRecPtr);
+	Assert(XLogRecPtrIsValid(restart_lsn));
+	Assert(XLogRecPtrIsValid(current_lsn));
 
 	SpinLockAcquire(&slot->mutex);
 
@@ -1779,7 +1770,7 @@ LogicalIncreaseRestartDecodingForSlot(XLogRecPtr current_lsn, XLogRecPtr restart
 	 * might never end up updating if the receiver acks too slowly. A missed
 	 * value here will just cause some extra effort after reconnecting.
 	 */
-	else if (slot->candidate_restart_valid == InvalidXLogRecPtr)
+	else if (!XLogRecPtrIsValid(slot->candidate_restart_valid))
 	{
 		slot->candidate_restart_valid = current_lsn;
 		slot->candidate_restart_lsn = restart_lsn;
@@ -1819,11 +1810,11 @@ LogicalIncreaseRestartDecodingForSlot(XLogRecPtr current_lsn, XLogRecPtr restart
 void
 LogicalConfirmReceivedLocation(XLogRecPtr lsn)
 {
-	Assert(lsn != InvalidXLogRecPtr);
+	Assert(XLogRecPtrIsValid(lsn));
 
 	/* Do an unlocked check for candidate_lsn first. */
-	if (MyReplicationSlot->candidate_xmin_lsn != InvalidXLogRecPtr ||
-		MyReplicationSlot->candidate_restart_valid != InvalidXLogRecPtr)
+	if (XLogRecPtrIsValid(MyReplicationSlot->candidate_xmin_lsn) ||
+		XLogRecPtrIsValid(MyReplicationSlot->candidate_restart_valid))
 	{
 		bool		updated_xmin = false;
 		bool		updated_restart = false;
@@ -1849,7 +1840,7 @@ LogicalConfirmReceivedLocation(XLogRecPtr lsn)
 			MyReplicationSlot->data.confirmed_flush = lsn;
 
 		/* if we're past the location required for bumping xmin, do so */
-		if (MyReplicationSlot->candidate_xmin_lsn != InvalidXLogRecPtr &&
+		if (XLogRecPtrIsValid(MyReplicationSlot->candidate_xmin_lsn) &&
 			MyReplicationSlot->candidate_xmin_lsn <= lsn)
 		{
 			/*
@@ -1871,10 +1862,10 @@ LogicalConfirmReceivedLocation(XLogRecPtr lsn)
 			}
 		}
 
-		if (MyReplicationSlot->candidate_restart_valid != InvalidXLogRecPtr &&
+		if (XLogRecPtrIsValid(MyReplicationSlot->candidate_restart_valid) &&
 			MyReplicationSlot->candidate_restart_valid <= lsn)
 		{
-			Assert(MyReplicationSlot->candidate_restart_lsn != InvalidXLogRecPtr);
+			Assert(XLogRecPtrIsValid(MyReplicationSlot->candidate_restart_lsn));
 
 			MyReplicationSlot->data.restart_lsn = MyReplicationSlot->candidate_restart_lsn;
 			MyReplicationSlot->candidate_restart_lsn = InvalidXLogRecPtr;
@@ -2089,7 +2080,7 @@ LogicalSlotAdvanceAndCheckSnapState(XLogRecPtr moveto,
 	ResourceOwner old_resowner PG_USED_FOR_ASSERTS_ONLY = CurrentResourceOwner;
 	XLogRecPtr	retlsn;
 
-	Assert(moveto != InvalidXLogRecPtr);
+	Assert(XLogRecPtrIsValid(moveto));
 
 	if (found_consistent_snapshot)
 		*found_consistent_snapshot = false;
@@ -2163,7 +2154,7 @@ LogicalSlotAdvanceAndCheckSnapState(XLogRecPtr moveto,
 		if (found_consistent_snapshot && DecodingContextReady(ctx))
 			*found_consistent_snapshot = true;
 
-		if (ctx->reader->EndRecPtr != InvalidXLogRecPtr)
+		if (XLogRecPtrIsValid(ctx->reader->EndRecPtr))
 		{
 			LogicalConfirmReceivedLocation(moveto);
 

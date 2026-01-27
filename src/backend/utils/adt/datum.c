@@ -3,7 +3,7 @@
  * datum.c
  *	  POSTGRES Datum (abstract data type) manipulation routines.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -299,9 +299,9 @@ datum_image_eq(Datum value1, Datum value2, bool typByVal, int typLen)
 							 len1 - VARHDRSZ) == 0);
 
 			/* Only free memory if it's a copy made here. */
-			if ((Pointer) arg1val != DatumGetPointer(value1))
+			if (arg1val != DatumGetPointer(value1))
 				pfree(arg1val);
-			if ((Pointer) arg2val != DatumGetPointer(value2))
+			if (arg2val != DatumGetPointer(value2))
 				pfree(arg2val);
 		}
 	}
@@ -355,7 +355,7 @@ datum_image_hash(Datum value, bool typByVal, int typLen)
 		result = hash_bytes((unsigned char *) VARDATA_ANY(val), len - VARHDRSZ);
 
 		/* Only free memory if it's a copy made here. */
-		if ((Pointer) val != DatumGetPointer(value))
+		if (val != DatumGetPointer(value))
 			pfree(val);
 	}
 	else if (typLen == -2)
@@ -396,7 +396,9 @@ datum_image_hash(Datum value, bool typByVal, int typLen)
 Datum
 btequalimage(PG_FUNCTION_ARGS)
 {
-	/* Oid		opcintype = PG_GETARG_OID(0); */
+#ifdef NOT_USED
+	Oid			opcintype = PG_GETARG_OID(0);
+#endif
 
 	PG_RETURN_BOOL(true);
 }

@@ -1,5 +1,5 @@
 
-# Copyright (c) 2021-2025, PostgreSQL Global Development Group
+# Copyright (c) 2021-2026, PostgreSQL Global Development Group
 
 # Testing of logical decoding using SQL interface and/or pg_recvlogical
 #
@@ -21,7 +21,6 @@ $node_primary->append_conf(
 wal_level = logical
 ));
 $node_primary->start;
-my $backup_name = 'primary_backup';
 
 $node_primary->safe_psql('postgres',
 	qq[CREATE TABLE decoding_test(x integer, y text);]);

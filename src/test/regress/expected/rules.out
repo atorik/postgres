@@ -1310,14 +1310,16 @@ pg_available_extension_versions| SELECT e.name,
     e.relocatable,
     e.schema,
     e.requires,
+    e.location,
     e.comment
-   FROM (pg_available_extension_versions() e(name, version, superuser, trusted, relocatable, schema, requires, comment)
+   FROM (pg_available_extension_versions() e(name, version, superuser, trusted, relocatable, schema, requires, location, comment)
      LEFT JOIN pg_extension x ON (((e.name = x.extname) AND (e.version = x.extversion))));
 pg_available_extensions| SELECT e.name,
     e.default_version,
     x.extversion AS installed_version,
+    e.location,
     e.comment
-   FROM (pg_available_extensions() e(name, default_version, comment)
+   FROM (pg_available_extensions() e(name, default_version, location, comment)
      LEFT JOIN pg_extension x ON ((e.name = x.extname)));
 pg_backend_memory_contexts| SELECT name,
     ident,
@@ -1507,8 +1509,9 @@ pg_replication_slots| SELECT l.slot_name,
     l.conflicting,
     l.invalidation_reason,
     l.failover,
-    l.synced
-   FROM (pg_get_replication_slots() l(slot_name, plugin, slot_type, datoid, temporary, active, active_pid, xmin, catalog_xmin, restart_lsn, confirmed_flush_lsn, wal_status, safe_wal_size, two_phase, two_phase_at, inactive_since, conflicting, invalidation_reason, failover, synced)
+    l.synced,
+    l.slotsync_skip_reason
+   FROM (pg_get_replication_slots() l(slot_name, plugin, slot_type, datoid, temporary, active, active_pid, xmin, catalog_xmin, restart_lsn, confirmed_flush_lsn, wal_status, safe_wal_size, two_phase, two_phase_at, inactive_since, conflicting, invalidation_reason, failover, synced, slotsync_skip_reason)
      LEFT JOIN pg_database d ON ((l.datoid = d.oid)));
 pg_roles| SELECT pg_authid.rolname,
     pg_authid.rolsuper,
@@ -1968,7 +1971,12 @@ pg_stat_progress_analyze| SELECT s.pid,
     s.param6 AS child_tables_total,
     s.param7 AS child_tables_done,
     (s.param8)::oid AS current_child_table_relid,
-    ((s.param9)::double precision / (1000000)::double precision) AS delay_time
+    ((s.param9)::double precision / (1000000)::double precision) AS delay_time,
+        CASE s.param10
+            WHEN 1 THEN 'manual'::text
+            WHEN 2 THEN 'autovacuum'::text
+            ELSE NULL::text
+        END AS started_by
    FROM (pg_stat_get_progress_info('ANALYZE'::text) s(pid, datid, relid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15, param16, param17, param18, param19, param20)
      LEFT JOIN pg_database d ON ((s.datid = d.oid)));
 pg_stat_progress_basebackup| SELECT pid,
@@ -2104,7 +2112,19 @@ pg_stat_progress_vacuum| SELECT s.pid,
     s.param8 AS num_dead_item_ids,
     s.param9 AS indexes_total,
     s.param10 AS indexes_processed,
-    ((s.param11)::double precision / (1000000)::double precision) AS delay_time
+    ((s.param11)::double precision / (1000000)::double precision) AS delay_time,
+        CASE s.param12
+            WHEN 1 THEN 'normal'::text
+            WHEN 2 THEN 'aggressive'::text
+            WHEN 3 THEN 'failsafe'::text
+            ELSE NULL::text
+        END AS mode,
+        CASE s.param13
+            WHEN 1 THEN 'manual'::text
+            WHEN 2 THEN 'autovacuum'::text
+            WHEN 3 THEN 'autovacuum_wraparound'::text
+            ELSE NULL::text
+        END AS started_by
    FROM (pg_stat_get_progress_info('VACUUM'::text) s(pid, datid, relid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15, param16, param17, param18, param19, param20)
      LEFT JOIN pg_database d ON ((s.datid = d.oid)));
 pg_stat_recovery_prefetch| SELECT stats_reset,
@@ -2151,9 +2171,11 @@ pg_stat_replication_slots| SELECT s.slot_name,
     s.mem_exceeded_count,
     s.total_txns,
     s.total_bytes,
+    s.slotsync_skip_count,
+    s.slotsync_last_skip,
     s.stats_reset
    FROM pg_replication_slots r,
-    LATERAL pg_stat_get_replication_slot((r.slot_name)::text) s(slot_name, spill_txns, spill_count, spill_bytes, stream_txns, stream_count, stream_bytes, mem_exceeded_count, total_txns, total_bytes, stats_reset)
+    LATERAL pg_stat_get_replication_slot((r.slot_name)::text) s(slot_name, spill_txns, spill_count, spill_bytes, stream_txns, stream_count, stream_bytes, mem_exceeded_count, total_txns, total_bytes, slotsync_skip_count, slotsync_last_skip, stats_reset)
   WHERE (r.datoid IS NOT NULL);
 pg_stat_slru| SELECT name,
     blks_zeroed,
@@ -2191,7 +2213,8 @@ pg_stat_subscription| SELECT su.oid AS subid,
 pg_stat_subscription_stats| SELECT ss.subid,
     s.subname,
     ss.apply_error_count,
-    ss.sync_error_count,
+    ss.sync_seq_error_count,
+    ss.sync_table_error_count,
     ss.confl_insert_exists,
     ss.confl_update_origin_differs,
     ss.confl_update_exists,
@@ -2202,7 +2225,7 @@ pg_stat_subscription_stats| SELECT ss.subid,
     ss.confl_multiple_unique_conflicts,
     ss.stats_reset
    FROM pg_subscription s,
-    LATERAL pg_stat_get_subscription_stats(s.oid) ss(subid, apply_error_count, sync_error_count, confl_insert_exists, confl_update_origin_differs, confl_update_exists, confl_update_deleted, confl_update_missing, confl_delete_origin_differs, confl_delete_missing, confl_multiple_unique_conflicts, stats_reset);
+    LATERAL pg_stat_get_subscription_stats(s.oid) ss(subid, apply_error_count, sync_seq_error_count, sync_table_error_count, confl_insert_exists, confl_update_origin_differs, confl_update_exists, confl_update_deleted, confl_update_missing, confl_delete_origin_differs, confl_delete_missing, confl_multiple_unique_conflicts, stats_reset);
 pg_stat_sys_indexes| SELECT relid,
     indexrelid,
     schemaname,
@@ -2306,9 +2329,10 @@ pg_stat_user_tables| SELECT relid,
 pg_stat_wal| SELECT wal_records,
     wal_fpi,
     wal_bytes,
+    wal_fpi_bytes,
     wal_buffers_full,
     stats_reset
-   FROM pg_stat_get_wal() w(wal_records, wal_fpi, wal_bytes, wal_buffers_full, stats_reset);
+   FROM pg_stat_get_wal() w(wal_records, wal_fpi, wal_bytes, wal_fpi_bytes, wal_buffers_full, stats_reset);
 pg_stat_wal_receiver| SELECT pid,
     status,
     receive_start_lsn,
@@ -3571,6 +3595,7 @@ CREATE FUNCTION func_with_set_params() RETURNS integer
     SET extra_float_digits TO 2
     SET work_mem TO '4MB'
     SET datestyle to iso, mdy
+    SET temp_tablespaces to NULL
     SET local_preload_libraries TO "Mixed/Case", 'c:/''a"/path', '', '0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789'
     IMMUTABLE STRICT;
 SELECT pg_get_functiondef('func_with_set_params()'::regprocedure);
@@ -3584,6 +3609,7 @@ SELECT pg_get_functiondef('func_with_set_params()'::regprocedure);
   SET extra_float_digits TO '2'                                                                                                                                          +
   SET work_mem TO '4MB'                                                                                                                                                  +
   SET "DateStyle" TO 'iso, mdy'                                                                                                                                          +
+  SET temp_tablespaces TO NULL                                                                                                                                           +
   SET local_preload_libraries TO 'Mixed/Case', 'c:/''a"/path', '', '0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789'+
  AS $function$select 1;$function$                                                                                                                                        +
  

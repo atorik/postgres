@@ -20,7 +20,7 @@
  * into non-blocking mode. That can lead to blocking even when only the async
  * libpq functions are used. This should be fixed.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/libpq/libpq-be-fe-helpers.h
@@ -69,7 +69,7 @@ libpqsrv_connect(const char *conninfo, uint32 wait_event_info)
 /*
  * Like libpqsrv_connect(), except that this is a wrapper for
  * PQconnectdbParams().
-  */
+ */
 static inline PGconn *
 libpqsrv_connect_params(const char *const *keywords,
 						const char *const *values,
