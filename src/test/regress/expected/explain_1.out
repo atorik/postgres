@@ -190,7 +190,7 @@ select explain_filter('explain (analyze, serialize, buffers, format yaml) select
      Temp Read Blocks: N      +
      Temp Written Blocks: N   +
      Storage I/O Read: N      +
-     Storage I/O Write: N      +
+     Storage I/O Write: N     +
    Planning Time: N.N         +
    Triggers:                  +
    Serialization:             +
@@ -209,7 +209,7 @@ select explain_filter('explain (analyze, serialize, buffers, format yaml) select
      Temp Written Blocks: N   +
    Execution:                 +
      Storage I/O Read: N      +
-     Storage I/O Write: N      +
+     Storage I/O Write: N     +
    Execution Time: N.N
 (1 row)
 
@@ -258,11 +258,11 @@ select explain_filter('explain (buffers, format json) select * from int8_tbl i8'
        "Temp Read Blocks": N,      +
        "Temp Written Blocks": N,   +
        "Storage I/O Read": N,      +
-       "Storage I/O Write": N       +
+       "Storage I/O Write": N      +
      },                            +
      "Execution": {                +
        "Storage I/O Read": N,      +
-       "Storage I/O Write": N       +
+       "Storage I/O Write": N      +
      }                             +
    }                               +
  ]
@@ -362,14 +362,14 @@ select explain_filter('explain (analyze, buffers, format json) select * from int
        "Temp I/O Read Time": N.N,   +
        "Temp I/O Write Time": N.N,  +
        "Storage I/O Read": N,       +
-       "Storage I/O Write": N        +
+       "Storage I/O Write": N       +
      },                             +
      "Planning Time": N.N,          +
      "Triggers": [                  +
      ],                             +
      "Execution": {                 +
        "Storage I/O Read": N,       +
-       "Storage I/O Write": N        +
+       "Storage I/O Write": N       +
      },                             +
      "Execution Time": N.N          +
    }                                +
@@ -491,7 +491,7 @@ select explain_filter('explain (memory, analyze, format json) select * from int8
        "Temp Read Blocks": N,      +
        "Temp Written Blocks": N,   +
        "Storage I/O Read": N,      +
-       "Storage I/O Write": N,      +
+       "Storage I/O Write": N,     +
        "Memory Used": N,           +
        "Memory Allocated": N       +
      },                            +
@@ -500,7 +500,7 @@ select explain_filter('explain (memory, analyze, format json) select * from int8
      ],                            +
      "Execution": {                +
        "Storage I/O Read": N,      +
-       "Storage I/O Write": N       +
+       "Storage I/O Write": N      +
      },                            +
      "Execution Time": N.N         +
    }                               +
