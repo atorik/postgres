@@ -211,11 +211,10 @@ ROLLBACK;
       performed on storage during query planning and execution, while the
       Storage I/O <emphasis>write</emphasis> value indicates the number of
       write operations performed on storage during these phases.
-      operations performed on storage during the planning and execution phases,
-      shown at the end of the plan. These values are obtained from the
-      <function>getrusage()</function> system call. Note that on platforms that
-      do not support <function>getrusage()</function>, such as Windows, no output
-      will be shown, even if reads or writes actually occur. Also, when
+      These values are obtained from the <function>getrusage()</function> system
+      call. Note that on platforms that do not support
+      <function>getrusage()</function>, such as Windows, no output will be shown,
+      even if reads or writes actually occur. Also, when
       <varname>io_method</varname> is set to <literal>worker</literal>, no output
       will be shown, as I/O handled by asynchronous workers cannot be measured
       accurately.
