@@ -215,7 +215,7 @@ ROLLBACK;
       call. Note that on platforms that do not support
       <function>getrusage()</function>, such as Windows, no output will be shown,
       even if reads or writes actually occur. Also, when
-      <varname>io_method</varname> is set to <literal>worker</literal>, no output
+      <xref linkend="guc-io-method"/> is set to <literal>worker</literal>, no output
       will be shown, as I/O handled by asynchronous workers cannot be measured
       accurately.
       The timing and unit of measurement for read and write operations may vary
