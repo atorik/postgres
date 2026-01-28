@@ -136,14 +136,14 @@ select explain_filter('explain (analyze, buffers, format xml) select * from int8
        <Temp-Read-Blocks>N</Temp-Read-Blocks>          +
        <Temp-Written-Blocks>N</Temp-Written-Blocks>    +
        <Storage-I-O-Read>N</Storage-I-O-Read>          +
-       <Storage-I-O-Write>N</Storage-I-O-Read>         +
+       <Storage-I-O-Write>N</Storage-I-O-Write>        +
      </Planning>                                       +
      <Planning-Time>N.N</Planning-Time>                +
      <Triggers>                                        +
      </Triggers>                                       +
      <Execution>                                       +
        <Storage-I-O-Read>N</Storage-I-O-Read>          +
-       <Storage-I-O-Write>N</Storage-I-O-Read>         +
+       <Storage-I-O-Write>N</Storage-I-O-Write>        +
      </Execution>                                      +
      <Execution-Time>N.N</Execution-Time>              +
    </Query>                                            +
@@ -718,6 +718,7 @@ select jsonb_pretty(
              "Temp Read Blocks": 0,                         +
              "Local Read Blocks": 0,                        +
              "Shared Hit Blocks": 0,                        +
+             "Storage I/O Write": 0,                        +
              "Shared Read Blocks": 0,                       +
              "Temp Written Blocks": 0,                      +
              "Local Dirtied Blocks": 0,                     +
@@ -729,7 +730,7 @@ select jsonb_pretty(
          ],                                                 +
          "Execution": {                                     +
              "Storage I/O Read": 0,                         +
-             "Storage I/O Write": 0,                        +
+             "Storage I/O Write": 0                         +
          },                                                 +
          "Planning Time": 0.0,                              +
          "Execution Time": 0.0                              +
