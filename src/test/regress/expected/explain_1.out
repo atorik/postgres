@@ -856,3 +856,4 @@ select explain_filter('explain (analyze,buffers off,costs off) select sum(n) ove
  Execution Time: N.N ms
 (9 rows)
 
+reset work_mem;
