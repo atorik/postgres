@@ -8,7 +8,7 @@
  * doesn't actually run the executor for them.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -294,9 +294,8 @@ PortalDefineQuery(Portal portal,
 
 	portal->prepStmtName = prepStmtName;
 	portal->sourceText = sourceText;
-	portal->qc.commandTag = commandTag;
-	portal->qc.nprocessed = 0;
 	portal->commandTag = commandTag;
+	SetQueryCompletion(&portal->qc, commandTag, 0);
 	portal->stmts = stmts;
 	portal->cplan = cplan;
 	portal->status = PORTAL_DEFINED;
@@ -853,7 +852,8 @@ AtAbort_Portals(void)
 /*
  * Post-abort cleanup for portals.
  *
- * Delete all portals not held over from prior transactions.  */
+ * Delete all portals not held over from prior transactions.
+ */
 void
 AtCleanup_Portals(void)
 {

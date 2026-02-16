@@ -2,7 +2,7 @@
  * syncutils.c
  *	  PostgreSQL logical replication: common synchronization code
  *
- * Copyright (c) 2025, PostgreSQL Global Development Group
+ * Copyright (c) 2025-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/replication/logical/syncutils.c
@@ -243,7 +243,7 @@ FetchRelationStates(bool *has_pending_subtables,
 				has_subsequences_non_ready = true;
 			else
 			{
-				rstate = palloc(sizeof(SubscriptionRelState));
+				rstate = palloc_object(SubscriptionRelState);
 				memcpy(rstate, subrel, sizeof(SubscriptionRelState));
 				table_states_not_ready = lappend(table_states_not_ready,
 												 rstate);

@@ -3,7 +3,7 @@
  * nodeIndexscan.c
  *	  Routines to support indexed scans of relations
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -443,8 +443,8 @@ static int
 reorderqueue_cmp(const pairingheap_node *a, const pairingheap_node *b,
 				 void *arg)
 {
-	ReorderTuple *rta = (ReorderTuple *) a;
-	ReorderTuple *rtb = (ReorderTuple *) b;
+	const ReorderTuple *rta = (const ReorderTuple *) a;
+	const ReorderTuple *rtb = (const ReorderTuple *) b;
 	IndexScanState *node = (IndexScanState *) arg;
 
 	/* exchange argument order to invert the sort order */
@@ -466,12 +466,10 @@ reorderqueue_push(IndexScanState *node, TupleTableSlot *slot,
 	ReorderTuple *rt;
 	int			i;
 
-	rt = (ReorderTuple *) palloc(sizeof(ReorderTuple));
+	rt = palloc_object(ReorderTuple);
 	rt->htup = ExecCopySlotHeapTuple(slot);
-	rt->orderbyvals =
-		(Datum *) palloc(sizeof(Datum) * scandesc->numberOfOrderBys);
-	rt->orderbynulls =
-		(bool *) palloc(sizeof(bool) * scandesc->numberOfOrderBys);
+	rt->orderbyvals = palloc_array(Datum, scandesc->numberOfOrderBys);
+	rt->orderbynulls = palloc_array(bool, scandesc->numberOfOrderBys);
 	for (i = 0; i < node->iss_NumOrderByKeys; i++)
 	{
 		if (!orderbynulls[i])

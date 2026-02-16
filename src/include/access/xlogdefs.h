@@ -4,7 +4,7 @@
  * Postgres write-ahead log manager record pointer and
  * timeline number definitions
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/access/xlogdefs.h
@@ -44,7 +44,7 @@ typedef uint64 XLogRecPtr;
  * To avoid breaking translatable messages, we're directly applying the
  * LSN format instead of using a macro.
  */
-#define LSN_FORMAT_ARGS(lsn) (AssertVariableIsOfTypeMacro((lsn), XLogRecPtr), (uint32) ((lsn) >> 32)), ((uint32) (lsn))
+#define LSN_FORMAT_ARGS(lsn) (StaticAssertVariableIsOfTypeMacro((lsn), XLogRecPtr), (uint32) ((lsn) >> 32)), ((uint32) (lsn))
 
 /*
  * XLogSegNo - physical log file sequence number.
@@ -66,7 +66,7 @@ typedef uint32 TimeLineID;
  * Replication origin id - this is located in this file to avoid having to
  * include origin.h in a bunch of xlog related places.
  */
-typedef uint16 RepOriginId;
+typedef uint16 ReplOriginId;
 
 /*
  * This chunk of hackery attempts to determine which file sync methods

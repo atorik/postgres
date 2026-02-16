@@ -3,7 +3,7 @@
  * tupdesc.c
  *	  POSTGRES tuple descriptor support code
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -86,25 +86,8 @@ populate_compact_attribute_internal(Form_pg_attribute src,
 		IsCatalogRelationOid(src->attrelid) ? ATTNULLABLE_VALID :
 		ATTNULLABLE_UNKNOWN;
 
-	switch (src->attalign)
-	{
-		case TYPALIGN_INT:
-			dst->attalignby = ALIGNOF_INT;
-			break;
-		case TYPALIGN_CHAR:
-			dst->attalignby = sizeof(char);
-			break;
-		case TYPALIGN_DOUBLE:
-			dst->attalignby = ALIGNOF_DOUBLE;
-			break;
-		case TYPALIGN_SHORT:
-			dst->attalignby = ALIGNOF_SHORT;
-			break;
-		default:
-			dst->attalignby = 0;
-			elog(ERROR, "invalid attalign value: %c", src->attalign);
-			break;
-	}
+	/* Compute numeric alignment requirement, too */
+	dst->attalignby = typalign_to_alignby(src->attalign);
 }
 
 /*
@@ -361,7 +344,7 @@ CreateTupleDescCopyConstr(TupleDesc tupdesc)
 	/* Copy the TupleConstr data structure, if any */
 	if (constr)
 	{
-		TupleConstr *cpy = (TupleConstr *) palloc0(sizeof(TupleConstr));
+		TupleConstr *cpy = palloc0_object(TupleConstr);
 
 		cpy->has_not_null = constr->has_not_null;
 		cpy->has_generated_stored = constr->has_generated_stored;

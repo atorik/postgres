@@ -7,7 +7,7 @@
  * type.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -86,6 +86,10 @@
 /* Size of largest chunk that we use a fixed size for */
 #define ALLOC_CHUNK_FRACTION	4
 /* We allow chunks to be at most 1/4 of maxBlockSize (less overhead) */
+
+/* ALLOC_CHUNK_LIMIT must be equal to ALLOCSET_SEPARATE_THRESHOLD */
+StaticAssertDecl(ALLOC_CHUNK_LIMIT == ALLOCSET_SEPARATE_THRESHOLD,
+				 "ALLOC_CHUNK_LIMIT != ALLOCSET_SEPARATE_THRESHOLD");
 
 /*--------------------
  * The first block allocated for an allocset has size initBlockSize.
@@ -501,12 +505,6 @@ AllocSetContextCreateInternal(MemoryContext parent,
 	 * requests that are all the maximum chunk size we will waste at most
 	 * 1/8th of the allocated space.
 	 *
-	 * Also, allocChunkLimit must not exceed ALLOCSET_SEPARATE_THRESHOLD.
-	 */
-	StaticAssertStmt(ALLOC_CHUNK_LIMIT == ALLOCSET_SEPARATE_THRESHOLD,
-					 "ALLOC_CHUNK_LIMIT != ALLOCSET_SEPARATE_THRESHOLD");
-
-	/*
 	 * Determine the maximum size that a chunk can be before we allocate an
 	 * entire AllocBlock dedicated for that chunk.  We set the absolute limit
 	 * of that size as ALLOC_CHUNK_LIMIT but we reduce it further so that we

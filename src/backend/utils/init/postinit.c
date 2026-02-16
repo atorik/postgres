@@ -3,7 +3,7 @@
  * postinit.c
  *	  postgres initialization utilities
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -70,6 +70,13 @@
 #include "utils/syscache.h"
 #include "utils/timeout.h"
 
+/* has this backend called EmitConnectionWarnings()? */
+static bool ConnectionWarningsEmitted;
+
+/* content of warnings to send via EmitConnectionWarnings() */
+static List *ConnectionWarningMessages;
+static List *ConnectionWarningDetails;
+
 static HeapTuple GetDatabaseTuple(const char *dbname);
 static HeapTuple GetDatabaseTupleByOid(Oid dboid);
 static void PerformAuthentication(Port *port);
@@ -85,6 +92,7 @@ static void ClientCheckTimeoutHandler(void);
 static bool ThereIsAtLeastOneRole(void);
 static void process_startup_options(Port *port, bool am_superuser);
 static void process_settings(Oid databaseid, Oid roleid);
+static void EmitConnectionWarnings(void);
 
 
 /*** InitPostgres support ***/
@@ -418,7 +426,7 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	ctype = TextDatumGetCString(datum);
 
 	/*
-	 * Historcally, we set LC_COLLATE from datcollate, as well. That's no
+	 * Historically, we set LC_COLLATE from datcollate, as well. That's no
 	 * longer necessary because all collation behavior is handled through
 	 * pg_locale_t.
 	 */
@@ -653,6 +661,9 @@ BaseInit(void)
 	/* Initialize lock manager's local structs */
 	InitLockManagerAccess();
 
+	/* Initialize logical info WAL logging state */
+	InitializeProcessXLogLogicalInfo();
+
 	/*
 	 * Initialize replication slots after pgstat. The exit hook might need to
 	 * drop ephemeral slots, which in turn triggers stats reporting.
@@ -813,9 +824,9 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	RelationCacheInitializePhase2();
 
 	/*
-	 * Set up process-exit callback to do pre-shutdown cleanup.  This is the
-	 * one of the first before_shmem_exit callbacks we register; thus, this
-	 * will be one the last things we do before low-level modules like the
+	 * Set up process-exit callback to do pre-shutdown cleanup.  This is one
+	 * of the first before_shmem_exit callbacks we register; thus, this will
+	 * be one of the last things we do before low-level modules like the
 	 * buffer manager begin to close down.  We need to have this in place
 	 * before we begin our first transaction --- if we fail during the
 	 * initialization transaction, as is entirely possible, we need the
@@ -983,6 +994,9 @@ InitPostgres(const char *in_dbname, Oid dboid,
 
 		/* close the transaction we started above */
 		CommitTransactionCommand();
+
+		/* send any WARNINGs we've accumulated during initialization */
+		EmitConnectionWarnings();
 
 		return;
 	}
@@ -1229,6 +1243,9 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	/* close the transaction we started above */
 	if (!bootstrap)
 		CommitTransactionCommand();
+
+	/* send any WARNINGs we've accumulated during initialization */
+	EmitConnectionWarnings();
 }
 
 /*
@@ -1260,7 +1277,7 @@ process_startup_options(Port *port, bool am_superuser)
 
 		maxac = 2 + (strlen(port->cmdline_options) + 1) / 2;
 
-		av = (char **) palloc(maxac * sizeof(char *));
+		av = palloc_array(char *, maxac);
 		ac = 0;
 
 		av[ac++] = "postgres";
@@ -1442,4 +1459,59 @@ ThereIsAtLeastOneRole(void)
 	table_close(pg_authid_rel, AccessShareLock);
 
 	return result;
+}
+
+/*
+ * Stores a warning message to be sent later via EmitConnectionWarnings().
+ * Both msg and detail must be non-NULL.
+ *
+ * NB: Caller should ensure the strings are allocated in a long-lived context
+ * like TopMemoryContext.
+ */
+void
+StoreConnectionWarning(char *msg, char *detail)
+{
+	MemoryContext oldcontext;
+
+	Assert(msg);
+	Assert(detail);
+
+	if (ConnectionWarningsEmitted)
+		elog(ERROR, "StoreConnectionWarning() called after EmitConnectionWarnings()");
+
+	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+
+	ConnectionWarningMessages = lappend(ConnectionWarningMessages, msg);
+	ConnectionWarningDetails = lappend(ConnectionWarningDetails, detail);
+
+	MemoryContextSwitchTo(oldcontext);
+}
+
+/*
+ * Sends the warning messages saved via StoreConnectionWarning() and frees the
+ * strings and lists.
+ *
+ * NB: This can only be called once per backend.
+ */
+static void
+EmitConnectionWarnings(void)
+{
+	ListCell   *lc_msg;
+	ListCell   *lc_detail;
+
+	if (ConnectionWarningsEmitted)
+		elog(ERROR, "EmitConnectionWarnings() called more than once");
+	else
+		ConnectionWarningsEmitted = true;
+
+	forboth(lc_msg, ConnectionWarningMessages,
+			lc_detail, ConnectionWarningDetails)
+	{
+		ereport(WARNING,
+				(errmsg("%s", (char *) lfirst(lc_msg)),
+				 errdetail("%s", (char *) lfirst(lc_detail))));
+	}
+
+	list_free_deep(ConnectionWarningMessages);
+	list_free_deep(ConnectionWarningDetails);
 }

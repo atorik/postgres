@@ -6,7 +6,7 @@
  * Generic code supporting statistics objects created via CREATE STATISTICS.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -446,7 +446,7 @@ fetch_statentries_for_relation(Relation pg_statext, Oid relid)
 		Form_pg_statistic_ext staForm;
 		List	   *exprs = NIL;
 
-		entry = palloc0(sizeof(StatExtEntry));
+		entry = palloc0_object(StatExtEntry);
 		staForm = (Form_pg_statistic_ext) GETSTRUCT(htup);
 		entry->statOid = staForm->oid;
 		entry->schema = get_namespace_name(staForm->stxnamespace);
@@ -532,7 +532,7 @@ examine_attribute(Node *expr)
 	/*
 	 * Create the VacAttrStats struct.
 	 */
-	stats = (VacAttrStats *) palloc0(sizeof(VacAttrStats));
+	stats = palloc0_object(VacAttrStats);
 	stats->attstattarget = -1;
 
 	/*
@@ -613,7 +613,7 @@ examine_expression(Node *expr, int stattarget)
 	/*
 	 * Create the VacAttrStats struct.
 	 */
-	stats = (VacAttrStats *) palloc0(sizeof(VacAttrStats));
+	stats = palloc0_object(VacAttrStats);
 
 	/*
 	 * We can't have statistics target specified for the expression, so we
@@ -862,8 +862,8 @@ int
 multi_sort_compare(const void *a, const void *b, void *arg)
 {
 	MultiSortSupport mss = (MultiSortSupport) arg;
-	SortItem   *ia = (SortItem *) a;
-	SortItem   *ib = (SortItem *) b;
+	const SortItem *ia = a;
+	const SortItem *ib = b;
 	int			i;
 
 	for (i = 0; i < mss->ndims; i++)
@@ -915,8 +915,8 @@ multi_sort_compare_dims(int start, int end,
 int
 compare_scalars_simple(const void *a, const void *b, void *arg)
 {
-	return compare_datums_simple(*(Datum *) a,
-								 *(Datum *) b,
+	return compare_datums_simple(*(const Datum *) a,
+								 *(const Datum *) b,
 								 (SortSupport) arg);
 }
 
@@ -946,7 +946,7 @@ build_attnums_array(Bitmapset *attrs, int nexprs, int *numattrs)
 		*numattrs = num;
 
 	/* build attnums from the bitmapset */
-	attnums = (AttrNumber *) palloc(sizeof(AttrNumber) * num);
+	attnums = palloc_array(AttrNumber, num);
 	i = 0;
 	j = -1;
 	while ((j = bms_next_member(attrs, j)) >= 0)
@@ -1028,7 +1028,7 @@ build_sorted_items(StatsBuildData *data, int *nitems,
 	}
 
 	/* build a local cache of typlen for all attributes */
-	typlen = (int *) palloc(sizeof(int) * data->nattnums);
+	typlen = palloc_array(int, data->nattnums);
 	for (i = 0; i < data->nattnums; i++)
 		typlen[i] = get_typlen(data->stats[i]->attrtypid);
 
@@ -1707,11 +1707,10 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 	if (!has_stats_of_kind(rel->statlist, STATS_EXT_MCV))
 		return sel;
 
-	list_attnums = (Bitmapset **) palloc(sizeof(Bitmapset *) *
-										 list_length(clauses));
+	list_attnums = palloc_array(Bitmapset *, list_length(clauses));
 
 	/* expressions extracted from complex expressions */
-	list_exprs = (List **) palloc(sizeof(Node *) * list_length(clauses));
+	list_exprs = palloc_array(List *, list_length(clauses));
 
 	/*
 	 * Pre-process the clauses list to extract the attnums and expressions
@@ -2054,13 +2053,13 @@ examine_opclause_args(List *args, Node **exprp, Const **cstp,
 
 	if (IsA(rightop, Const))
 	{
-		expr = (Node *) leftop;
+		expr = leftop;
 		cst = (Const *) rightop;
 		expronleft = true;
 	}
 	else if (IsA(leftop, Const))
 	{
-		expr = (Node *) rightop;
+		expr = rightop;
 		cst = (Const *) leftop;
 		expronleft = false;
 	}

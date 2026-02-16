@@ -6,7 +6,7 @@
  * This is a standalone test program that compares the behavior of an
  * implementation in int128.h to an (assumed correct) int128 native type.
  *
- * Copyright (c) 2017-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2017-2026, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -51,7 +51,7 @@ typedef union
 		int64		hi;
 #endif
 	}			hl;
-}			test128;
+} test128;
 
 #define INT128_HEX_FORMAT	"%016" PRIx64 "%016" PRIx64
 

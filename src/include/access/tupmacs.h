@@ -4,7 +4,7 @@
  *	  Tuple macros used by both index tuples and heap tuples.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/access/tupmacs.h
@@ -70,6 +70,43 @@ fetch_att(const void *T, bool attbyval, int attlen)
 		return PointerGetDatum(T);
 }
 #endif							/* FRONTEND */
+
+/*
+ * typalign_to_alignby: map a TYPALIGN_xxx value to the numeric alignment
+ * value it represents.  (We store TYPALIGN_xxx codes not the real alignment
+ * values mainly so that initial catalog contents can be machine-independent.)
+ */
+static inline uint8
+typalign_to_alignby(char typalign)
+{
+	uint8		alignby;
+
+	switch (typalign)
+	{
+		case TYPALIGN_CHAR:
+			alignby = sizeof(char);
+			break;
+		case TYPALIGN_SHORT:
+			alignby = ALIGNOF_SHORT;
+			break;
+		case TYPALIGN_INT:
+			alignby = ALIGNOF_INT;
+			break;
+		case TYPALIGN_DOUBLE:
+			alignby = ALIGNOF_DOUBLE;
+			break;
+		default:
+#ifndef FRONTEND
+			elog(ERROR, "invalid typalign value: %c", typalign);
+#else
+			fprintf(stderr, "invalid typalign value: %c\n", typalign);
+			exit(1);
+#endif
+			alignby = 0;
+			break;
+	}
+	return alignby;
+}
 
 /*
  * att_align_datum aligns the given offset as needed for a datum of alignment
@@ -139,19 +176,11 @@ fetch_att(const void *T, bool attbyval, int attlen)
  *	* within arrays and multiranges, we unconditionally align varlenas (XXX this
  *	  should be revisited, probably).
  *
- * The attalign cases are tested in what is hopefully something like their
- * frequency of occurrence.
+ * In performance-critical loops, avoid using this macro; instead use
+ * att_nominal_alignby with a pre-computed alignby value.
  */
 #define att_align_nominal(cur_offset, attalign) \
-( \
-	((attalign) == TYPALIGN_INT) ? INTALIGN(cur_offset) : \
-	 (((attalign) == TYPALIGN_CHAR) ? (uintptr_t) (cur_offset) : \
-	  (((attalign) == TYPALIGN_DOUBLE) ? DOUBLEALIGN(cur_offset) : \
-	   ( \
-			AssertMacro((attalign) == TYPALIGN_SHORT), \
-			SHORTALIGN(cur_offset) \
-	   ))) \
-)
+	att_nominal_alignby(cur_offset, typalign_to_alignby(attalign))
 
 /*
  * Similar to att_align_nominal, but accepts a number of bytes, typically from
@@ -190,7 +219,7 @@ fetch_att(const void *T, bool attbyval, int attlen)
 	: \
 	( \
 		AssertMacro((attlen) == -2), \
-		(cur_offset) + (strlen((char *) (attptr)) + 1) \
+		(cur_offset) + (strlen((const char *) (attptr)) + 1) \
 	)) \
 )
 

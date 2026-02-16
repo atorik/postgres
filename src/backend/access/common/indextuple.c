@@ -4,7 +4,7 @@
  *	   This file contains index tuple accessor and mutator routines,
  *	   as well as various tuple utilities.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -108,7 +108,7 @@ index_form_tuple_context(TupleDesc tupleDescriptor,
 		if (VARATT_IS_EXTERNAL(DatumGetPointer(values[i])))
 		{
 			untoasted_values[i] =
-				PointerGetDatum(detoast_external_attr((struct varlena *)
+				PointerGetDatum(detoast_external_attr((varlena *)
 													  DatumGetPointer(values[i])));
 			untoasted_free[i] = true;
 		}
@@ -172,7 +172,7 @@ index_form_tuple_context(TupleDesc tupleDescriptor,
 					values,
 #endif
 					isnull,
-					(char *) tp + hoff,
+					tp + hoff,
 					data_size,
 					&tupmask,
 					(hasnull ? (bits8 *) tp + sizeof(IndexTupleData) : NULL));

@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, PostgreSQL Global Development Group
+# Copyright (c) 2022-2026, PostgreSQL Global Development Group
 
 wait_event_output = ['wait_event_types.h', 'pgstat_wait_event.c', 'wait_event_funcs_data.c']
 wait_event_target = custom_target('wait_event_names',
@@ -79,8 +79,6 @@ generated_backend_headers += fmgrtab_target[1]
 
 # autoconf generates the file there, ensure we get a conflict
 generated_sources_ac += {
-  'src/backend/utils': fmgrtab_output + ['errcodes.h', 'probes.h', 'fmgr-stamp'],
+  'src/backend/utils': fmgrtab_output + ['errcodes.h', 'wait_event_types.h', 'probes.h', 'fmgr-stamp'],
   'src/include/utils': ['header-stamp'],
 }
-
-generated_sources_ac += {'src/backend/utils/activity': ['wait_event_types.h']}

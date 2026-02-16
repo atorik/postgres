@@ -14,7 +14,7 @@
  * plenty of locality of access.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -59,7 +59,7 @@ struct HSpool
 HSpool *
 _h_spoolinit(Relation heap, Relation index, uint32 num_buckets)
 {
-	HSpool	   *hspool = (HSpool *) palloc0(sizeof(HSpool));
+	HSpool	   *hspool = palloc0_object(HSpool);
 
 	hspool->index = index;
 

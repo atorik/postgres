@@ -7,7 +7,7 @@
  * detection and resolution algorithms.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -135,10 +135,9 @@ static PGPROC *blocking_autovacuum_proc = NULL;
  * This does per-backend initialization of the deadlock checker; primarily,
  * allocation of working memory for DeadLockCheck.  We do this per-backend
  * since there's no percentage in making the kernel do copy-on-write
- * inheritance of workspace from the postmaster.  We want to allocate the
- * space at startup because (a) the deadlock checker might be invoked when
- * there's no free memory left, and (b) the checker is normally run inside a
- * signal handler, which is a very dangerous place to invoke palloc from.
+ * inheritance of workspace from the postmaster.  We allocate the space at
+ * startup because the deadlock checker is run with all the partitions of the
+ * lock table locked, and we want to keep that section as short as possible.
  */
 void
 InitDeadLockChecking(void)
@@ -192,11 +191,13 @@ InitDeadLockChecking(void)
 	 * last MaxBackends entries in possibleConstraints[] are reserved as
 	 * output workspace for FindLockCycle.
 	 */
-	StaticAssertStmt(MAX_BACKENDS_BITS <= (32 - 3),
-					 "MAX_BACKENDS_BITS too big for * 4");
-	maxPossibleConstraints = MaxBackends * 4;
-	possibleConstraints =
-		(EDGE *) palloc(maxPossibleConstraints * sizeof(EDGE));
+	{
+		StaticAssertDecl(MAX_BACKENDS_BITS <= (32 - 3),
+						 "MAX_BACKENDS_BITS too big for * 4");
+		maxPossibleConstraints = MaxBackends * 4;
+		possibleConstraints =
+			(EDGE *) palloc(maxPossibleConstraints * sizeof(EDGE));
+	}
 
 	MemoryContextSwitchTo(oldcxt);
 }
@@ -213,8 +214,7 @@ InitDeadLockChecking(void)
  *
  * On failure, deadlock details are recorded in deadlockDetails[] for
  * subsequent printing by DeadLockReport().  That activity is separate
- * because (a) we don't want to do it while holding all those LWLocks,
- * and (b) we are typically invoked inside a signal handler.
+ * because we don't want to do it while holding all those LWLocks.
  */
 DeadLockState
 DeadLockCheck(PGPROC *proc)

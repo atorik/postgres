@@ -16,7 +16,7 @@
  * bitcode.
  *
  *
- * Copyright (c) 2016-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2016-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/jit/llvm/llvmjit_types.c
@@ -81,7 +81,7 @@ extern Datum AttributeTemplate(PG_FUNCTION_ARGS);
 Datum
 AttributeTemplate(PG_FUNCTION_ARGS)
 {
-	AssertVariableIsOfType(&AttributeTemplate, PGFunction);
+	StaticAssertVariableIsOfType(&AttributeTemplate, PGFunction);
 
 	PG_RETURN_NULL();
 }
@@ -99,8 +99,8 @@ ExecEvalSubroutineTemplate(ExprState *state,
 						   struct ExprEvalStep *op,
 						   ExprContext *econtext)
 {
-	AssertVariableIsOfType(&ExecEvalSubroutineTemplate,
-						   ExecEvalSubroutine);
+	StaticAssertVariableIsOfType(&ExecEvalSubroutineTemplate,
+								 ExecEvalSubroutine);
 }
 
 extern bool ExecEvalBoolSubroutineTemplate(ExprState *state,
@@ -111,8 +111,8 @@ ExecEvalBoolSubroutineTemplate(ExprState *state,
 							   struct ExprEvalStep *op,
 							   ExprContext *econtext)
 {
-	AssertVariableIsOfType(&ExecEvalBoolSubroutineTemplate,
-						   ExecEvalBoolSubroutine);
+	StaticAssertVariableIsOfType(&ExecEvalBoolSubroutineTemplate,
+								 ExecEvalBoolSubroutine);
 
 	return false;
 }

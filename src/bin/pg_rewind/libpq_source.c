@@ -3,7 +3,7 @@
  * libpq_source.c
  *	  Functions for fetching files from a remote server via libpq.
  *
- * Copyright (c) 2013-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2013-2026, PostgreSQL Global Development Group
  *
  *-------------------------------------------------------------------------
  */
@@ -459,7 +459,7 @@ process_queued_fetch_requests(libpq_source *src)
 
 		appendArrayEscapedString(&src->paths, rq->path);
 		appendStringInfo(&src->offsets, INT64_FORMAT, (int64) rq->offset);
-		appendStringInfo(&src->lengths, INT64_FORMAT, (int64) rq->length);
+		appendStringInfo(&src->lengths, "%zu", rq->length);
 	}
 	appendStringInfoChar(&src->paths, '}');
 	appendStringInfoChar(&src->offsets, '}');

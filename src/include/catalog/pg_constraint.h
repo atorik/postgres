@@ -4,7 +4,7 @@
  *	  definition of the "constraint" system catalog (pg_constraint)
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/catalog/pg_constraint.h
@@ -263,7 +263,7 @@ extern HeapTuple findNotNullConstraintAttnum(Oid relid, AttrNumber attnum);
 extern HeapTuple findNotNullConstraint(Oid relid, const char *colname);
 extern HeapTuple findDomainNotNullConstraint(Oid typid);
 extern AttrNumber extractNotNullColumn(HeapTuple constrTup);
-extern bool AdjustNotNullInheritance(Oid relid, AttrNumber attnum,
+extern bool AdjustNotNullInheritance(Oid relid, AttrNumber attnum, const char *new_conname,
 									 bool is_local, bool is_no_inherit, bool is_notvalid);
 extern List *RelationGetNotNullConstraints(Oid relid, bool cooked,
 										   bool include_noinh);

@@ -3,7 +3,7 @@
  * json.c
  *		JSON data type support.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -807,7 +807,7 @@ json_agg_transfn_worker(FunctionCallInfo fcinfo, bool absent_on_null)
 		 * use the right context to enlarge the object if necessary.
 		 */
 		oldcontext = MemoryContextSwitchTo(aggcontext);
-		state = (JsonAggState *) palloc(sizeof(JsonAggState));
+		state = palloc_object(JsonAggState);
 		state->str = makeStringInfo();
 		MemoryContextSwitchTo(oldcontext);
 
@@ -901,7 +901,7 @@ json_agg_finalfn(PG_FUNCTION_ARGS)
 static uint32
 json_unique_hash(const void *key, Size keysize)
 {
-	const JsonUniqueHashEntry *entry = (JsonUniqueHashEntry *) key;
+	const JsonUniqueHashEntry *entry = (const JsonUniqueHashEntry *) key;
 	uint32		hash = hash_bytes_uint32(entry->object_id);
 
 	hash ^= hash_bytes((const unsigned char *) entry->key, entry->key_len);
@@ -1029,7 +1029,7 @@ json_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 		 * sure they use the right context to enlarge the object if necessary.
 		 */
 		oldcontext = MemoryContextSwitchTo(aggcontext);
-		state = (JsonAggState *) palloc(sizeof(JsonAggState));
+		state = palloc_object(JsonAggState);
 		state->str = makeStringInfo();
 		if (unique_keys)
 			json_unique_builder_init(&state->unique_check);
@@ -1762,7 +1762,7 @@ json_unique_object_start(void *_state)
 		return JSON_SUCCESS;
 
 	/* push object entry to stack */
-	entry = palloc(sizeof(*entry));
+	entry = palloc_object(JsonUniqueStackEntry);
 	entry->object_id = state->id_counter++;
 	entry->parent = state->stack;
 	state->stack = entry;

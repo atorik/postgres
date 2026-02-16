@@ -2,7 +2,7 @@
  * Copyright (c) 1983, 1995, 1996 Eric P. Allman
  * Copyright (c) 1988, 1993
  *	The Regents of the University of California.  All rights reserved.
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -563,6 +563,15 @@ nextch2:
 				else
 					longflag = 1;
 				goto nextch2;
+			case 'j':
+#if SIZEOF_INTMAX_T == SIZEOF_LONG
+				longflag = 1;
+#elif SIZEOF_INTMAX_T == SIZEOF_LONG_LONG
+				longlongflag = 1;
+#else
+#error "cannot find integer type of the same size as intmax_t"
+#endif
+				goto nextch2;
 			case 'z':
 #if SIZEOF_SIZE_T == SIZEOF_LONG
 				longflag = 1;
@@ -825,6 +834,15 @@ nextch1:
 					longlongflag = 1;
 				else
 					longflag = 1;
+				goto nextch1;
+			case 'j':
+#if SIZEOF_INTMAX_T == SIZEOF_LONG
+				longflag = 1;
+#elif SIZEOF_INTMAX_T == SIZEOF_LONG_LONG
+				longlongflag = 1;
+#else
+#error "cannot find integer type of the same size as intmax_t"
+#endif
 				goto nextch1;
 			case 'z':
 #if SIZEOF_SIZE_T == SIZEOF_LONG

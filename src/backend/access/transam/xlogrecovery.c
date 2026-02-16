@@ -14,7 +14,7 @@
  * for interrogating recovery state and controlling the recovery process.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/backend/access/transam/xlogrecovery.c
@@ -25,7 +25,6 @@
 #include "postgres.h"
 
 #include <ctype.h>
-#include <math.h>
 #include <time.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -262,7 +261,7 @@ static TimestampTz XLogReceiptTime = 0;
 static XLogSource XLogReceiptSource = XLOG_FROM_ANY;
 
 /* Local copy of WalRcv->flushedUpto */
-static XLogRecPtr flushedUpto = 0;
+static XLogRecPtr flushedUpto = InvalidXLogRecPtr;
 static TimeLineID receiveTLI = 0;
 
 /*
@@ -559,7 +558,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 	 * Set the WAL reading processor now, as it will be needed when reading
 	 * the checkpoint record required (backup_label or not).
 	 */
-	private = palloc0(sizeof(XLogPageReadPrivate));
+	private = palloc0_object(XLogPageReadPrivate);
 	xlogreader =
 		XLogReaderAllocate(wal_segment_size, NULL,
 						   XL_ROUTINE(.page_read = &XLogPageRead,
@@ -805,6 +804,16 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		}
 		memcpy(&checkPoint, XLogRecGetData(xlogreader), sizeof(CheckPoint));
 		wasShutdown = ((record->xl_info & ~XLR_INFO_MASK) == XLOG_CHECKPOINT_SHUTDOWN);
+
+		/* Make sure that REDO location exists. */
+		if (checkPoint.redo < CheckPointLoc)
+		{
+			XLogPrefetcherBeginRead(xlogprefetcher, checkPoint.redo);
+			if (!ReadRecord(xlogprefetcher, LOG, false, checkPoint.ThisTimeLineID))
+				ereport(FATAL,
+						errmsg("could not find redo location %X/%08X referenced by checkpoint record at %X/%08X",
+							   LSN_FORMAT_ARGS(checkPoint.redo), LSN_FORMAT_ARGS(CheckPointLoc)));
+		}
 	}
 
 	if (ArchiveRecoveryRequested)
@@ -886,7 +895,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 							 U64FromFullTransactionId(checkPoint.nextXid),
 							 checkPoint.nextOid)));
 	ereport(DEBUG1,
-			(errmsg_internal("next MultiXactId: %u; next MultiXactOffset: %u",
+			(errmsg_internal("next MultiXactId: %u; next MultiXactOffset: %" PRIu64,
 							 checkPoint.nextMulti, checkPoint.nextMultiOffset)));
 	ereport(DEBUG1,
 			(errmsg_internal("oldest unfrozen transaction ID: %u, in database %u",
@@ -1059,9 +1068,6 @@ readRecoverySignalFile(void)
 	 * Check for recovery signal files and if found, fsync them since they
 	 * represent server state information.  We don't sweat too much about the
 	 * possibility of fsync failure, however.
-	 *
-	 * If present, standby signal file takes precedence. If neither is present
-	 * then we won't enter archive recovery.
 	 */
 	if (stat(STANDBY_SIGNAL_FILE, &stat_buf) == 0)
 	{
@@ -1076,7 +1082,8 @@ readRecoverySignalFile(void)
 		}
 		standby_signal_file_found = true;
 	}
-	else if (stat(RECOVERY_SIGNAL_FILE, &stat_buf) == 0)
+
+	if (stat(RECOVERY_SIGNAL_FILE, &stat_buf) == 0)
 	{
 		int			fd;
 
@@ -1090,6 +1097,10 @@ readRecoverySignalFile(void)
 		recovery_signal_file_found = true;
 	}
 
+	/*
+	 * If both signal files are present, standby signal file takes precedence.
+	 * If neither is present then we won't enter archive recovery.
+	 */
 	StandbyModeRequested = false;
 	ArchiveRecoveryRequested = false;
 	if (standby_signal_file_found)
@@ -1416,7 +1427,7 @@ read_tablespace_map(List **tablespaces)
 						 errmsg("invalid data in file \"%s\"", TABLESPACE_MAP)));
 			str[n++] = '\0';
 
-			ti = palloc0(sizeof(tablespaceinfo));
+			ti = palloc0_object(tablespaceinfo);
 			errno = 0;
 			ti->oid = strtoul(str, &endp, 10);
 			if (*endp != '\0' || errno == EINVAL || errno == ERANGE)
@@ -1467,7 +1478,7 @@ read_tablespace_map(List **tablespaces)
 EndOfWalRecoveryInfo *
 FinishWalRecovery(void)
 {
-	EndOfWalRecoveryInfo *result = palloc(sizeof(EndOfWalRecoveryInfo));
+	EndOfWalRecoveryInfo *result = palloc_object(EndOfWalRecoveryInfo);
 	XLogRecPtr	lastRec;
 	TimeLineID	lastRecTLI;
 	XLogRecPtr	endOfLog;
@@ -1832,13 +1843,6 @@ PerformWalRecovery(void)
 			 */
 			ApplyWalRecord(xlogreader, record, &replayTLI);
 
-			/* Exit loop if we reached inclusive recovery target */
-			if (recoveryStopsAfter(xlogreader))
-			{
-				reachedRecoveryTarget = true;
-				break;
-			}
-
 			/*
 			 * If we replayed an LSN that someone was waiting for then walk
 			 * over the shared memory array and set latches to notify the
@@ -1846,8 +1850,15 @@ PerformWalRecovery(void)
 			 */
 			if (waitLSNState &&
 				(XLogRecoveryCtl->lastReplayedEndRecPtr >=
-				 pg_atomic_read_u64(&waitLSNState->minWaitedLSN[WAIT_LSN_TYPE_REPLAY])))
-				WaitLSNWakeup(WAIT_LSN_TYPE_REPLAY, XLogRecoveryCtl->lastReplayedEndRecPtr);
+				 pg_atomic_read_u64(&waitLSNState->minWaitedLSN[WAIT_LSN_TYPE_STANDBY_REPLAY])))
+				WaitLSNWakeup(WAIT_LSN_TYPE_STANDBY_REPLAY, XLogRecoveryCtl->lastReplayedEndRecPtr);
+
+			/* Exit loop if we reached inclusive recovery target */
+			if (recoveryStopsAfter(xlogreader))
+			{
+				reachedRecoveryTarget = true;
+				break;
+			}
 
 			/* Else, try to fetch the next WAL record */
 			record = ReadRecord(xlogprefetcher, LOG, false, replayTLI);
@@ -3909,7 +3920,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						RequestXLogStreaming(tli, ptr, PrimaryConnInfo,
 											 PrimarySlotName,
 											 wal_receiver_create_temp_slot);
-						flushedUpto = 0;
+						flushedUpto = InvalidXLogRecPtr;
 					}
 
 					/*
@@ -4087,7 +4098,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 static int
 emode_for_corrupt_record(int emode, XLogRecPtr RecPtr)
 {
-	static XLogRecPtr lastComplaint = 0;
+	static XLogRecPtr lastComplaint = InvalidXLogRecPtr;
 
 	if (readSource == XLOG_FROM_PG_WAL && emode == LOG)
 	{

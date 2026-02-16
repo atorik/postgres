@@ -3,7 +3,7 @@
  * catcache.c
  *	  System catalog cache for tuples matching a key.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -920,7 +920,7 @@ InitCatCache(int id,
 	 */
 	if (CacheHdr == NULL)
 	{
-		CacheHdr = (CatCacheHeader *) palloc(sizeof(CatCacheHeader));
+		CacheHdr = palloc_object(CatCacheHeader);
 		slist_init(&CacheHdr->ch_caches);
 		CacheHdr->ch_ntup = 0;
 #ifdef CATCACHE_STATS
@@ -1013,7 +1013,14 @@ RehashCatCache(CatCache *cp)
 			int			hashIndex = HASH_INDEX(ct->hash_value, newnbuckets);
 
 			dlist_delete(iter.cur);
-			dlist_push_head(&newbucket[hashIndex], &ct->cache_elem);
+
+			/*
+			 * Note that each item is pushed at the tail of the new bucket,
+			 * not its head.  This is consistent with the SearchCatCache*()
+			 * routines, where matching entries are moved at the front of the
+			 * list to speed subsequent searches.
+			 */
+			dlist_push_tail(&newbucket[hashIndex], &ct->cache_elem);
 		}
 	}
 
@@ -1051,7 +1058,14 @@ RehashCatCacheLists(CatCache *cp)
 			int			hashIndex = HASH_INDEX(cl->hash_value, newnbuckets);
 
 			dlist_delete(iter.cur);
-			dlist_push_head(&newbucket[hashIndex], &cl->cache_elem);
+
+			/*
+			 * Note that each item is pushed at the tail of the new bucket,
+			 * not its head.  This is consistent with the SearchCatCache*()
+			 * routines, where matching entries are moved at the front of the
+			 * list to speed subsequent searches.
+			 */
+			dlist_push_tail(&newbucket[hashIndex], &cl->cache_elem);
 		}
 	}
 
@@ -1668,7 +1682,7 @@ ReleaseCatCacheWithOwner(HeapTuple tuple, ResourceOwner resowner)
 
 	ct->refcount--;
 	if (resowner)
-		ResourceOwnerForgetCatCacheRef(CurrentResourceOwner, &ct->tuple);
+		ResourceOwnerForgetCatCacheRef(resowner, &ct->tuple);
 
 	if (
 #ifndef CATCACHE_FORCE_RELEASE
@@ -2110,7 +2124,7 @@ ReleaseCatCacheListWithOwner(CatCList *list, ResourceOwner resowner)
 	Assert(list->refcount > 0);
 	list->refcount--;
 	if (resowner)
-		ResourceOwnerForgetCatCacheListRef(CurrentResourceOwner, list);
+		ResourceOwnerForgetCatCacheListRef(resowner, list);
 
 	if (
 #ifndef CATCACHE_FORCE_RELEASE
@@ -2243,7 +2257,7 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
 	{
 		/* Set up keys for a negative cache entry */
 		oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
-		ct = (CatCTup *) palloc(sizeof(CatCTup));
+		ct = palloc_object(CatCTup);
 
 		/*
 		 * Store keys - they'll point into separately allocated memory if not

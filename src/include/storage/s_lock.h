@@ -79,7 +79,7 @@
  *	instruction.  Equivalent OS-supplied mutex routines could be used too.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *	  src/include/storage/s_lock.h
@@ -119,6 +119,10 @@
  * gcc from thinking it can cache the values of shared-memory fields
  * across the asm code.  Add "cc" if your asm code changes the condition
  * code register, and also list any temp registers the code uses.
+ *
+ * If you need branch target labels within the asm block, include "%="
+ * in the label names to make them distinct across multiple asm blocks
+ * within a source file.
  *----------
  */
 
@@ -147,11 +151,11 @@ tas(volatile slock_t *lock)
 	 * leave it alone.
 	 */
 	__asm__ __volatile__(
-		"	cmpb	$0,%1	\n"
-		"	jne		1f		\n"
-		"	lock			\n"
-		"	xchgb	%0,%1	\n"
-		"1: \n"
+		"	cmpb	$0,%1		\n"
+		"	jne		TAS%=_out	\n"
+		"	lock				\n"
+		"	xchgb	%0,%1		\n"
+		"TAS%=_out: \n"
 :		"+q"(_res), "+m"(*lock)
 :		/* no inputs */
 :		"memory", "cc");
@@ -421,17 +425,17 @@ tas(volatile slock_t *lock)
 	__asm__ __volatile__(
 "	lwarx   %0,0,%3,1	\n"
 "	cmpwi   %0,0		\n"
-"	bne     1f			\n"
+"	bne     TAS%=_fail	\n"
 "	addi    %0,%0,1		\n"
 "	stwcx.  %0,0,%3		\n"
-"	beq     2f			\n"
-"1: \n"
+"	beq     TAS%=_ok	\n"
+"TAS%=_fail: \n"
 "	li      %1,1		\n"
-"	b       3f			\n"
-"2: \n"
+"	b       TAS%=_out	\n"
+"TAS%=_ok: \n"
 "	lwsync				\n"
 "	li      %1,0		\n"
-"3: \n"
+"TAS%=_out: \n"
 :	"=&b"(_t), "=r"(_res), "+m"(*lock)
 :	"r"(lock)
 :	"memory", "cc");
@@ -602,13 +606,24 @@ typedef LONG slock_t;
 
 #define SPIN_DELAY() spin_delay()
 
-/* If using Visual C++ on Win64, inline assembly is unavailable.
- * Use a _mm_pause intrinsic instead of rep nop.
- */
-#if defined(_WIN64)
+#ifdef _M_ARM64
 static __forceinline void
 spin_delay(void)
 {
+	/*
+	 * Research indicates ISB is better than __yield() on AArch64.  See
+	 * https://postgr.es/m/1c2a29b8-5b1e-44f7-a871-71ec5fefc120%40app.fastmail.com.
+	 */
+	__isb(_ARM64_BARRIER_SY);
+}
+#elif defined(_WIN64)
+static __forceinline void
+spin_delay(void)
+{
+	/*
+	 * If using Visual C++ on Win64, inline assembly is unavailable.
+	 * Use a _mm_pause intrinsic instead of rep nop.
+	 */
 	_mm_pause();
 }
 #else
@@ -621,11 +636,20 @@ spin_delay(void)
 #endif
 
 #include <intrin.h>
-#pragma intrinsic(_ReadWriteBarrier)
 
+#ifdef _M_ARM64
+
+/* _ReadWriteBarrier() is insufficient on non-TSO architectures. */
+#pragma intrinsic(_InterlockedExchange)
+#define S_UNLOCK(lock) _InterlockedExchange(lock, 0)
+
+#else
+
+#pragma intrinsic(_ReadWriteBarrier)
 #define S_UNLOCK(lock)	\
 	do { _ReadWriteBarrier(); (*(lock)) = 0; } while (0)
 
+#endif
 #endif
 
 

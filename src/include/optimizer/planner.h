@@ -8,7 +8,7 @@
  * non-planner code.  Declarations here are meant for use by other
  * planner modules.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/optimizer/planner.h
@@ -35,6 +35,7 @@ extern PGDLLIMPORT planner_hook_type planner_hook;
 /* Hook for plugins to get control after PlannerGlobal is initialized */
 typedef void (*planner_setup_hook_type) (PlannerGlobal *glob, Query *parse,
 										 const char *query_string,
+										 int cursorOptions,
 										 double *tuple_fraction,
 										 ExplainState *es);
 extern PGDLLIMPORT planner_setup_hook_type planner_setup_hook;

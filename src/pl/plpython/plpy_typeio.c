@@ -735,6 +735,7 @@ PLyList_FromArray_recurse(PLyDatumToOb *elm, int *dims, int ndim, int dim,
 		char	   *dataptr = *dataptr_p;
 		bits8	   *bitmap = *bitmap_p;
 		int			bitmask = *bitmask_p;
+		uint8		typalignby = typalign_to_alignby(elm->typalign);
 
 		for (i = 0; i < dims[dim]; i++)
 		{
@@ -751,7 +752,7 @@ PLyList_FromArray_recurse(PLyDatumToOb *elm, int *dims, int ndim, int dim,
 				itemvalue = fetch_att(dataptr, elm->typbyval, elm->typlen);
 				PyList_SetItem(list, i, elm->func(elm, itemvalue));
 				dataptr = att_addlength_pointer(dataptr, elm->typlen, dataptr);
-				dataptr = (char *) att_align_nominal(dataptr, elm->typalign);
+				dataptr = (char *) att_nominal_alignby(dataptr, typalignby);
 			}
 
 			/* advance bitmap pointer if any */
@@ -1353,8 +1354,8 @@ PLyMapping_ToComposite(PLyObToDatum *arg, TupleDesc desc, PyObject *mapping)
 	Assert(PyMapping_Check(mapping));
 
 	/* Build tuple */
-	values = palloc(sizeof(Datum) * desc->natts);
-	nulls = palloc(sizeof(bool) * desc->natts);
+	values = palloc_array(Datum, desc->natts);
+	nulls = palloc_array(bool, desc->natts);
 	for (i = 0; i < desc->natts; ++i)
 	{
 		char	   *key;
@@ -1435,8 +1436,8 @@ PLySequence_ToComposite(PLyObToDatum *arg, TupleDesc desc, PyObject *sequence)
 				 errmsg("length of returned sequence did not match number of columns in row")));
 
 	/* Build tuple */
-	values = palloc(sizeof(Datum) * desc->natts);
-	nulls = palloc(sizeof(bool) * desc->natts);
+	values = palloc_array(Datum, desc->natts);
+	nulls = palloc_array(bool, desc->natts);
 	idx = 0;
 	for (i = 0; i < desc->natts; ++i)
 	{
@@ -1493,8 +1494,8 @@ PLyGenericObject_ToComposite(PLyObToDatum *arg, TupleDesc desc, PyObject *object
 	volatile int i;
 
 	/* Build tuple */
-	values = palloc(sizeof(Datum) * desc->natts);
-	nulls = palloc(sizeof(bool) * desc->natts);
+	values = palloc_array(Datum, desc->natts);
+	nulls = palloc_array(bool, desc->natts);
 	for (i = 0; i < desc->natts; ++i)
 	{
 		char	   *key;

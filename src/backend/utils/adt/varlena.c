@@ -3,7 +3,7 @@
  * varlena.c
  *	  Functions for the variable-length built-in types.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -42,7 +42,7 @@
 #include "utils/sortsupport.h"
 #include "utils/varlena.h"
 
-typedef struct varlena VarString;
+typedef varlena VarString;
 
 /*
  * State for text_position_* functions.
@@ -92,7 +92,7 @@ typedef struct
 	int			last_returned;	/* Last comparison result (cache) */
 	bool		cache_blob;		/* Does buf2 contain strxfrm() blob, etc? */
 	bool		collate_c;
-	Oid			typid;			/* Actual datatype (text/bpchar/bytea/name) */
+	Oid			typid;			/* Actual datatype (text/bpchar/name) */
 	hyperLogLogState abbr_card; /* Abbreviated key cardinality state */
 	hyperLogLogState full_card; /* Full key cardinality state */
 	double		prop_card;		/* Required cardinality proportion */
@@ -133,6 +133,7 @@ static text *text_substring(Datum str,
 							int32 start,
 							int32 length,
 							bool length_not_specified);
+static int	pg_mbcharcliplen_chars(const char *mbstr, int len, int limit);
 static text *text_overlay(text *t1, text *t2, int sp, int sl);
 static int	text_position(text *t1, text *t2, Oid collid);
 static void text_position_setup(text *t1, text *t2, Oid collid, TextPositionState *state);
@@ -494,8 +495,11 @@ text_catenate(text *t1, text *t2)
  * charlen_to_bytelen()
  *	Compute the number of bytes occupied by n characters starting at *p
  *
- * It is caller's responsibility that there actually are n characters;
- * the string need not be null-terminated.
+ * The caller shall ensure there are n complete characters.  Callers achieve
+ * this by deriving "n" from regmatch_t findings from searching a wchar array.
+ * pg_mb2wchar_with_len() skips any trailing incomplete character, so regex
+ * matches will end no later than the last complete character.  (The string
+ * need not be null-terminated.)
  */
 static int
 charlen_to_bytelen(const char *p, int n)
@@ -510,7 +514,7 @@ charlen_to_bytelen(const char *p, int n)
 		const char *s;
 
 		for (s = p; n > 0; n--)
-			s += pg_mblen(s);
+			s += pg_mblen_unbounded(s); /* caller verified encoding */
 
 		return s - p;
 	}
@@ -583,7 +587,7 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 	int32		S = start;		/* start position */
 	int32		S1;				/* adjusted start position */
 	int32		L1;				/* adjusted substring length */
-	int32		E;				/* end position */
+	int32		E;				/* end position, exclusive */
 
 	/*
 	 * SQL99 says S can be zero or negative (which we don't document), but we
@@ -644,6 +648,7 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 		int32		slice_start;
 		int32		slice_size;
 		int32		slice_strlen;
+		int32		slice_len;
 		text	   *slice;
 		int32		E1;
 		int32		i;
@@ -680,11 +685,11 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 		else
 		{
 			/*
-			 * A zero or negative value for the end position can happen if the
-			 * start was negative or one. SQL99 says to return a zero-length
-			 * string.
+			 * Ending at position 1, exclusive, obviously yields an empty
+			 * string.  A zero or negative value can happen if the start was
+			 * negative or one. SQL99 says to return a zero-length string.
 			 */
-			if (E < 1)
+			if (E <= 1)
 				return cstring_to_text("");
 
 			/*
@@ -694,11 +699,11 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 			L1 = E - S1;
 
 			/*
-			 * Total slice size in bytes can't be any longer than the start
-			 * position plus substring length times the encoding max length.
-			 * If that overflows, we can just use -1.
+			 * Total slice size in bytes can't be any longer than the
+			 * inclusive end position times the encoding max length.  If that
+			 * overflows, we can just use -1.
 			 */
-			if (pg_mul_s32_overflow(E, eml, &slice_size))
+			if (pg_mul_s32_overflow(E - 1, eml, &slice_size))
 				slice_size = -1;
 		}
 
@@ -713,16 +718,25 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 			slice = (text *) DatumGetPointer(str);
 
 		/* see if we got back an empty string */
-		if (VARSIZE_ANY_EXHDR(slice) == 0)
+		slice_len = VARSIZE_ANY_EXHDR(slice);
+		if (slice_len == 0)
 		{
 			if (slice != (text *) DatumGetPointer(str))
 				pfree(slice);
 			return cstring_to_text("");
 		}
 
-		/* Now we can get the actual length of the slice in MB characters */
-		slice_strlen = pg_mbstrlen_with_len(VARDATA_ANY(slice),
-											VARSIZE_ANY_EXHDR(slice));
+		/*
+		 * Now we can get the actual length of the slice in MB characters,
+		 * stopping at the end of the substring.  Continuing beyond the
+		 * substring end could find an incomplete character attributable
+		 * solely to DatumGetTextPSlice() chopping in the middle of a
+		 * character, and it would be superfluous work at best.
+		 */
+		slice_strlen =
+			(slice_size == -1 ?
+			 pg_mbstrlen_with_len(VARDATA_ANY(slice), slice_len) :
+			 pg_mbcharcliplen_chars(VARDATA_ANY(slice), slice_len, E - 1));
 
 		/*
 		 * Check that the start position wasn't > slice_strlen. If so, SQL99
@@ -749,7 +763,7 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 		 */
 		p = VARDATA_ANY(slice);
 		for (i = 0; i < S1 - 1; i++)
-			p += pg_mblen(p);
+			p += pg_mblen_unbounded(p);
 
 		/* hang onto a pointer to our start position */
 		s = p;
@@ -759,7 +773,7 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 		 * length.
 		 */
 		for (i = S1; i < E1; i++)
-			p += pg_mblen(p);
+			p += pg_mblen_unbounded(p);
 
 		ret = (text *) palloc(VARHDRSZ + (p - s));
 		SET_VARSIZE(ret, VARHDRSZ + (p - s));
@@ -775,6 +789,35 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 
 	/* not reached: suppress compiler warning */
 	return NULL;
+}
+
+/*
+ * pg_mbcharcliplen_chars -
+ *	Mirror pg_mbcharcliplen(), except return value unit is chars, not bytes.
+ *
+ *	This mirrors all the dubious historical behavior, so it's static to
+ *	discourage proliferation.  The assertions are specific to the one caller.
+ */
+static int
+pg_mbcharcliplen_chars(const char *mbstr, int len, int limit)
+{
+	int			nch = 0;
+	int			l;
+
+	Assert(len > 0);
+	Assert(limit > 0);
+	Assert(pg_database_encoding_max_length() > 1);
+
+	while (len > 0 && *mbstr)
+	{
+		l = pg_mblen_with_len(mbstr, len);
+		nch++;
+		if (nch == limit)
+			break;
+		len -= l;
+		mbstr += l;
+	}
+	return nch;
 }
 
 /*
@@ -1064,6 +1107,8 @@ retry:
 	 */
 	if (state->is_multibyte_char_in_char && state->locale->deterministic)
 	{
+		const char *haystack_end = state->str1 + state->len1;
+
 		/* Walk one character at a time, until we reach the match. */
 
 		/* the search should never move backwards. */
@@ -1072,7 +1117,7 @@ retry:
 		while (state->refpoint < matchptr)
 		{
 			/* step to next character. */
-			state->refpoint += pg_mblen(state->refpoint);
+			state->refpoint += pg_mblen_range(state->refpoint, haystack_end);
 			state->refpos++;
 
 			/*
@@ -1111,6 +1156,7 @@ text_position_next_internal(char *start_ptr, TextPositionState *state)
 	const char *hptr;
 
 	Assert(start_ptr >= haystack && start_ptr <= haystack_end);
+	Assert(needle_len > 0);
 
 	state->last_match_len_tmp = needle_len;
 
@@ -1123,19 +1169,26 @@ text_position_next_internal(char *start_ptr, TextPositionState *state)
 		 * needle under the given collation.
 		 *
 		 * Note, the found substring could have a different length than the
-		 * needle, including being empty.  Callers that want to skip over the
-		 * found string need to read the length of the found substring from
-		 * last_match_len rather than just using the length of their needle.
+		 * needle.  Callers that want to skip over the found string need to
+		 * read the length of the found substring from last_match_len rather
+		 * than just using the length of their needle.
 		 *
 		 * Most callers will require "greedy" semantics, meaning that we need
 		 * to find the longest such substring, not the shortest.  For callers
 		 * that don't need greedy semantics, we can finish on the first match.
+		 *
+		 * This loop depends on the assumption that the needle is nonempty and
+		 * any matching substring must also be nonempty.  (Even if the
+		 * collation would accept an empty match, returning one would send
+		 * callers that search for successive matches into an infinite loop.)
 		 */
 		const char *result_hptr = NULL;
 
 		hptr = start_ptr;
 		while (hptr < haystack_end)
 		{
+			const char *test_end;
+
 			/*
 			 * First check the common case that there is a match in the
 			 * haystack of exactly the length of the needle.
@@ -1146,11 +1199,13 @@ text_position_next_internal(char *start_ptr, TextPositionState *state)
 				return (char *) hptr;
 
 			/*
-			 * Else check if any of the possible substrings starting at hptr
-			 * are equal to the needle.
+			 * Else check if any of the non-empty substrings starting at hptr
+			 * compare equal to the needle.
 			 */
-			for (const char *test_end = hptr; test_end < haystack_end; test_end += pg_mblen(test_end))
+			test_end = hptr;
+			do
 			{
+				test_end += pg_mblen_range(test_end, haystack_end);
 				if (pg_strncoll(hptr, (test_end - hptr), needle, needle_len, state->locale) == 0)
 				{
 					state->last_match_len_tmp = (test_end - hptr);
@@ -1158,11 +1213,12 @@ text_position_next_internal(char *start_ptr, TextPositionState *state)
 					if (!state->greedy)
 						break;
 				}
-			}
+			} while (test_end < haystack_end);
+
 			if (result_hptr)
 				break;
 
-			hptr += pg_mblen(hptr);
+			hptr += pg_mblen_range(hptr, haystack_end);
 		}
 
 		return (char *) result_hptr;
@@ -1606,10 +1662,8 @@ bttextsortsupport(PG_FUNCTION_ARGS)
  * Includes locale support, and support for BpChar semantics (i.e. removing
  * trailing spaces before comparison).
  *
- * Relies on the assumption that text, VarChar, BpChar, and bytea all have the
- * same representation.  Callers that always use the C collation (e.g.
- * non-collatable type callers like bytea) may have NUL bytes in their strings;
- * this will not work with any other collation, though.
+ * Relies on the assumption that text, VarChar, and BpChar all have the
+ * same representation.
  */
 void
 varstr_sortsupport(SortSupport ssup, Oid typid, Oid collid)
@@ -1692,7 +1746,7 @@ varstr_sortsupport(SortSupport ssup, Oid typid, Oid collid)
 	 */
 	if (abbreviate || !collate_c)
 	{
-		sss = palloc(sizeof(VarStringSortSupport));
+		sss = palloc_object(VarStringSortSupport);
 		sss->buf1 = palloc(TEXTBUFLEN);
 		sss->buflen1 = TEXTBUFLEN;
 		sss->buf2 = palloc(TEXTBUFLEN);
@@ -1972,7 +2026,7 @@ varstrfastcmp_locale(char *a1p, int len1, char *a2p, int len2, SortSupport ssup)
  * representation.  Our encoding strategy is simple -- pack the first 8 bytes
  * of a strxfrm() blob into a Datum (on little-endian machines, the 8 bytes are
  * stored in reverse order), and treat it as an unsigned integer.  When the "C"
- * locale is used, or in case of bytea, just memcpy() from original instead.
+ * locale is used just memcpy() from original instead.
  */
 static Datum
 varstr_abbrev_convert(Datum original, SortSupport ssup)
@@ -1999,30 +2053,8 @@ varstr_abbrev_convert(Datum original, SortSupport ssup)
 
 	/*
 	 * If we're using the C collation, use memcpy(), rather than strxfrm(), to
-	 * abbreviate keys.  The full comparator for the C locale is always
-	 * memcmp().  It would be incorrect to allow bytea callers (callers that
-	 * always force the C collation -- bytea isn't a collatable type, but this
-	 * approach is convenient) to use strxfrm().  This is because bytea
-	 * strings may contain NUL bytes.  Besides, this should be faster, too.
-	 *
-	 * More generally, it's okay that bytea callers can have NUL bytes in
-	 * strings because abbreviated cmp need not make a distinction between
-	 * terminating NUL bytes, and NUL bytes representing actual NULs in the
-	 * authoritative representation.  Hopefully a comparison at or past one
-	 * abbreviated key's terminating NUL byte will resolve the comparison
-	 * without consulting the authoritative representation; specifically, some
-	 * later non-NUL byte in the longer string can resolve the comparison
-	 * against a subsequent terminating NUL in the shorter string.  There will
-	 * usually be what is effectively a "length-wise" resolution there and
-	 * then.
-	 *
-	 * If that doesn't work out -- if all bytes in the longer string
-	 * positioned at or past the offset of the smaller string's (first)
-	 * terminating NUL are actually representative of NUL bytes in the
-	 * authoritative binary string (perhaps with some *terminating* NUL bytes
-	 * towards the end of the longer string iff it happens to still be small)
-	 * -- then an authoritative tie-breaker will happen, and do the right
-	 * thing: explicitly consider string length.
+	 * abbreviate keys.  The full comparator for the C locale is also
+	 * memcmp().  This should be faster than strxfrm().
 	 */
 	if (sss->collate_c)
 		memcpy(pres, authoritative_data, Min(len, max_prefix_bytes));
@@ -2104,9 +2136,6 @@ varstr_abbrev_convert(Datum original, SortSupport ssup)
 		 * strxfrm() blob is itself NUL terminated, leaving no danger of
 		 * misinterpreting any NUL bytes not intended to be interpreted as
 		 * logically representing termination.
-		 *
-		 * (Actually, even if there were NUL bytes in the blob it would be
-		 * okay.  See remarks on bytea case above.)
 		 */
 		memcpy(pres, sss->buf2, Min(max_prefix_bytes, bsize));
 	}
@@ -2187,10 +2216,10 @@ varstr_abbrev_abort(int memtupcount, SortSupport ssup)
 	 * NULLs are generally disregarded, if only NULL values were seen so far,
 	 * that might misrepresent costs if we failed to clamp.
 	 */
-	if (abbrev_distinct <= 1.0)
+	if (abbrev_distinct < 1.0)
 		abbrev_distinct = 1.0;
 
-	if (key_distinct <= 1.0)
+	if (key_distinct < 1.0)
 		key_distinct = 1.0;
 
 	/*
@@ -2283,7 +2312,9 @@ varstr_abbrev_abort(int memtupcount, SortSupport ssup)
 Datum
 btvarstrequalimage(PG_FUNCTION_ARGS)
 {
-	/* Oid		opcintype = PG_GETARG_OID(0); */
+#ifdef NOT_USED
+	Oid			opcintype = PG_GETARG_OID(0);
+#endif
 	Oid			collid = PG_GET_COLLATION();
 	pg_locale_t locale;
 
@@ -3781,6 +3812,8 @@ split_text(FunctionCallInfo fcinfo, SplitTextOutputData *tstate)
 	}
 	else
 	{
+		const char *end_ptr;
+
 		/*
 		 * When fldsep is NULL, each character in the input string becomes a
 		 * separate element in the result set.  The separator is effectively
@@ -3789,10 +3822,11 @@ split_text(FunctionCallInfo fcinfo, SplitTextOutputData *tstate)
 		inputstring_len = VARSIZE_ANY_EXHDR(inputstring);
 
 		start_ptr = VARDATA_ANY(inputstring);
+		end_ptr = start_ptr + inputstring_len;
 
 		while (inputstring_len > 0)
 		{
-			int			chunk_len = pg_mblen(start_ptr);
+			int			chunk_len = pg_mblen_range(start_ptr, end_ptr);
 
 			CHECK_FOR_INTERRUPTS();
 
@@ -3912,6 +3946,7 @@ array_to_text_internal(FunctionCallInfo fcinfo, ArrayType *v,
 	int			typlen;
 	bool		typbyval;
 	char		typalign;
+	uint8		typalignby;
 	StringInfoData buf;
 	bool		printed = false;
 	char	   *p;
@@ -3961,6 +3996,7 @@ array_to_text_internal(FunctionCallInfo fcinfo, ArrayType *v,
 	typlen = my_extra->typlen;
 	typbyval = my_extra->typbyval;
 	typalign = my_extra->typalign;
+	typalignby = typalign_to_alignby(typalign);
 
 	p = ARR_DATA_PTR(v);
 	bitmap = ARR_NULLBITMAP(v);
@@ -3997,7 +4033,7 @@ array_to_text_internal(FunctionCallInfo fcinfo, ArrayType *v,
 			printed = true;
 
 			p = att_addlength_pointer(p, typlen, p);
-			p = (char *) att_align_nominal(p, typalign);
+			p = (char *) att_nominal_alignby(p, typalignby);
 		}
 
 		/* advance bitmap pointer if any */
@@ -4181,7 +4217,7 @@ pg_column_compression(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	/* get the compression method id stored in the compressed varlena */
-	cmid = toast_get_compression_id((struct varlena *)
+	cmid = toast_get_compression_id((varlena *)
 									DatumGetPointer(PG_GETARG_DATUM(0)));
 	if (cmid == TOAST_INVALID_COMPRESSION_ID)
 		PG_RETURN_NULL();
@@ -4210,8 +4246,8 @@ Datum
 pg_column_toast_chunk_id(PG_FUNCTION_ARGS)
 {
 	int			typlen;
-	struct varlena *attr;
-	struct varatt_external toast_pointer;
+	varlena    *attr;
+	varatt_external toast_pointer;
 
 	/* On first call, get the input type's typlen, and save at *fn_extra */
 	if (fcinfo->flinfo->fn_extra == NULL)
@@ -4233,7 +4269,7 @@ pg_column_toast_chunk_id(PG_FUNCTION_ARGS)
 	if (typlen != -1)
 		PG_RETURN_NULL();
 
-	attr = (struct varlena *) DatumGetPointer(PG_GETARG_DATUM(0));
+	attr = (varlena *) DatumGetPointer(PG_GETARG_DATUM(0));
 
 	if (!VARATT_IS_EXTERNAL_ONDISK(attr))
 		PG_RETURN_NULL();
@@ -4696,7 +4732,7 @@ text_reverse(PG_FUNCTION_ARGS)
 		{
 			int			sz;
 
-			sz = pg_mblen(p);
+			sz = pg_mblen_range(p, endp);
 			dst -= sz;
 			memcpy(dst, p, sz);
 			p += sz;
@@ -4857,7 +4893,7 @@ text_format(PG_FUNCTION_ARGS)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("unrecognized format() type specifier \"%.*s\"",
-							pg_mblen(cp), cp),
+							pg_mblen_range(cp, end_ptr), cp),
 					 errhint("For a single \"%%\" use \"%%%%\".")));
 
 		/* If indirect width was specified, get its value */
@@ -4978,7 +5014,7 @@ text_format(PG_FUNCTION_ARGS)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("unrecognized format() type specifier \"%.*s\"",
-								pg_mblen(cp), cp),
+								pg_mblen_range(cp, end_ptr), cp),
 						 errhint("For a single \"%%\" use \"%%%%\".")));
 				break;
 		}
@@ -5397,11 +5433,12 @@ unicode_version(PG_FUNCTION_ARGS)
 Datum
 icu_unicode_version(PG_FUNCTION_ARGS)
 {
-#ifdef USE_ICU
-	PG_RETURN_TEXT_P(cstring_to_text(U_UNICODE_VERSION));
-#else
-	PG_RETURN_NULL();
-#endif
+	const char *version = pg_icu_unicode_version();
+
+	if (version)
+		PG_RETURN_TEXT_P(cstring_to_text(version));
+	else
+		PG_RETURN_NULL();
 }
 
 /*

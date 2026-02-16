@@ -146,7 +146,7 @@ ts_dist(PG_FUNCTION_ARGS)
 
 	if (TIMESTAMP_NOT_FINITE(a) || TIMESTAMP_NOT_FINITE(b))
 	{
-		Interval   *p = palloc(sizeof(Interval));
+		Interval   *p = palloc_object(Interval);
 
 		p->day = INT_MAX;
 		p->month = INT_MAX;
@@ -170,7 +170,7 @@ tstz_dist(PG_FUNCTION_ARGS)
 
 	if (TIMESTAMP_NOT_FINITE(a) || TIMESTAMP_NOT_FINITE(b))
 	{
-		Interval   *p = palloc(sizeof(Interval));
+		Interval   *p = palloc_object(Interval);
 
 		p->day = INT_MAX;
 		p->month = INT_MAX;
@@ -212,13 +212,13 @@ gbt_tstz_compress(PG_FUNCTION_ARGS)
 
 	if (entry->leafkey)
 	{
-		tsKEY	   *r = (tsKEY *) palloc(sizeof(tsKEY));
+		tsKEY	   *r = palloc_object(tsKEY);
 		TimestampTz ts = DatumGetTimestampTz(entry->key);
 		Timestamp	gmt;
 
 		gmt = tstz_to_ts_gmt(ts);
 
-		retval = palloc(sizeof(GISTENTRY));
+		retval = palloc_object(GISTENTRY);
 		r->lower = r->upper = gmt;
 		gistentryinit(*retval, PointerGetDatum(r),
 					  entry->rel, entry->page,
@@ -244,8 +244,9 @@ gbt_ts_consistent(PG_FUNCTION_ARGS)
 	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
 	Timestamp	query = PG_GETARG_TIMESTAMP(1);
 	StrategyNumber strategy = (StrategyNumber) PG_GETARG_UINT16(2);
-
-	/* Oid		subtype = PG_GETARG_OID(3); */
+#ifdef NOT_USED
+	Oid			subtype = PG_GETARG_OID(3);
+#endif
 	bool	   *recheck = (bool *) PG_GETARG_POINTER(4);
 	tsKEY	   *kkk = (tsKEY *) DatumGetPointer(entry->key);
 	GBT_NUMKEY_R key;
@@ -265,8 +266,9 @@ gbt_ts_distance(PG_FUNCTION_ARGS)
 {
 	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
 	Timestamp	query = PG_GETARG_TIMESTAMP(1);
-
-	/* Oid		subtype = PG_GETARG_OID(3); */
+#ifdef NOT_USED
+	Oid			subtype = PG_GETARG_OID(3);
+#endif
 	tsKEY	   *kkk = (tsKEY *) DatumGetPointer(entry->key);
 	GBT_NUMKEY_R key;
 
@@ -283,8 +285,9 @@ gbt_tstz_consistent(PG_FUNCTION_ARGS)
 	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
 	TimestampTz query = PG_GETARG_TIMESTAMPTZ(1);
 	StrategyNumber strategy = (StrategyNumber) PG_GETARG_UINT16(2);
-
-	/* Oid		subtype = PG_GETARG_OID(3); */
+#ifdef NOT_USED
+	Oid			subtype = PG_GETARG_OID(3);
+#endif
 	bool	   *recheck = (bool *) PG_GETARG_POINTER(4);
 	char	   *kkk = (char *) DatumGetPointer(entry->key);
 	GBT_NUMKEY_R key;
@@ -306,8 +309,9 @@ gbt_tstz_distance(PG_FUNCTION_ARGS)
 {
 	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
 	TimestampTz query = PG_GETARG_TIMESTAMPTZ(1);
-
-	/* Oid		subtype = PG_GETARG_OID(3); */
+#ifdef NOT_USED
+	Oid			subtype = PG_GETARG_OID(3);
+#endif
 	char	   *kkk = (char *) DatumGetPointer(entry->key);
 	GBT_NUMKEY_R key;
 	Timestamp	qqq;

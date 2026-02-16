@@ -7,7 +7,7 @@
  *	  of the API of the memory management subsystem.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/memutils.h
@@ -253,7 +253,7 @@ pg_memory_is_all_zeros(const void *ptr, size_t len)
 		 */
 		for (; p < aligned_end; p += sizeof(size_t))
 		{
-			if (*(size_t *) p != 0)
+			if (*(const size_t *) p != 0)
 				return false;
 		}
 
@@ -290,10 +290,10 @@ pg_memory_is_all_zeros(const void *ptr, size_t len)
 	 */
 	for (; p < aligned_end - (sizeof(size_t) * 7); p += sizeof(size_t) * 8)
 	{
-		if ((((size_t *) p)[0] != 0) | (((size_t *) p)[1] != 0) |
-			(((size_t *) p)[2] != 0) | (((size_t *) p)[3] != 0) |
-			(((size_t *) p)[4] != 0) | (((size_t *) p)[5] != 0) |
-			(((size_t *) p)[6] != 0) | (((size_t *) p)[7] != 0))
+		if ((((const size_t *) p)[0] != 0) | (((const size_t *) p)[1] != 0) |
+			(((const size_t *) p)[2] != 0) | (((const size_t *) p)[3] != 0) |
+			(((const size_t *) p)[4] != 0) | (((const size_t *) p)[5] != 0) |
+			(((const size_t *) p)[6] != 0) | (((const size_t *) p)[7] != 0))
 			return false;
 	}
 
@@ -305,7 +305,7 @@ pg_memory_is_all_zeros(const void *ptr, size_t len)
 	 */
 	for (; p < aligned_end; p += sizeof(size_t))
 	{
-		if (*(size_t *) p != 0)
+		if (*(const size_t *) p != 0)
 			return false;
 	}
 

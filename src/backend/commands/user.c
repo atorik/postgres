@@ -3,7 +3,7 @@
  * user.c
  *	  Commands for manipulating roles (formerly called users).
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/backend/commands/user.c
@@ -32,6 +32,7 @@
 #include "commands/user.h"
 #include "libpq/crypt.h"
 #include "miscadmin.h"
+#include "port/pg_bitutils.h"
 #include "storage/lmgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
@@ -1904,7 +1905,7 @@ AddRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 		else
 		{
 			Oid			objectId;
-			Oid		   *newmembers = palloc(sizeof(Oid));
+			Oid		   *newmembers = palloc_object(Oid);
 
 			/*
 			 * The values for these options can be taken directly from 'popt'.
@@ -2295,7 +2296,7 @@ initialize_revoke_actions(CatCList *memlist)
 	if (memlist->n_members == 0)
 		return NULL;
 
-	result = palloc(sizeof(RevokeRoleGrantAction) * memlist->n_members);
+	result = palloc_array(RevokeRoleGrantAction, memlist->n_members);
 	for (i = 0; i < memlist->n_members; i++)
 		result[i] = RRG_NOOP;
 	return result;

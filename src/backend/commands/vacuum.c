@@ -12,7 +12,7 @@
  * CLUSTER, handled in cluster.c.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -232,7 +232,8 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		else if (!vacstmt->is_vacuumcmd)
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
-					 errmsg("unrecognized ANALYZE option \"%s\"", opt->defname),
+					 errmsg("unrecognized %s option \"%s\"",
+							"ANALYZE", opt->defname),
 					 parser_errposition(pstate, opt->location)));
 
 		/* Parse options available on VACUUM */
@@ -294,7 +295,8 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
-					 errmsg("unrecognized VACUUM option \"%s\"", opt->defname),
+					 errmsg("unrecognized %s option \"%s\"",
+							"VACUUM", opt->defname),
 					 parser_errposition(pstate, opt->location)));
 	}
 
@@ -1145,8 +1147,8 @@ vacuum_get_cutoffs(Relation rel, const VacuumParams params,
 
 	/*
 	 * Also compute the multixact age for which freezing is urgent.  This is
-	 * normally autovacuum_multixact_freeze_max_age, but may be less if we are
-	 * short of multixact member space.
+	 * normally autovacuum_multixact_freeze_max_age, but may be less if
+	 * multixact members are bloated.
 	 */
 	effective_multixact_freeze_max_age = MultiXactMemberFreezeThreshold();
 
@@ -1971,7 +1973,7 @@ vac_truncate_clog(TransactionId frozenXID,
 	 * signaling twice?
 	 */
 	SetTransactionIdLimit(frozenXID, oldestxid_datoid);
-	SetMultiXactIdLimit(minMulti, minmulti_datoid, false);
+	SetMultiXactIdLimit(minMulti, minmulti_datoid);
 
 	LWLockRelease(WrapLimitsVacuumLock);
 }
@@ -2222,9 +2224,9 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams params,
 	{
 		StdRdOptions *opts = (StdRdOptions *) rel->rd_options;
 
-		if (opts && opts->vacuum_truncate_set)
+		if (opts && opts->vacuum_truncate != PG_TERNARY_UNSET)
 		{
-			if (opts->vacuum_truncate)
+			if (opts->vacuum_truncate == PG_TERNARY_TRUE)
 				params.truncate = VACOPTVALUE_ENABLED;
 			else
 				params.truncate = VACOPTVALUE_DISABLED;

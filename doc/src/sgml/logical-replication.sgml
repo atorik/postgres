@@ -6,7 +6,7 @@
  <para>
   Logical replication is a method of replicating data objects and their
   changes, based upon their replication identity (usually a primary key).  We
-  use the term logical in contrast to physical replication, which uses exact
+  use the term logical replication in contrast to physical replication, which uses exact
   block addresses and byte-by-byte replication.  PostgreSQL supports both
   mechanisms concurrently, see <xref linkend="high-availability"/>.  Logical
   replication allows fine-grained control over both data replication and
@@ -2121,13 +2121,12 @@ Publications:
    The log format for logical replication conflicts is as follows:
 <synopsis>
 LOG:  conflict detected on relation "<replaceable>schemaname</replaceable>.<replaceable>tablename</replaceable>": conflict=<replaceable>conflict_type</replaceable>
-DETAIL:  <replaceable class="parameter">detailed_explanation</replaceable>.
-{<replaceable class="parameter">detail_values</replaceable> [; ... ]}.
+DETAIL:  <replaceable class="parameter">detailed_explanation</replaceable>[: <replaceable class="parameter">detail_values</replaceable> [, ... ]].
 
 <phrase>where <replaceable class="parameter">detail_values</replaceable> is one of:</phrase>
 
-    <literal>Key</literal> (<replaceable>column_name</replaceable> <optional>, ...</optional>)=(<replaceable>column_value</replaceable> <optional>, ...</optional>)
-    <literal>existing local row</literal> <optional>(<replaceable>column_name</replaceable> <optional>, ...</optional>)=</optional>(<replaceable>column_value</replaceable> <optional>, ...</optional>)
+    <literal>key</literal> (<replaceable>column_name</replaceable> <optional>, ...</optional>)=(<replaceable>column_value</replaceable> <optional>, ...</optional>)
+    <literal>local row</literal> <optional>(<replaceable>column_name</replaceable> <optional>, ...</optional>)=</optional>(<replaceable>column_value</replaceable> <optional>, ...</optional>)
     <literal>remote row</literal> <optional>(<replaceable>column_name</replaceable> <optional>, ...</optional>)=</optional>(<replaceable>column_value</replaceable> <optional>, ...</optional>)
     <literal>replica identity</literal> {(<replaceable>column_name</replaceable> <optional>, ...</optional>)=(<replaceable>column_value</replaceable> <optional>, ...</optional>) | full <optional>(<replaceable>column_name</replaceable> <optional>, ...</optional>)=</optional>(<replaceable>column_value</replaceable> <optional>, ...</optional>)}
 </synopsis>
@@ -2162,12 +2161,12 @@ DETAIL:  <replaceable class="parameter">detailed_explanation</replaceable>.
         <para>
          <replaceable class="parameter">detailed_explanation</replaceable> includes
          the origin, transaction ID, and commit timestamp of the transaction that
-         modified the existing local row, if available.
+         modified the local row, if available.
         </para>
        </listitem>
        <listitem>
         <para>
-         The <literal>Key</literal> section includes the key values of the local
+         The <literal>key</literal> section includes the key values of the local
          row that violated a unique constraint for
          <literal>insert_exists</literal>, <literal>update_exists</literal> or
          <literal>multiple_unique_conflicts</literal> conflicts.
@@ -2175,8 +2174,8 @@ DETAIL:  <replaceable class="parameter">detailed_explanation</replaceable>.
        </listitem>
        <listitem>
         <para>
-         The <literal>existing local row</literal> section includes the local
-         row if its origin differs from the remote row for
+         The <literal>local row</literal> section includes the local row if its
+         origin differs from the remote row for
          <literal>update_origin_differs</literal> or <literal>delete_origin_differs</literal>
          conflicts, or if the key value conflicts with the remote row for
          <literal>insert_exists</literal>, <literal>update_exists</literal> or
@@ -2203,8 +2202,8 @@ DETAIL:  <replaceable class="parameter">detailed_explanation</replaceable>.
        <listitem>
         <para>
          <replaceable class="parameter">column_name</replaceable> is the column name.
-         For <literal>existing local row</literal>, <literal>remote row</literal>,
-         and <literal>replica identity full</literal> cases, column names are
+         For <literal>local row</literal>, <literal>remote row</literal>, and
+         <literal>replica identity full</literal> cases, column names are
          logged only if the user lacks the privilege to access all columns of
          the table. If column names are present, they appear in the same order
          as the corresponding column values.
@@ -2259,8 +2258,8 @@ DETAIL:  <replaceable class="parameter">detailed_explanation</replaceable>.
    emit the following kind of message to the subscriber's server log:
 <screen>
 ERROR:  conflict detected on relation "public.test": conflict=insert_exists
-DETAIL:  Key already exists in unique index "t_pkey", which was modified locally in transaction 740 at 2024-06-26 10:47:04.727375+08.
-Key (c)=(1); existing local row (1, 'local'); remote row (1, 'remote').
+DETAIL:  Could not apply remote change: remote row (1, 'remote').
+Key already exists in unique index "test_pkey", modified locally in transaction 800 at 2026-01-16 18:15:25.652759+09: key (c)=(1), local row (1, 'local').
 CONTEXT:  processing remote data for replication origin "pg_16395" during "INSERT" for replication target relation "public.test" in transaction 725 finished at 0/014C0378
 </screen>
    The LSN of the transaction that contains the change violating the constraint and
@@ -2496,8 +2495,8 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
   <title>Monitoring</title>
 
   <para>
-   Because logical replication is based on a similar architecture as
-   <link linkend="streaming-replication">physical streaming replication</link>,
+   Because streaming logical replication is based on a similar architecture as
+   <link linkend="streaming-replication">streaming physical replication</link>,
    the monitoring on a publication node is similar to monitoring of a
    physical replication primary
    (see <xref linkend="streaming-replication-monitoring"/>).
@@ -2550,10 +2549,14 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
   </para>
 
   <para>
-   To add tables to a publication, the user must have ownership rights on the
-   table. To add all tables in schema to a publication, the user must be a
-   superuser. To create a publication that publishes all tables, all tables in
-   schema, or all sequences automatically, the user must be a superuser.
+   To create a publication using <literal>FOR TABLE</literal>, the user must
+   have ownership rights on all the listed tables. To create a publication
+   using any of <literal>FOR ALL TABLES</literal>,
+   <literal>FOR ALL SEQUENCES</literal>,
+   or <literal>FOR TABLES IN SCHEMA</literal>, the user must be a superuser. To
+   alter a publication using <literal>ADD TABLE</literal>, the user must have
+   ownership rights on all the listed tables. To alter a publication using
+   <literal>ADD TABLES IN SCHEMA</literal>, the user must be a superuser.
   </para>
 
   <para>
@@ -2629,7 +2632,7 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
 
    <para>
     <link linkend="guc-wal-level"><varname>wal_level</varname></link> must be
-    set to <literal>logical</literal>.
+    set to <literal>replica</literal> or <literal>logical</literal>.
    </para>
 
    <para>
@@ -2751,7 +2754,7 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
      <para>
       The new cluster must have
       <link linkend="guc-wal-level"><varname>wal_level</varname></link> as
-      <literal>logical</literal>.
+      <literal>replica</literal> or <literal>logical</literal>.
      </para>
     </listitem>
     <listitem>
@@ -3518,7 +3521,7 @@ wal_level = logical
    (the values here depend on your actual network configuration and user you
    want to use for connecting):
 <programlisting>
-host     all     repuser     0.0.0.0/0     md5
+host     all     repuser     0.0.0.0/0     scram-sha-256
 </programlisting>
   </para>
 

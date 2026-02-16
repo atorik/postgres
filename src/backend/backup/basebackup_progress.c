@@ -22,7 +22,7 @@
  * the logic directly into that file as it's fairly simple, but it seems
  * cleaner to have everything related to progress reporting in one place.)
  *
- * Portions Copyright (c) 2010-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2010-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/backup/basebackup_progress.c
@@ -62,7 +62,7 @@ bbsink_progress_new(bbsink *next, bool estimate_backup_size, bool incremental)
 
 	Assert(next != NULL);
 
-	sink = palloc0(sizeof(bbsink));
+	sink = palloc0_object(bbsink);
 	*((const bbsink_ops **) &sink->bbs_ops) = &bbsink_progress_ops;
 	sink->bbs_next = next;
 

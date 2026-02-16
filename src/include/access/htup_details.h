@@ -4,7 +4,7 @@
  *	  POSTGRES heap tuple header definitions.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/access/htup_details.h
@@ -355,20 +355,6 @@ static inline bool
 HeapTupleHeaderXminFrozen(const HeapTupleHeaderData *tup)
 {
 	return (tup->t_infomask & HEAP_XMIN_FROZEN) == HEAP_XMIN_FROZEN;
-}
-
-static inline void
-HeapTupleHeaderSetXminCommitted(HeapTupleHeaderData *tup)
-{
-	Assert(!HeapTupleHeaderXminInvalid(tup));
-	tup->t_infomask |= HEAP_XMIN_COMMITTED;
-}
-
-static inline void
-HeapTupleHeaderSetXminInvalid(HeapTupleHeaderData *tup)
-{
-	Assert(!HeapTupleHeaderXminCommitted(tup));
-	tup->t_infomask |= HEAP_XMIN_INVALID;
 }
 
 static inline void

@@ -47,7 +47,7 @@
  * and 'attribute_buf' are expanded on demand, to hold the longest line
  * encountered so far.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -249,7 +249,9 @@ CopyGetData(CopyFromState cstate, void *databuf, int minread, int maxread)
 	switch (cstate->copy_src)
 	{
 		case COPY_FILE:
+			pgstat_report_wait_start(WAIT_EVENT_COPY_FROM_READ);
 			bytesread = fread(databuf, 1, maxread, cstate->copy_file);
+			pgstat_report_wait_end();
 			if (ferror(cstate->copy_file))
 				ereport(ERROR,
 						(errcode_for_file_access(),
@@ -335,7 +337,7 @@ CopyGetData(CopyFromState cstate, void *databuf, int minread, int maxread)
 				if (avail > maxread)
 					avail = maxread;
 				pq_copymsgbytes(cstate->fe_msgbuf, databuf, avail);
-				databuf = (void *) ((char *) databuf + avail);
+				databuf = (char *) databuf + avail;
 				maxread -= avail;
 				bytesread += avail;
 			}
@@ -1136,7 +1138,7 @@ CopyFromBinaryOneRow(CopyFromState cstate, ExprContext *econtext, Datum *values,
 		ereport(ERROR,
 				(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
 				 errmsg("row field count is %d, expected %d",
-						(int) fld_count, attr_count)));
+						fld_count, attr_count)));
 
 	foreach(cur, cstate->attnumlist)
 	{

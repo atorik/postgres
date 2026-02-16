@@ -1,5 +1,5 @@
 
-# Copyright (c) 2021-2025, PostgreSQL Global Development Group
+# Copyright (c) 2021-2026, PostgreSQL Global Development Group
 
 # Test connection limits, i.e. max_connections, reserved_connections
 # and superuser_reserved_connections.
@@ -73,6 +73,11 @@ sub connect_fails_wait
 		$log_location);
 	ok(1, "$test_name: client backend process exited");
 }
+
+# Restart the server to ensure that any backends launched for the
+# initialization steps are gone. Otherwise they could still be using
+# up connection slots and mess with our expectations.
+$node->restart;
 
 my @sessions = ();
 my @raw_connections = ();

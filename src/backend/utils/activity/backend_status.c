@@ -2,7 +2,7 @@
  * backend_status.c
  *	  Backend status reporting infrastructure.
  *
- * Copyright (c) 2001-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2001-2026, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -1162,31 +1162,6 @@ pgstat_get_my_plan_id(void)
 
 	/* No need for a lock, for roughly the same reasons as above. */
 	return MyBEEntry->st_plan_id;
-}
-
-/* ----------
- * pgstat_get_backend_type_by_proc_number() -
- *
- *	Return the type of the backend with the specified ProcNumber.  This looks
- *	directly at the BackendStatusArray, so the return value may be out of date.
- *	The only current use of this function is in pg_signal_backend(), which is
- *	inherently racy, so we don't worry too much about this.
- *
- *	It is the caller's responsibility to use this wisely; at minimum, callers
- *	should ensure that procNumber is valid and perform the required permissions
- *	checks.
- * ----------
- */
-BackendType
-pgstat_get_backend_type_by_proc_number(ProcNumber procNumber)
-{
-	volatile PgBackendStatus *status = &BackendStatusArray[procNumber];
-
-	/*
-	 * We bypass the changecount mechanism since fetching and storing an int
-	 * is almost certainly atomic.
-	 */
-	return status->st_backendType;
 }
 
 /* ----------

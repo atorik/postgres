@@ -9,7 +9,7 @@
  *	  polluting the namespace with lots of stuff...
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/c.h
@@ -59,6 +59,7 @@
 #include "pg_config_os.h"		/* config from include/port/PORTNAME.h */
 
 /* System header files that should be available everywhere in Postgres */
+#include <assert.h>
 #include <inttypes.h>
 #include <stdalign.h>
 #include <stdio.h>
@@ -108,12 +109,6 @@
 #endif
 
 /*
- * Previously used PostgreSQL-specific spelling, for backward compatibility
- * for extensions.
- */
-#define pg_restrict restrict
-
-/*
  * Attribute macros
  *
  * GCC: https://gcc.gnu.org/onlinedocs/gcc/Function-Attributes.html
@@ -159,7 +154,7 @@
  * common style is to put them before the return type.  (The MSVC fallback has
  * the same requirement.  The GCC fallback is more flexible.)
  */
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) && !defined(__cplusplus)
 #define pg_noreturn _Noreturn
 #elif defined(__GNUC__)
 #define pg_noreturn __attribute__((noreturn))
@@ -226,6 +221,16 @@
 #define PG_USED_FOR_ASSERTS_ONLY
 #else
 #define PG_USED_FOR_ASSERTS_ONLY pg_attribute_unused()
+#endif
+
+/*
+ * Our C and C++ compilers may have different ideas about which printf
+ * archetype best represents what src/port/snprintf.c can do.
+ */
+#ifndef __cplusplus
+#define PG_PRINTF_ATTRIBUTE PG_C_PRINTF_ATTRIBUTE
+#else
+#define PG_PRINTF_ATTRIBUTE PG_CXX_PRINTF_ATTRIBUTE
 #endif
 
 /* GCC supports format attributes */
@@ -527,11 +532,9 @@ typedef void (*pg_funcptr_t) (void);
 /*
  * Pointer
  *		Variable holding address of any memory resident object.
- *
- *		XXX Pointer arithmetic is done with this, so it can't be void *
- *		under "true" ANSI compilers.
+ *		(obsolescent; use void * or char *)
  */
-typedef char *Pointer;
+typedef void *Pointer;
 
 /* Historical names for types in <stdint.h>. */
 typedef int8_t int8;
@@ -560,6 +563,7 @@ typedef uint32 bits32;			/* >= 32 bits */
 /* snprintf format strings to use for 64-bit integers */
 #define INT64_FORMAT "%" PRId64
 #define UINT64_FORMAT "%" PRIu64
+#define OID8_FORMAT "%" PRIu64
 
 /*
  * 128-bit signed and unsigned integers
@@ -646,7 +650,7 @@ typedef double float8;
 #define FLOAT8PASSBYVAL true
 
 /*
- * Oid, RegProcedure, TransactionId, SubTransactionId, MultiXactId,
+ * Oid, Oid8, RegProcedure, TransactionId, SubTransactionId, MultiXactId,
  * CommandId
  */
 
@@ -671,16 +675,21 @@ typedef uint32 SubTransactionId;
 /* MultiXactId must be equivalent to TransactionId, to fit in t_xmax */
 typedef TransactionId MultiXactId;
 
-typedef uint32 MultiXactOffset;
+typedef uint64 MultiXactOffset;
 
 typedef uint32 CommandId;
 
 #define FirstCommandId	((CommandId) 0)
 #define InvalidCommandId	(~(CommandId)0)
 
+/* 8-byte Object ID */
+typedef uint64 Oid8;
+
+#define InvalidOid8		((Oid8) 0)
+#define OID8_MAX	UINT64_MAX
 
 /* ----------------
- *		Variable-length datatypes all share the 'struct varlena' header.
+ *		Variable-length datatypes all share the 'varlena' header.
  *
  * NOTE: for TOASTable types, this is an oversimplification, since the value
  * may be compressed or moved out-of-line.  However datatype-specific routines
@@ -693,11 +702,11 @@ typedef uint32 CommandId;
  * See varatt.h for details of the TOASTed form.
  * ----------------
  */
-struct varlena
+typedef struct varlena
 {
 	char		vl_len_[4];		/* Do not touch this field directly! */
 	char		vl_dat[FLEXIBLE_ARRAY_MEMBER];	/* Data content is here */
-};
+} varlena;
 
 #define VARHDRSZ		((int32) sizeof(int32))
 
@@ -706,10 +715,10 @@ struct varlena
  * There is no terminating null or anything like that --- the data length is
  * always VARSIZE_ANY_EXHDR(ptr).
  */
-typedef struct varlena bytea;
-typedef struct varlena text;
-typedef struct varlena BpChar;	/* blank-padded char, ie SQL char(n) */
-typedef struct varlena VarChar; /* var-length char, ie SQL varchar(n) */
+typedef varlena bytea;
+typedef varlena text;
+typedef varlena BpChar;			/* blank-padded char, ie SQL char(n) */
+typedef varlena VarChar;		/* var-length char, ie SQL varchar(n) */
 
 /*
  * Specialized array types.  These are physically laid out just the same
@@ -777,6 +786,8 @@ typedef NameData *Name;
 		((void *)((char *) base + offset))
 
 #define OidIsValid(objectId)  ((bool) ((objectId) != InvalidOid))
+
+#define Oid8IsValid(objectId)  ((bool) ((objectId) != InvalidOid8))
 
 #define RegProcedureIsValid(p)	OidIsValid(p)
 
@@ -864,7 +875,6 @@ typedef NameData *Name;
 
 #elif defined(FRONTEND)
 
-#include <assert.h>
 #define Assert(p) assert(p)
 #define AssertMacro(p)	((void) assert(p))
 
@@ -914,78 +924,67 @@ pg_noreturn extern void ExceptionalCondition(const char *conditionName,
  *
  * If the "condition" (a compile-time-constant expression) evaluates to false,
  * throw a compile error using the "errmessage" (a string literal).
- *
- * C11 has _Static_assert(), and most C99 compilers already support that.  For
- * portability, we wrap it into StaticAssertDecl().  _Static_assert() is a
- * "declaration", and so it must be placed where for example a variable
+ */
+
+/*
+ * We require C11 and C++11, so static_assert() is expected to be there.
+ * StaticAssertDecl() was previously used for portability, but it's now just a
+ * plain wrapper and doesn't need to be used in new code.  static_assert() is
+ * a "declaration", and so it must be placed where for example a variable
  * declaration would be valid.  As long as we compile with
  * -Wno-declaration-after-statement, that also means it cannot be placed after
- * statements in a function.  Macros StaticAssertStmt() and StaticAssertExpr()
- * make it safe to use as a statement or in an expression, respectively.
+ * statements in a function.
+ */
+#define StaticAssertDecl(condition, errmessage) \
+	static_assert(condition, errmessage)
+
+/*
+ * StaticAssertStmt() was previously used to make static assertions work as a
+ * statement, but its use is now deprecated.
+ */
+#define StaticAssertStmt(condition, errmessage) \
+	do { static_assert(condition, errmessage); } while(0)
+
+/*
+ * StaticAssertExpr() is for use in an expression.
  *
- * For compilers without _Static_assert(), we fall back on a kluge that
- * assumes the compiler will complain about a negative width for a struct
+ * For compilers without GCC statement expressions, we fall back on a kluge
+ * that assumes the compiler will complain about a negative width for a struct
  * bit-field.  This will not include a helpful error message, but it beats not
  * getting an error at all.
  */
-#ifndef __cplusplus
-#ifdef HAVE__STATIC_ASSERT
-#define StaticAssertDecl(condition, errmessage) \
-	_Static_assert(condition, errmessage)
-#define StaticAssertStmt(condition, errmessage) \
-	do { _Static_assert(condition, errmessage); } while(0)
+#ifdef HAVE_STATEMENT_EXPRESSIONS
 #define StaticAssertExpr(condition, errmessage) \
-	((void) ({ StaticAssertStmt(condition, errmessage); true; }))
-#else							/* !HAVE__STATIC_ASSERT */
-#define StaticAssertDecl(condition, errmessage) \
-	extern void static_assert_func(int static_assert_failure[(condition) ? 1 : -1])
-#define StaticAssertStmt(condition, errmessage) \
+	((void) ({ static_assert(condition, errmessage); true; }))
+#else
+#define StaticAssertExpr(condition, errmessage) \
 	((void) sizeof(struct { int static_assert_failure : (condition) ? 1 : -1; }))
-#define StaticAssertExpr(condition, errmessage) \
-	StaticAssertStmt(condition, errmessage)
-#endif							/* HAVE__STATIC_ASSERT */
-#else							/* C++ */
-#if defined(__cpp_static_assert) && __cpp_static_assert >= 200410
-#define StaticAssertDecl(condition, errmessage) \
-	static_assert(condition, errmessage)
-#define StaticAssertStmt(condition, errmessage) \
-	static_assert(condition, errmessage)
-#define StaticAssertExpr(condition, errmessage) \
-	({ static_assert(condition, errmessage); })
-#else							/* !__cpp_static_assert */
-#define StaticAssertDecl(condition, errmessage) \
-	extern void static_assert_func(int static_assert_failure[(condition) ? 1 : -1])
-#define StaticAssertStmt(condition, errmessage) \
-	do { struct static_assert_struct { int static_assert_failure : (condition) ? 1 : -1; }; } while(0)
-#define StaticAssertExpr(condition, errmessage) \
-	((void) ({ StaticAssertStmt(condition, errmessage); }))
-#endif							/* __cpp_static_assert */
-#endif							/* C++ */
+#endif							/* HAVE_STATEMENT_EXPRESSIONS */
 
 
 /*
  * Compile-time checks that a variable (or expression) has the specified type.
  *
- * AssertVariableIsOfType() can be used as a statement.
- * AssertVariableIsOfTypeMacro() is intended for use in macros, eg
- *		#define foo(x) (AssertVariableIsOfTypeMacro(x, int), bar(x))
+ * StaticAssertVariableIsOfType() can be used as a declaration.
+ * StaticAssertVariableIsOfTypeMacro() is intended for use in macros, eg
+ *		#define foo(x) (StaticAssertVariableIsOfTypeMacro(x, int), bar(x))
  *
  * If we don't have __builtin_types_compatible_p, we can still assert that
  * the types have the same size.  This is far from ideal (especially on 32-bit
  * platforms) but it provides at least some coverage.
  */
 #ifdef HAVE__BUILTIN_TYPES_COMPATIBLE_P
-#define AssertVariableIsOfType(varname, typename) \
-	StaticAssertStmt(__builtin_types_compatible_p(__typeof__(varname), typename), \
+#define StaticAssertVariableIsOfType(varname, typename) \
+	StaticAssertDecl(__builtin_types_compatible_p(__typeof__(varname), typename), \
 	CppAsString(varname) " does not have type " CppAsString(typename))
-#define AssertVariableIsOfTypeMacro(varname, typename) \
+#define StaticAssertVariableIsOfTypeMacro(varname, typename) \
 	(StaticAssertExpr(__builtin_types_compatible_p(__typeof__(varname), typename), \
 	 CppAsString(varname) " does not have type " CppAsString(typename)))
 #else							/* !HAVE__BUILTIN_TYPES_COMPATIBLE_P */
-#define AssertVariableIsOfType(varname, typename) \
-	StaticAssertStmt(sizeof(varname) == sizeof(typename), \
+#define StaticAssertVariableIsOfType(varname, typename) \
+	StaticAssertDecl(sizeof(varname) == sizeof(typename), \
 	CppAsString(varname) " does not have type " CppAsString(typename))
-#define AssertVariableIsOfTypeMacro(varname, typename) \
+#define StaticAssertVariableIsOfTypeMacro(varname, typename) \
 	(StaticAssertExpr(sizeof(varname) == sizeof(typename), \
 	 CppAsString(varname) " does not have type " CppAsString(typename)))
 #endif							/* HAVE__BUILTIN_TYPES_COMPATIBLE_P */
@@ -1117,16 +1116,20 @@ pg_noreturn extern void ExceptionalCondition(const char *conditionName,
  * Use this, not "char buf[BLCKSZ]", to declare a field or local variable
  * holding a page buffer, if that page might be accessed as a page.  Otherwise
  * the variable might be under-aligned, causing problems on alignment-picky
- * hardware.  We include both "double" and "int64" in the union to ensure that
- * the compiler knows the value must be MAXALIGN'ed (cf. configure's
- * computation of MAXIMUM_ALIGNOF).
+ * hardware.
  */
-typedef union PGAlignedBlock
+typedef struct PGAlignedBlock
 {
-	char		data[BLCKSZ];
-	double		force_align_d;
-	int64		force_align_i64;
+	alignas(MAXIMUM_ALIGNOF) char data[BLCKSZ];
 } PGAlignedBlock;
+
+/*
+ * alignas with extended alignments is buggy in g++ < 9.  As a simple
+ * workaround, we disable these definitions in that case.
+ *
+ * <https://gcc.gnu.org/bugzilla/show_bug.cgi?id=89357>
+ */
+#if !(defined(__cplusplus) && defined(__GNUC__) && !defined(__clang__) && __GNUC__ < 9)
 
 /*
  * Use this to declare a field or local variable holding a page buffer, if that
@@ -1136,26 +1139,24 @@ typedef union PGAlignedBlock
  * for I/O in general, but may be strictly required on some platforms when
  * using direct I/O.
  */
-typedef union PGIOAlignedBlock
+typedef struct PGIOAlignedBlock
 {
-#ifdef pg_attribute_aligned
-	pg_attribute_aligned(PG_IO_ALIGN_SIZE)
-#endif
-	char		data[BLCKSZ];
-	double		force_align_d;
-	int64		force_align_i64;
+	alignas(PG_IO_ALIGN_SIZE) char data[BLCKSZ];
 } PGIOAlignedBlock;
 
 /* Same, but for an XLOG_BLCKSZ-sized buffer */
-typedef union PGAlignedXLogBlock
+typedef struct PGAlignedXLogBlock
 {
-#ifdef pg_attribute_aligned
-	pg_attribute_aligned(PG_IO_ALIGN_SIZE)
-#endif
-	char		data[XLOG_BLCKSZ];
-	double		force_align_d;
-	int64		force_align_i64;
+	alignas(PG_IO_ALIGN_SIZE) char data[XLOG_BLCKSZ];
 } PGAlignedXLogBlock;
+
+#else							/* (g++ < 9) */
+
+/* Allow these types to be used as abstract types when using old g++ */
+typedef struct PGIOAlignedBlock PGIOAlignedBlock;
+typedef struct PGAlignedXLogBlock PGAlignedXLogBlock;
+
+#endif							/* !(g++ < 9) */
 
 /* msb for char */
 #define HIGHBIT					(0x80)
@@ -1255,6 +1256,25 @@ typedef union PGAlignedXLogBlock
 	((underlying_type) (expr))
 #endif
 
+/*
+ * SSE2 instructions are part of the spec for the 64-bit x86 ISA. We assume
+ * that compilers targeting this architecture understand SSE2 intrinsics.
+ */
+#if (defined(__x86_64__) || defined(_M_AMD64))
+#define USE_SSE2
+
+/*
+ * We use the Neon instructions if the compiler provides access to them (as
+ * indicated by __ARM_NEON) and we are on aarch64.  While Neon support is
+ * technically optional for aarch64, it appears that all available 64-bit
+ * hardware does have it.  Neon exists in some 32-bit hardware too, but we
+ * could not realistically use it there without a run-time check, which seems
+ * not worth the trouble for now.
+ */
+#elif defined(__aarch64__) && defined(__ARM_NEON)
+#define USE_NEON
+#endif
+
 /* ----------------------------------------------------------------
  *				Section 9: system-specific hacks
  *
@@ -1289,7 +1309,7 @@ typedef union PGAlignedXLogBlock
  */
 
 #if !HAVE_DECL_FDATASYNC
-extern int	fdatasync(int fildes);
+extern int	fdatasync(int fd);
 #endif
 
 /*

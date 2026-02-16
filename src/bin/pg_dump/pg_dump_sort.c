@@ -4,7 +4,7 @@
  *	  Sort the items of a dump into a safe order for dumping
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -454,6 +454,17 @@ DOTypeNameCompare(const void *p1, const void *p2)
 		if (cmpval != 0)
 			return cmpval;
 	}
+	else if (obj1->objType == DO_SUBSCRIPTION_REL)
+	{
+		SubRelInfo *srobj1 = *(SubRelInfo *const *) p1;
+		SubRelInfo *srobj2 = *(SubRelInfo *const *) p2;
+
+		/* Sort by subscription name, since (namespace, name) match the rel */
+		cmpval = strcmp(srobj1->subinfo->dobj.name,
+						srobj2->subinfo->dobj.name);
+		if (cmpval != 0)
+			return cmpval;
+	}
 
 	/*
 	 * Shouldn't get here except after catalog corruption, but if we do, sort
@@ -561,7 +572,7 @@ sortDumpableObjects(DumpableObject **objs, int numObjs,
 	preDataBoundId = preBoundaryId;
 	postDataBoundId = postBoundaryId;
 
-	ordering = (DumpableObject **) pg_malloc(numObjs * sizeof(DumpableObject *));
+	ordering = pg_malloc_array(DumpableObject *, numObjs);
 	while (!TopoSort(objs, numObjs, ordering, &nOrdering))
 		findDependencyLoops(ordering, nOrdering, numObjs);
 
@@ -640,8 +651,8 @@ TopoSort(DumpableObject **objs,
 	 * We also make a map showing the input-order index of the item with
 	 * dumpId j.
 	 */
-	beforeConstraints = (int *) pg_malloc0((maxDumpId + 1) * sizeof(int));
-	idMap = (int *) pg_malloc((maxDumpId + 1) * sizeof(int));
+	beforeConstraints = pg_malloc0_array(int, (maxDumpId + 1));
+	idMap = pg_malloc_array(int, (maxDumpId + 1));
 	for (i = 0; i < numObjs; i++)
 	{
 		obj = objs[i];
@@ -776,9 +787,9 @@ findDependencyLoops(DumpableObject **objs, int nObjs, int totObjs)
 	bool		fixedloop;
 	int			i;
 
-	processed = (bool *) pg_malloc0((getMaxDumpId() + 1) * sizeof(bool));
-	searchFailed = (DumpId *) pg_malloc0((getMaxDumpId() + 1) * sizeof(DumpId));
-	workspace = (DumpableObject **) pg_malloc(totObjs * sizeof(DumpableObject *));
+	processed = pg_malloc0_array(bool, (getMaxDumpId() + 1));
+	searchFailed = pg_malloc0_array(DumpId, (getMaxDumpId() + 1));
+	workspace = pg_malloc_array(DumpableObject *, totObjs);
 	fixedloop = false;
 
 	for (i = 0; i < nObjs; i++)

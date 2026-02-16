@@ -3,7 +3,7 @@
  * slotfuncs.c
  *	   Support functions for replication slots
  *
- * Copyright (c) 2012-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2012-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/replication/slotfuncs.c
@@ -20,9 +20,21 @@
 #include "replication/logical.h"
 #include "replication/slot.h"
 #include "replication/slotsync.h"
+#include "storage/proc.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/pg_lsn.h"
+
+/*
+ * Map SlotSyncSkipReason enum values to human-readable names.
+ */
+static const char *SlotSyncSkipReasonNames[] = {
+	[SS_SKIP_NONE] = "none",
+	[SS_SKIP_WAL_NOT_FLUSHED] = "wal_not_flushed",
+	[SS_SKIP_WAL_OR_ROWS_REMOVED] = "wal_or_rows_removed",
+	[SS_SKIP_NO_CONSISTENT_SNAPSHOT] = "no_consistent_snapshot",
+	[SS_SKIP_INVALID] = "slot_invalidated"
+};
 
 /*
  * Helper function for creating a new physical replication slot with
@@ -137,6 +149,13 @@ create_logical_replication_slot(char *name, char *plugin,
 						  failover, false);
 
 	/*
+	 * Ensure the logical decoding is enabled before initializing the logical
+	 * decoding context.
+	 */
+	EnsureLogicalDecodingEnabled();
+	Assert(IsLogicalDecodingEnabled());
+
+	/*
 	 * Create logical decoding context to find start point or, if we don't
 	 * need it, to 1) bump slot's restart_lsn and xmin 2) check plugin sanity.
 	 *
@@ -235,7 +254,7 @@ pg_drop_replication_slot(PG_FUNCTION_ARGS)
 Datum
 pg_get_replication_slots(PG_FUNCTION_ARGS)
 {
-#define PG_GET_REPLICATION_SLOTS_COLS 20
+#define PG_GET_REPLICATION_SLOTS_COLS 21
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	XLogRecPtr	currlsn;
 	int			slotno;
@@ -291,10 +310,10 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 			values[i++] = ObjectIdGetDatum(slot_contents.data.database);
 
 		values[i++] = BoolGetDatum(slot_contents.data.persistency == RS_TEMPORARY);
-		values[i++] = BoolGetDatum(slot_contents.active_pid != 0);
+		values[i++] = BoolGetDatum(slot_contents.active_proc != INVALID_PROC_NUMBER);
 
-		if (slot_contents.active_pid != 0)
-			values[i++] = Int32GetDatum(slot_contents.active_pid);
+		if (slot_contents.active_proc != INVALID_PROC_NUMBER)
+			values[i++] = Int32GetDatum(GetPGProcByNumber(slot_contents.active_proc)->pid);
 		else
 			nulls[i++] = true;
 
@@ -359,13 +378,13 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 				 */
 				if (XLogRecPtrIsValid(slot_contents.data.restart_lsn))
 				{
-					int			pid;
+					ProcNumber	procno;
 
 					SpinLockAcquire(&slot->mutex);
-					pid = slot->active_pid;
+					procno = slot->active_proc;
 					slot_contents.data.restart_lsn = slot->data.restart_lsn;
 					SpinLockRelease(&slot->mutex);
-					if (pid != 0)
+					if (procno != INVALID_PROC_NUMBER)
 					{
 						values[i++] = CStringGetTextDatum("unreserved");
 						walstate = WALAVAIL_UNRESERVED;
@@ -442,6 +461,11 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 		values[i++] = BoolGetDatum(slot_contents.data.failover);
 
 		values[i++] = BoolGetDatum(slot_contents.data.synced);
+
+		if (slot_contents.slotsync_skip_reason == SS_SKIP_NONE)
+			nulls[i++] = true;
+		else
+			values[i++] = CStringGetTextDatum(SlotSyncSkipReasonNames[slot_contents.slotsync_skip_reason]);
 
 		Assert(i == PG_GET_REPLICATION_SLOTS_COLS);
 

@@ -8,7 +8,7 @@
  * None of this code is used during normal system operation.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/backend/access/transam/xlogutils.c
@@ -574,7 +574,7 @@ CreateFakeRelcacheEntry(RelFileLocator rlocator)
 	Relation	rel;
 
 	/* Allocate the Relation struct and all related space in one block. */
-	fakeentry = palloc0(sizeof(FakeRelCacheEntryData));
+	fakeentry = palloc0_object(FakeRelCacheEntryData);
 	rel = (Relation) fakeentry;
 
 	rel->rd_rel = &fakeentry->pgc;

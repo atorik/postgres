@@ -3,7 +3,7 @@
  * compress_none.c
  *	 Routines for archivers to read or write an uncompressed stream.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -124,7 +124,7 @@ InitCompressorNone(CompressorState *cs,
 	{
 		NoneCompressorState *nonecs;
 
-		nonecs = (NoneCompressorState *) pg_malloc(sizeof(NoneCompressorState));
+		nonecs = pg_malloc_object(NoneCompressorState);
 		nonecs->buflen = DEFAULT_IO_BUFFER_SIZE;
 		nonecs->buffer = pg_malloc(nonecs->buflen);
 		nonecs->bufdata = 0;

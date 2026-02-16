@@ -37,7 +37,7 @@
  * record, wait for it to be replicated to the standby, and then exit.
  *
  *
- * Portions Copyright (c) 2010-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2010-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/replication/walsender.c
@@ -391,7 +391,6 @@ WalSndShutdown(void)
 		whereToSendOutput = DestNone;
 
 	proc_exit(0);
-	abort();					/* keep the compiler quiet */
 }
 
 /*
@@ -1152,8 +1151,8 @@ parseCreateReplSlotOptions(CreateReplicationSlotCmd *cmd,
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("unrecognized value for CREATE_REPLICATION_SLOT option \"%s\": \"%s\"",
-								defel->defname, action)));
+						 errmsg("unrecognized value for %s option \"%s\": \"%s\"",
+								"CREATE_REPLICATION_SLOT", defel->defname, action)));
 		}
 		else if (strcmp(defel->defname, "reserve_wal") == 0)
 		{
@@ -1296,6 +1295,13 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 
 			need_full_snapshot = true;
 		}
+
+		/*
+		 * Ensure the logical decoding is enabled before initializing the
+		 * logical decoding context.
+		 */
+		EnsureLogicalDecodingEnabled();
+		Assert(IsLogicalDecodingEnabled());
 
 		ctx = CreateInitDecodingContext(cmd->plugin, NIL, need_full_snapshot,
 										InvalidXLogRecPtr,
@@ -1606,6 +1612,32 @@ WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
 }
 
 /*
+ * Handle configuration reload.
+ *
+ * Process the pending configuration file reload and reinitializes synchronous
+ * replication settings. Also releases any waiters that may now be satisfied due
+ * to changes in synchronous replication requirements.
+ */
+static void
+WalSndHandleConfigReload(void)
+{
+	if (!ConfigReloadPending)
+		return;
+
+	ConfigReloadPending = false;
+	ProcessConfigFile(PGC_SIGHUP);
+	SyncRepInitConfig();
+
+	/*
+	 * Recheck and release any now-satisfied waiters after config reload
+	 * changes synchronous replication requirements (e.g., reducing the number
+	 * of sync standbys or changing the standby names).
+	 */
+	if (!am_cascading_walsender)
+		SyncRepReleaseWaiters();
+}
+
+/*
  * Wait until there is no pending write. Also process replies from the other
  * side and check timeouts during that.
  */
@@ -1640,12 +1672,7 @@ ProcessPendingWrites(void)
 		CHECK_FOR_INTERRUPTS();
 
 		/* Process any requests or signals received recently */
-		if (ConfigReloadPending)
-		{
-			ConfigReloadPending = false;
-			ProcessConfigFile(PGC_SIGHUP);
-			SyncRepInitConfig();
-		}
+		WalSndHandleConfigReload();
 
 		/* Try to flush pending output to the client */
 		if (pq_flush_if_writable() != 0)
@@ -1848,12 +1875,7 @@ WalSndWaitForWal(XLogRecPtr loc)
 		CHECK_FOR_INTERRUPTS();
 
 		/* Process any requests or signals received recently */
-		if (ConfigReloadPending)
-		{
-			ConfigReloadPending = false;
-			ProcessConfigFile(PGC_SIGHUP);
-			SyncRepInitConfig();
-		}
+		WalSndHandleConfigReload();
 
 		/* Check for input from the client */
 		ProcessRepliesIfAny();
@@ -2893,12 +2915,7 @@ WalSndLoop(WalSndSendDataCallback send_data)
 		CHECK_FOR_INTERRUPTS();
 
 		/* Process any requests or signals received recently */
-		if (ConfigReloadPending)
-		{
-			ConfigReloadPending = false;
-			ProcessConfigFile(PGC_SIGHUP);
-			SyncRepInitConfig();
-		}
+		WalSndHandleConfigReload();
 
 		/* Check for input from the client */
 		ProcessRepliesIfAny();
@@ -3074,7 +3091,7 @@ InitWalSenderSlot(void)
 
 			SpinLockRelease(&walsnd->mutex);
 			/* don't need the lock anymore */
-			MyWalSnd = (WalSnd *) walsnd;
+			MyWalSnd = walsnd;
 
 			break;
 		}
@@ -3973,7 +3990,7 @@ WalSndGetStateString(WalSndState state)
 static Interval *
 offset_to_interval(TimeOffset offset)
 {
-	Interval   *result = palloc(sizeof(Interval));
+	Interval   *result = palloc_object(Interval);
 
 	result->month = 0;
 	result->day = 0;

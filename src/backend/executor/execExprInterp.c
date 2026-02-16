@@ -46,7 +46,7 @@
  * exported rather than being "static" in this file.)
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -3107,7 +3107,7 @@ ExecEvalParamExtern(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
 
 /*
  * Set value of a param (currently always PARAM_EXEC) from
- * state->res{value,null}.
+ * op->res{value,null}.
  */
 void
 ExecEvalParamSet(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
@@ -3119,8 +3119,8 @@ ExecEvalParamSet(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
 	/* Shouldn't have a pending evaluation anymore */
 	Assert(prm->execPlan == NULL);
 
-	prm->value = state->resvalue;
-	prm->isnull = state->resnull;
+	prm->value = *op->resvalue;
+	prm->isnull = *op->resnull;
 }
 
 /*
@@ -3283,7 +3283,7 @@ ExecEvalNextValueExpr(ExprState *state, ExprEvalStep *op)
 			*op->resvalue = Int32GetDatum((int32) newval);
 			break;
 		case INT8OID:
-			*op->resvalue = Int64GetDatum((int64) newval);
+			*op->resvalue = Int64GetDatum(newval);
 			break;
 		default:
 			elog(ERROR, "unsupported sequence type %u",
@@ -4032,6 +4032,7 @@ ExecEvalScalarArrayOp(ExprState *state, ExprEvalStep *op)
 	int16		typlen;
 	bool		typbyval;
 	char		typalign;
+	uint8		typalignby;
 	char	   *s;
 	bits8	   *bitmap;
 	int			bitmask;
@@ -4086,6 +4087,7 @@ ExecEvalScalarArrayOp(ExprState *state, ExprEvalStep *op)
 	typlen = op->d.scalararrayop.typlen;
 	typbyval = op->d.scalararrayop.typbyval;
 	typalign = op->d.scalararrayop.typalign;
+	typalignby = typalign_to_alignby(typalign);
 
 	/* Initialize result appropriately depending on useOr */
 	result = BoolGetDatum(!useOr);
@@ -4111,7 +4113,7 @@ ExecEvalScalarArrayOp(ExprState *state, ExprEvalStep *op)
 		{
 			elt = fetch_att(s, typbyval, typlen);
 			s = att_addlength_pointer(s, typlen, s);
-			s = (char *) att_align_nominal(s, typalign);
+			s = (char *) att_nominal_alignby(s, typalignby);
 			fcinfo->args[1].value = elt;
 			fcinfo->args[1].isnull = false;
 		}
@@ -4255,6 +4257,7 @@ ExecEvalHashedScalarArrayOp(ExprState *state, ExprEvalStep *op, ExprContext *eco
 		int16		typlen;
 		bool		typbyval;
 		char		typalign;
+		uint8		typalignby;
 		int			nitems;
 		bool		has_nulls = false;
 		char	   *s;
@@ -4272,6 +4275,7 @@ ExecEvalHashedScalarArrayOp(ExprState *state, ExprEvalStep *op, ExprContext *eco
 							 &typlen,
 							 &typbyval,
 							 &typalign);
+		typalignby = typalign_to_alignby(typalign);
 
 		oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_query_memory);
 
@@ -4318,7 +4322,7 @@ ExecEvalHashedScalarArrayOp(ExprState *state, ExprEvalStep *op, ExprContext *eco
 
 				element = fetch_att(s, typbyval, typlen);
 				s = att_addlength_pointer(s, typlen, s);
-				s = (char *) att_align_nominal(s, typalign);
+				s = (char *) att_nominal_alignby(s, typalignby);
 
 				saophash_insert(elements_tab->hashtab, element, &hashfound);
 			}

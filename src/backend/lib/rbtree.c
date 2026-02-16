@@ -17,7 +17,7 @@
  * longest path from root to leaf is only about twice as long as the shortest,
  * so lookups are guaranteed to run in O(lg n) time.
  *
- * Copyright (c) 2009-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2009-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/lib/rbtree.c
@@ -106,7 +106,7 @@ rbt_create(Size node_size,
 		   rbt_freefunc freefunc,
 		   void *arg)
 {
-	RBTree	   *tree = (RBTree *) palloc(sizeof(RBTree));
+	RBTree	   *tree = palloc_object(RBTree);
 
 	Assert(node_size > sizeof(RBTNode));
 

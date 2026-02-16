@@ -2,7 +2,7 @@
  * applyparallelworker.c
  *	   Support routines for applying xact by parallel apply worker
  *
- * Copyright (c) 2023-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2023-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/replication/logical/applyparallelworker.c
@@ -425,7 +425,7 @@ pa_launch_parallel_worker(void)
 	 */
 	oldcontext = MemoryContextSwitchTo(ApplyContext);
 
-	winfo = (ParallelApplyWorkerInfo *) palloc0(sizeof(ParallelApplyWorkerInfo));
+	winfo = palloc0_object(ParallelApplyWorkerInfo);
 
 	/* Setup shared memory. */
 	if (!pa_setup_dsm(winfo))
@@ -640,7 +640,7 @@ pa_detach_all_error_mq(void)
  * Check if there are any pending spooled messages.
  */
 static bool
-pa_has_spooled_message_pending()
+pa_has_spooled_message_pending(void)
 {
 	PartialFileSetState fileset_state;
 
@@ -864,7 +864,7 @@ ParallelApplyWorkerMain(Datum main_arg)
 	shm_mq	   *mq;
 	shm_mq_handle *mqh;
 	shm_mq_handle *error_mqh;
-	RepOriginId originid;
+	ReplOriginId originid;
 	int			worker_slot = DatumGetInt32(main_arg);
 	char		originname[NAMEDATALEN];
 
@@ -962,7 +962,7 @@ ParallelApplyWorkerMain(Datum main_arg)
 	 * origin which was already acquired by its leader process.
 	 */
 	replorigin_session_setup(originid, MyLogicalRepWorker->leader_pid);
-	replorigin_session_origin = originid;
+	replorigin_xact_state.origin = originid;
 	CommitTransactionCommand();
 
 	/*
@@ -1430,8 +1430,8 @@ pa_stream_abort(LogicalRepStreamAbortData *abort_data)
 	 * Update origin state so we can restart streaming from correct position
 	 * in case of crash.
 	 */
-	replorigin_session_origin_lsn = abort_data->abort_lsn;
-	replorigin_session_origin_timestamp = abort_data->abort_time;
+	replorigin_xact_state.origin_lsn = abort_data->abort_lsn;
+	replorigin_xact_state.origin_timestamp = abort_data->abort_time;
 
 	/*
 	 * If the two XIDs are the same, it's in fact abort of toplevel xact, so

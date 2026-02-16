@@ -16,7 +16,7 @@
  *		relevant database in turn.  The former keeps running after the
  *		initial prewarm is complete to update the dump file periodically.
  *
- *	Copyright (c) 2016-2025, PostgreSQL Global Development Group
+ *	Copyright (c) 2016-2026, PostgreSQL Global Development Group
  *
  *	IDENTIFICATION
  *		contrib/pg_prewarm/autoprewarm.c
@@ -703,7 +703,7 @@ apw_dump_now(bool is_bgworker, bool dump_unlogged)
 
 	for (num_blocks = 0, i = 0; i < NBuffers; i++)
 	{
-		uint32		buf_state;
+		uint64		buf_state;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -858,7 +858,7 @@ autoprewarm_dump_now(PG_FUNCTION_ARGS)
 }
 
 static void
-apw_init_state(void *ptr)
+apw_init_state(void *ptr, void *arg)
 {
 	AutoPrewarmSharedState *state = (AutoPrewarmSharedState *) ptr;
 
@@ -880,7 +880,7 @@ apw_init_shmem(void)
 	apw_state = GetNamedDSMSegment("autoprewarm",
 								   sizeof(AutoPrewarmSharedState),
 								   apw_init_state,
-								   &found);
+								   &found, NULL);
 
 	return found;
 }

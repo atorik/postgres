@@ -5,7 +5,7 @@
  * Basically this is stuff that is useful in both pg_dump and pg_dumpall.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/bin/pg_dump/dumputils.c
@@ -160,7 +160,7 @@ buildACLCommands(const char *name, const char *subname, const char *nspname,
 	 * Besides, a false mismatch will just cause the output to be a little
 	 * more verbose than it really needed to be.
 	 */
-	grantitems = (char **) pg_malloc(naclitems * sizeof(char *));
+	grantitems = pg_malloc_array(char *, naclitems);
 	for (i = 0; i < naclitems; i++)
 	{
 		bool		found = false;
@@ -176,7 +176,7 @@ buildACLCommands(const char *name, const char *subname, const char *nspname,
 		if (!found)
 			grantitems[ngrantitems++] = aclitems[i];
 	}
-	revokeitems = (char **) pg_malloc(nbaseitems * sizeof(char *));
+	revokeitems = pg_malloc_array(char *, nbaseitems);
 	for (i = 0; i < nbaseitems; i++)
 	{
 		bool		found = false;
@@ -730,6 +730,7 @@ bool
 variable_is_guc_list_quote(const char *name)
 {
 	if (pg_strcasecmp(name, "local_preload_libraries") == 0 ||
+		pg_strcasecmp(name, "oauth_validator_libraries") == 0 ||
 		pg_strcasecmp(name, "search_path") == 0 ||
 		pg_strcasecmp(name, "session_preload_libraries") == 0 ||
 		pg_strcasecmp(name, "shared_preload_libraries") == 0 ||
@@ -773,8 +774,8 @@ SplitGUCList(char *rawstring, char separator,
 	 * overestimate of the number of pointers we could need.  Allow one for
 	 * list terminator.
 	 */
-	*namelist = nextptr = (char **)
-		pg_malloc((strlen(rawstring) / 2 + 2) * sizeof(char *));
+	*namelist = nextptr =
+		pg_malloc_array(char *, (strlen(rawstring) / 2 + 2));
 	*nextptr = NULL;
 
 	while (isspace((unsigned char) *nextp))

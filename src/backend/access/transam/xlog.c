@@ -28,7 +28,7 @@
  * the current system state, and for starting/stopping backups.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/backend/access/transam/xlog.c
@@ -80,6 +80,7 @@
 #include "postmaster/walwriter.h"
 #include "replication/origin.h"
 #include "replication/slot.h"
+#include "replication/slotsync.h"
 #include "replication/snapbuild.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
@@ -668,7 +669,6 @@ static XLogRecPtr CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn,
 												  TimeLineID newTLI);
 static void CheckPointGuts(XLogRecPtr checkPointRedo, int flags);
 static void KeepLogSeg(XLogRecPtr recptr, XLogSegNo *logSegNo);
-static XLogRecPtr XLogGetReplicationSlotMinimumLSN(void);
 
 static void AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli,
 								  bool opportunistic);
@@ -2060,7 +2060,7 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 					/* Have to write it ourselves */
 					TRACE_POSTGRESQL_WAL_BUFFER_WRITE_DIRTY_START();
 					WriteRqst.Write = OldPageRqstPtr;
-					WriteRqst.Flush = 0;
+					WriteRqst.Flush = InvalidXLogRecPtr;
 					XLogWrite(WriteRqst, tli, false);
 					LWLockRelease(WALWriteLock);
 					pgWalUsage.wal_buffers_full++;
@@ -2678,7 +2678,7 @@ XLogSetReplicationSlotMinimumLSN(XLogRecPtr lsn)
  * Return the oldest LSN we must retain to satisfy the needs of some
  * replication slot.
  */
-static XLogRecPtr
+XLogRecPtr
 XLogGetReplicationSlotMinimumLSN(void)
 {
 	XLogRecPtr	retval;
@@ -2884,7 +2884,9 @@ XLogFlush(XLogRecPtr record)
 		if (CommitDelay > 0 && enableFsync &&
 			MinimumActiveBackends(CommitSiblings))
 		{
+			pgstat_report_wait_start(WAIT_EVENT_COMMIT_DELAY);
 			pg_usleep(CommitDelay);
+			pgstat_report_wait_end();
 
 			/*
 			 * Re-check how far we can now flush the WAL. It's generally not
@@ -2914,6 +2916,14 @@ XLogFlush(XLogRecPtr record)
 
 	/* wake up walsenders now that we've released heavily contended locks */
 	WalSndWakeupProcessRequests(true, !RecoveryInProgress());
+
+	/*
+	 * If we flushed an LSN that someone was waiting for, notify the waiters.
+	 */
+	if (waitLSNState &&
+		(LogwrtResult.Flush >=
+		 pg_atomic_read_u64(&waitLSNState->minWaitedLSN[WAIT_LSN_TYPE_PRIMARY_FLUSH])))
+		WaitLSNWakeup(WAIT_LSN_TYPE_PRIMARY_FLUSH, LogwrtResult.Flush);
 
 	/*
 	 * If we still haven't flushed to the request point then we have a
@@ -3067,7 +3077,7 @@ XLogBackgroundFlush(void)
 	else
 	{
 		/* no flushing, this time round */
-		WriteRqst.Flush = 0;
+		WriteRqst.Flush = InvalidXLogRecPtr;
 	}
 
 #ifdef WAL_DEBUG
@@ -3096,6 +3106,14 @@ XLogBackgroundFlush(void)
 
 	/* wake up walsenders now that we've released heavily contended locks */
 	WalSndWakeupProcessRequests(true, !RecoveryInProgress());
+
+	/*
+	 * If we flushed an LSN that someone was waiting for, notify the waiters.
+	 */
+	if (waitLSNState &&
+		(LogwrtResult.Flush >=
+		 pg_atomic_read_u64(&waitLSNState->minWaitedLSN[WAIT_LSN_TYPE_PRIMARY_FLUSH])))
+		WaitLSNWakeup(WAIT_LSN_TYPE_PRIMARY_FLUSH, LogwrtResult.Flush);
 
 	/*
 	 * Great, done. To take some work off the critical path, try to initialize
@@ -4887,6 +4905,25 @@ show_in_hot_standby(void)
 }
 
 /*
+ * GUC show_hook for effective_wal_level
+ */
+const char *
+show_effective_wal_level(void)
+{
+	if (wal_level == WAL_LEVEL_MINIMAL)
+		return "minimal";
+
+	/*
+	 * During recovery, effective_wal_level reflects the primary's
+	 * configuration rather than the local wal_level value.
+	 */
+	if (RecoveryInProgress())
+		return IsXLogLogicalInfoEnabled() ? "logical" : "replica";
+
+	return XLogLogicalInfoActive() ? "logical" : "replica";
+}
+
+/*
  * Read the control file, set respective GUCs.
  *
  * This is to be called during startup, including a crash recovery cycle,
@@ -4902,7 +4939,7 @@ void
 LocalProcessControlFile(bool reset)
 {
 	Assert(reset || ControlFile == NULL);
-	ControlFile = palloc(sizeof(ControlFileData));
+	ControlFile = palloc_object(ControlFileData);
 	ReadControlFile();
 }
 
@@ -5089,7 +5126,7 @@ void
 BootStrapXLOG(uint32 data_checksum_version)
 {
 	CheckPoint	checkPoint;
-	char	   *buffer;
+	PGAlignedXLogBlock buffer;
 	XLogPageHeader page;
 	XLogLongPageHeader longpage;
 	XLogRecord *record;
@@ -5118,10 +5155,8 @@ BootStrapXLOG(uint32 data_checksum_version)
 	sysidentifier |= ((uint64) tv.tv_usec) << 12;
 	sysidentifier |= getpid() & 0xFFF;
 
-	/* page buffer must be aligned suitably for O_DIRECT */
-	buffer = (char *) palloc(XLOG_BLCKSZ + XLOG_BLCKSZ);
-	page = (XLogPageHeader) TYPEALIGN(XLOG_BLCKSZ, buffer);
-	memset(page, 0, XLOG_BLCKSZ);
+	memset(&buffer, 0, sizeof buffer);
+	page = (XLogPageHeader) &buffer;
 
 	/*
 	 * Set up information for the initial checkpoint record
@@ -5134,12 +5169,13 @@ BootStrapXLOG(uint32 data_checksum_version)
 	checkPoint.ThisTimeLineID = BootstrapTimeLineID;
 	checkPoint.PrevTimeLineID = BootstrapTimeLineID;
 	checkPoint.fullPageWrites = fullPageWrites;
+	checkPoint.logicalDecodingEnabled = (wal_level == WAL_LEVEL_LOGICAL);
 	checkPoint.wal_level = wal_level;
 	checkPoint.nextXid =
 		FullTransactionIdFromEpochAndXid(0, FirstNormalTransactionId);
 	checkPoint.nextOid = FirstGenbkiObjectId;
 	checkPoint.nextMulti = FirstMultiXactId;
-	checkPoint.nextMultiOffset = 0;
+	checkPoint.nextMultiOffset = 1;
 	checkPoint.oldestXid = FirstNormalTransactionId;
 	checkPoint.oldestXidDB = Template1DbOid;
 	checkPoint.oldestMulti = FirstMultiXactId;
@@ -5155,7 +5191,7 @@ BootStrapXLOG(uint32 data_checksum_version)
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
 	AdvanceOldestClogXid(checkPoint.oldestXid);
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
-	SetMultiXactIdLimit(checkPoint.oldestMulti, checkPoint.oldestMultiDB, true);
+	SetMultiXactIdLimit(checkPoint.oldestMulti, checkPoint.oldestMultiDB);
 	SetCommitTsLimit(InvalidTransactionId, InvalidTransactionId);
 
 	/* Set up the XLOG page header */
@@ -5171,7 +5207,7 @@ BootStrapXLOG(uint32 data_checksum_version)
 	/* Insert the initial checkpoint record */
 	recptr = ((char *) page + SizeOfXLogLongPHD);
 	record = (XLogRecord *) recptr;
-	record->xl_prev = 0;
+	record->xl_prev = InvalidXLogRecPtr;
 	record->xl_xid = InvalidTransactionId;
 	record->xl_tot_len = SizeOfXLogRecord + SizeOfXLogRecordDataHeaderShort + sizeof(checkPoint);
 	record->xl_info = XLOG_CHECKPOINT_SHUTDOWN;
@@ -5202,7 +5238,7 @@ BootStrapXLOG(uint32 data_checksum_version)
 	/* Write the first page with the initial record */
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_WAL_BOOTSTRAP_WRITE);
-	if (write(openLogFile, page, XLOG_BLCKSZ) != XLOG_BLCKSZ)
+	if (write(openLogFile, &buffer, XLOG_BLCKSZ) != XLOG_BLCKSZ)
 	{
 		/* if write didn't set errno, assume problem is no disk space */
 		if (errno == 0)
@@ -5241,8 +5277,6 @@ BootStrapXLOG(uint32 data_checksum_version)
 	BootStrapCommitTs();
 	BootStrapSUBTRANS();
 	BootStrapMultiXact();
-
-	pfree(buffer);
 
 	/*
 	 * Force control file to be read - in contrast to normal processing we'd
@@ -5636,7 +5670,7 @@ StartupXLOG(void)
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
 	AdvanceOldestClogXid(checkPoint.oldestXid);
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
-	SetMultiXactIdLimit(checkPoint.oldestMulti, checkPoint.oldestMultiDB, true);
+	SetMultiXactIdLimit(checkPoint.oldestMulti, checkPoint.oldestMultiDB);
 	SetCommitTsLimit(checkPoint.oldestCommitTsXid,
 					 checkPoint.newestCommitTsXid);
 
@@ -5659,6 +5693,12 @@ StartupXLOG(void)
 	 * required resources.
 	 */
 	StartupReplicationSlots();
+
+	/*
+	 * Startup the logical decoding status with the last status stored in the
+	 * checkpoint record.
+	 */
+	StartupLogicalDecodingStatus(checkPoint.logicalDecodingEnabled);
 
 	/*
 	 * Startup logical state, needs to be setup now so we have proper data
@@ -6208,6 +6248,12 @@ StartupXLOG(void)
 	 */
 	CompleteCommitTsInitialization();
 
+	/*
+	 * Update logical decoding status in shared memory and write an
+	 * XLOG_LOGICAL_DECODING_STATUS_CHANGE, if necessary.
+	 */
+	UpdateLogicalDecodingStatusEndOfRecovery();
+
 	/* Clean up EndOfWalRecoveryInfo data to appease Valgrind leak checking */
 	if (endOfRecoveryInfo->lastPage)
 		pfree(endOfRecoveryInfo->lastPage);
@@ -6240,10 +6286,18 @@ StartupXLOG(void)
 	LWLockRelease(ControlFileLock);
 
 	/*
-	 * Wake up all waiters for replay LSN.  They need to report an error that
-	 * recovery was ended before reaching the target LSN.
+	 * Wake up the checkpointer process as there might be a request to disable
+	 * logical decoding by concurrent slot drop.
 	 */
-	WaitLSNWakeup(WAIT_LSN_TYPE_REPLAY, InvalidXLogRecPtr);
+	WakeupCheckpointer();
+
+	/*
+	 * Wake up all waiters.  They need to report an error that recovery was
+	 * ended before reaching the target LSN.
+	 */
+	WaitLSNWakeup(WAIT_LSN_TYPE_STANDBY_REPLAY, InvalidXLogRecPtr);
+	WaitLSNWakeup(WAIT_LSN_TYPE_STANDBY_WRITE, InvalidXLogRecPtr);
+	WaitLSNWakeup(WAIT_LSN_TYPE_STANDBY_FLUSH, InvalidXLogRecPtr);
 
 	/*
 	 * Shutdown the recovery environment.  This must occur after
@@ -7003,6 +7057,10 @@ CreateCheckPoint(int flags)
 	 */
 	SyncPreCheckpoint();
 
+	/* Run these points outside the critical section. */
+	INJECTION_POINT("create-checkpoint-initial", NULL);
+	INJECTION_POINT_LOAD("create-checkpoint-run");
+
 	/*
 	 * Use a critical section to force system panic if we have trouble.
 	 */
@@ -7153,6 +7211,8 @@ CreateCheckPoint(int flags)
 	if (log_checkpoints)
 		LogCheckpointStart(flags, false);
 
+	INJECTION_POINT_CACHED("create-checkpoint-run", NULL);
+
 	/* Update the process title */
 	update_checkpoint_display(flags, false, false);
 
@@ -7182,6 +7242,8 @@ CreateCheckPoint(int flags)
 	if (!shutdown)
 		checkPoint.nextOid += TransamVariables->oidCount;
 	LWLockRelease(OidGenLock);
+
+	checkPoint.logicalDecodingEnabled = IsLogicalDecodingEnabled();
 
 	MultiXactGetCheckptMulti(shutdown,
 							 &checkPoint.nextMulti,
@@ -7839,6 +7901,9 @@ CreateRestartPoint(int flags)
 	replayPtr = GetXLogReplayRecPtr(&replayTLI);
 	endptr = (receivePtr < replayPtr) ? replayPtr : receivePtr;
 	KeepLogSeg(endptr, &_logSegNo);
+
+	INJECTION_POINT("restartpoint-before-slot-invalidation", NULL);
+
 	if (InvalidateObsoleteReplicationSlots(RS_INVAL_WAL_REMOVED | RS_INVAL_IDLE_TIMEOUT,
 										   _logSegNo, InvalidOid,
 										   InvalidTransactionId))
@@ -8577,21 +8642,6 @@ xlog_redo(XLogReaderState *record)
 		/* Update our copy of the parameters in pg_control */
 		memcpy(&xlrec, XLogRecGetData(record), sizeof(xl_parameter_change));
 
-		/*
-		 * Invalidate logical slots if we are in hot standby and the primary
-		 * does not have a WAL level sufficient for logical decoding. No need
-		 * to search for potentially conflicting logically slots if standby is
-		 * running with wal_level lower than logical, because in that case, we
-		 * would have either disallowed creation of logical slots or
-		 * invalidated existing ones.
-		 */
-		if (InRecovery && InHotStandby &&
-			xlrec.wal_level < WAL_LEVEL_LOGICAL &&
-			wal_level >= WAL_LEVEL_LOGICAL)
-			InvalidateObsoleteReplicationSlots(RS_INVAL_WAL_LEVEL,
-											   0, InvalidOid,
-											   InvalidTransactionId);
-
 		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 		ControlFile->MaxConnections = xlrec.MaxConnections;
 		ControlFile->max_worker_processes = xlrec.max_worker_processes;
@@ -8658,6 +8708,55 @@ xlog_redo(XLogReaderState *record)
 	else if (info == XLOG_CHECKPOINT_REDO)
 	{
 		/* nothing to do here, just for informational purposes */
+	}
+	else if (info == XLOG_LOGICAL_DECODING_STATUS_CHANGE)
+	{
+		bool		status;
+
+		memcpy(&status, XLogRecGetData(record), sizeof(bool));
+
+		/*
+		 * We need to toggle the logical decoding status and update the
+		 * XLogLogicalInfo cache of processes synchronously because
+		 * XLogLogicalInfoActive() is used even during read-only queries
+		 * (e.g., via RelationIsAccessibleInLogicalDecoding()). In the
+		 * 'disable' case, it is safe to invalidate existing slots after
+		 * disabling logical decoding because logical decoding cannot process
+		 * subsequent WAL records, which may not contain logical information.
+		 */
+		if (status)
+			EnableLogicalDecoding();
+		else
+			DisableLogicalDecoding();
+
+		elog(DEBUG1, "update logical decoding status to %d during recovery",
+			 status);
+
+		if (InRecovery && InHotStandby)
+		{
+			if (!status)
+			{
+				/*
+				 * Invalidate logical slots if we are in hot standby and the
+				 * primary disabled logical decoding.
+				 */
+				InvalidateObsoleteReplicationSlots(RS_INVAL_WAL_LEVEL,
+												   0, InvalidOid,
+												   InvalidTransactionId);
+			}
+			else if (sync_replication_slots)
+			{
+				/*
+				 * Signal the postmaster to launch the slotsync worker.
+				 *
+				 * XXX: For simplicity, we keep the slotsync worker running
+				 * even after logical decoding is disabled. A future
+				 * improvement can consider starting and stopping the worker
+				 * based on logical decoding status change.
+				 */
+				kill(PostmasterPid, SIGUSR1);
+			}
+		}
 	}
 }
 
@@ -9135,7 +9234,7 @@ do_pg_backup_start(const char *backupidstr, bool fast, List **tablespaces,
 				continue;
 			}
 
-			ti = palloc(sizeof(tablespaceinfo));
+			ti = palloc_object(tablespaceinfo);
 			ti->oid = tsoid;
 			ti->path = pstrdup(linkpath);
 			ti->rpath = relpath;

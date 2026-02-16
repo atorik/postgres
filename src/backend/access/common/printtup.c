@@ -5,7 +5,7 @@
  *	  clients and standalone backends are supported here).
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -71,7 +71,7 @@ typedef struct
 DestReceiver *
 printtup_create_DR(CommandDest dest)
 {
-	DR_printtup *self = (DR_printtup *) palloc0(sizeof(DR_printtup));
+	DR_printtup *self = palloc0_object(DR_printtup);
 
 	self->pub.receiveSlot = printtup;	/* might get changed later */
 	self->pub.rStartup = printtup_startup;
@@ -431,7 +431,7 @@ printatt(unsigned attributeId,
 		   value != NULL ? " = \"" : "",
 		   value != NULL ? value : "",
 		   value != NULL ? "\"" : "",
-		   (unsigned int) (attributeP->atttypid),
+		   attributeP->atttypid,
 		   attributeP->attlen,
 		   attributeP->atttypmod,
 		   attributeP->attbyval ? 't' : 'f');

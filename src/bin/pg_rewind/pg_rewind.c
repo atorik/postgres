@@ -3,7 +3,7 @@
  * pg_rewind.c
  *	  Synchronizes a PostgreSQL data directory to a new timeline
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
  *-------------------------------------------------------------------------
  */
@@ -377,7 +377,7 @@ main(int argc, char **argv)
 	{
 		pg_log_info("source and target cluster are on the same timeline");
 		rewind_needed = false;
-		target_wal_endrec = 0;
+		target_wal_endrec = InvalidXLogRecPtr;
 	}
 	else
 	{
@@ -514,9 +514,9 @@ main(int argc, char **argv)
 	 */
 	if (showprogress)
 	{
-		pg_log_info("need to copy %lu MB (total source directory size is %lu MB)",
-					(unsigned long) (filemap->fetch_size / (1024 * 1024)),
-					(unsigned long) (filemap->total_size / (1024 * 1024)));
+		pg_log_info("need to copy %" PRIu64 " MB (total source directory size is %" PRIu64 " MB)",
+					filemap->fetch_size / (1024 * 1024),
+					filemap->total_size / (1024 * 1024));
 
 		fetch_size = filemap->fetch_size;
 		fetch_done = 0;
@@ -1035,8 +1035,8 @@ digestControlFile(ControlFileData *ControlFile, const char *content,
 				  size_t size)
 {
 	if (size != PG_CONTROL_FILE_SIZE)
-		pg_fatal("unexpected control file size %d, expected %d",
-				 (int) size, PG_CONTROL_FILE_SIZE);
+		pg_fatal("unexpected control file size %zu, expected %d",
+				 size, PG_CONTROL_FILE_SIZE);
 
 	memcpy(ControlFile, content, sizeof(ControlFileData));
 

@@ -3,7 +3,7 @@
  * readfuncs.c
  *	  Reader functions for Postgres tree nodes.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -25,8 +25,6 @@
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
-
-#include <math.h>
 
 #include "miscadmin.h"
 #include "nodes/bitmapset.h"
@@ -599,8 +597,7 @@ parseNodeString(void)
 Datum
 readDatum(bool typbyval)
 {
-	Size		length,
-				i;
+	Size		length;
 	int			tokenLength;
 	const char *token;
 	Datum		res;
@@ -623,7 +620,7 @@ readDatum(bool typbyval)
 			elog(ERROR, "byval datum but length = %zu", length);
 		res = (Datum) 0;
 		s = (char *) (&res);
-		for (i = 0; i < (Size) sizeof(Datum); i++)
+		for (Size i = 0; i < (Size) sizeof(Datum); i++)
 		{
 			token = pg_strtok(&tokenLength);
 			s[i] = (char) atoi(token);
@@ -634,7 +631,7 @@ readDatum(bool typbyval)
 	else
 	{
 		s = (char *) palloc(length);
-		for (i = 0; i < length; i++)
+		for (Size i = 0; i < length; i++)
 		{
 			token = pg_strtok(&tokenLength);
 			s[i] = (char) atoi(token);

@@ -3,7 +3,7 @@
  * lockfuncs.c
  *		Functions for SQL access to various lock-manager capabilities.
  *
- * Copyright (c) 2002-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2002-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		src/backend/utils/adt/lockfuncs.c
@@ -152,7 +152,7 @@ pg_lock_status(PG_FUNCTION_ARGS)
 		 * Collect all the locking information that we will format and send
 		 * out as a result set.
 		 */
-		mystatus = (PG_Lock_Status *) palloc(sizeof(PG_Lock_Status));
+		mystatus = palloc_object(PG_Lock_Status);
 		funcctx->user_fctx = mystatus;
 
 		mystatus->lockData = GetLockStatusData();
@@ -329,7 +329,7 @@ pg_lock_status(PG_FUNCTION_ARGS)
 				values[1] = ObjectIdGetDatum(instance->locktag.locktag_field1);
 				values[8] = ObjectIdGetDatum(instance->locktag.locktag_field2);
 				values[6] = ObjectIdGetDatum(instance->locktag.locktag_field3);
-				values[9] = Int16GetDatum(instance->locktag.locktag_field4);
+				values[9] = UInt16GetDatum(instance->locktag.locktag_field4);
 				nulls[2] = true;
 				nulls[3] = true;
 				nulls[4] = true;
@@ -343,7 +343,7 @@ pg_lock_status(PG_FUNCTION_ARGS)
 				values[1] = ObjectIdGetDatum(instance->locktag.locktag_field1);
 				values[7] = ObjectIdGetDatum(instance->locktag.locktag_field2);
 				values[8] = ObjectIdGetDatum(instance->locktag.locktag_field3);
-				values[9] = Int16GetDatum(instance->locktag.locktag_field4);
+				values[9] = UInt16GetDatum(instance->locktag.locktag_field4);
 				nulls[2] = true;
 				nulls[3] = true;
 				nulls[4] = true;

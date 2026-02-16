@@ -13,7 +13,7 @@
  * summary files when the file timestamp is older than a configurable
  * threshold (but only if the WAL has been removed first).
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/postmaster/walsummarizer.c
@@ -234,7 +234,6 @@ WalSummarizerMain(const void *startup_data, size_t startup_data_len)
 
 	Assert(startup_data_len == 0);
 
-	MyBackendType = B_WAL_SUMMARIZER;
 	AuxiliaryProcessMainCommon();
 
 	ereport(DEBUG1,
@@ -649,7 +648,7 @@ WakeupWalSummarizer(void)
 	LWLockRelease(WALSummarizerLock);
 
 	if (pgprocno != INVALID_PROC_NUMBER)
-		SetLatch(&ProcGlobal->allProcs[pgprocno].procLatch);
+		SetLatch(&GetPGProcByNumber(pgprocno)->procLatch);
 }
 
 /*
@@ -920,8 +919,7 @@ SummarizeWAL(TimeLineID tli, XLogRecPtr start_lsn, bool exact,
 	bool		fast_forward = true;
 
 	/* Initialize private data for xlogreader. */
-	private_data = (SummarizerReadLocalXLogPrivate *)
-		palloc0(sizeof(SummarizerReadLocalXLogPrivate));
+	private_data = palloc0_object(SummarizerReadLocalXLogPrivate);
 	private_data->tli = tli;
 	private_data->historic = XLogRecPtrIsValid(switch_lsn);
 	private_data->read_upto = maximum_lsn;

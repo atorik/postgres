@@ -7,7 +7,7 @@
  * knowledge of the tuple descriptor. Fixed column widths, NOT NULLness, etc
  * can be taken advantage of.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -156,12 +156,12 @@ slot_compile_deform(LLVMJitContext *context, TupleDesc desc,
 
 	b = LLVMCreateBuilderInContext(lc);
 
-	attcheckattnoblocks = palloc(sizeof(LLVMBasicBlockRef) * natts);
-	attstartblocks = palloc(sizeof(LLVMBasicBlockRef) * natts);
-	attisnullblocks = palloc(sizeof(LLVMBasicBlockRef) * natts);
-	attcheckalignblocks = palloc(sizeof(LLVMBasicBlockRef) * natts);
-	attalignblocks = palloc(sizeof(LLVMBasicBlockRef) * natts);
-	attstoreblocks = palloc(sizeof(LLVMBasicBlockRef) * natts);
+	attcheckattnoblocks = palloc_array(LLVMBasicBlockRef, natts);
+	attstartblocks = palloc_array(LLVMBasicBlockRef, natts);
+	attisnullblocks = palloc_array(LLVMBasicBlockRef, natts);
+	attcheckalignblocks = palloc_array(LLVMBasicBlockRef, natts);
+	attalignblocks = palloc_array(LLVMBasicBlockRef, natts);
+	attstoreblocks = palloc_array(LLVMBasicBlockRef, natts);
 
 	known_alignment = 0;
 

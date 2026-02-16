@@ -3,7 +3,7 @@
  * miscinit.c
  *	  miscellaneous initialization support stuff
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -266,7 +266,7 @@ GetBackendTypeDesc(BackendType backendType)
 
 	switch (backendType)
 	{
-#define PG_PROCTYPE(bktype, description, main_func, shmem_attach)	\
+#define PG_PROCTYPE(bktype, bkcategory, description, main_func, shmem_attach)	\
 		case bktype: backendDesc = description; break;
 #include "postmaster/proctypelist.h"
 #undef PG_PROCTYPE

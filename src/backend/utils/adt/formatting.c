@@ -4,7 +4,7 @@
  * src/backend/utils/adt/formatting.c
  *
  *
- *	 Portions Copyright (c) 1999-2025, PostgreSQL Global Development Group
+ *	 Portions Copyright (c) 1999-2026, PostgreSQL Global Development Group
  *
  *
  *	 TO_CHAR(); TO_TIMESTAMP(); TO_DATE(); TO_NUMBER();
@@ -68,17 +68,9 @@
 #include <math.h>
 #include <float.h>
 #include <limits.h>
-#include <wctype.h>
 
-#ifdef USE_ICU
-#include <unicode/ustring.h>
-#endif
-
-#include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
 #include "common/int.h"
-#include "common/unicode_case.h"
-#include "common/unicode_category.h"
 #include "mb/pg_wchar.h"
 #include "nodes/miscnodes.h"
 #include "parser/scansup.h"
@@ -1046,8 +1038,9 @@ typedef struct NUMProc
 	char	   *number,			/* string with number	*/
 			   *number_p,		/* pointer to current number position */
 			   *inout,			/* in / out buffer	*/
-			   *inout_p,		/* pointer to current inout position */
-			   *last_relevant,	/* last relevant number after decimal point */
+			   *inout_p;		/* pointer to current inout position */
+
+	const char *last_relevant,	/* last relevant number after decimal point */
 
 			   *L_negative_sign,	/* Locale */
 			   *L_positive_sign,
@@ -1118,7 +1111,7 @@ static FormatNode *NUM_cache(int len, NUMDesc *Num, const text *pars_str, bool *
 static char *int_to_roman(int number);
 static int	roman_to_int(NUMProc *Np, size_t input_len);
 static void NUM_prepare_locale(NUMProc *Np);
-static char *get_last_relevant_decnum(const char *num);
+static const char *get_last_relevant_decnum(const char *num);
 static void NUM_numpart_from_char(NUMProc *Np, int id, size_t input_len);
 static void NUM_numpart_to_char(NUMProc *Np, int id);
 static char *NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
@@ -1445,7 +1438,7 @@ parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_DATETIME_FORMAT),
 							 errmsg("invalid datetime format separator: \"%s\"",
-									pnstrdup(str, pg_mblen(str)))));
+									pnstrdup(str, pg_mblen_cstr(str)))));
 
 				if (*str == ' ')
 					n->type = NODE_TYPE_SPACE;
@@ -1475,7 +1468,7 @@ parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 					/* backslash quotes the next character, if any */
 					if (*str == '\\' && *(str + 1))
 						str++;
-					chlen = pg_mblen(str);
+					chlen = pg_mblen_cstr(str);
 					n->type = NODE_TYPE_CHAR;
 					memcpy(n->character, str, chlen);
 					n->character[chlen] = '\0';
@@ -1493,7 +1486,7 @@ parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 				 */
 				if (*str == '\\' && *(str + 1) == '"')
 					str++;
-				chlen = pg_mblen(str);
+				chlen = pg_mblen_cstr(str);
 
 				if ((flags & DCH_FLAG) && is_separator_char(str))
 					n->type = NODE_TYPE_SEPARATOR;
@@ -1615,16 +1608,6 @@ str_numth(char *dest, const char *num, enum TH_Case type)
 /*****************************************************************************
  *			upper/lower/initcap functions
  *****************************************************************************/
-
-/*
- * If the system provides the needed functions for wide-character manipulation
- * (which are all standardized by C99), then we implement upper/lower/initcap
- * using wide-character functions, if necessary.  Otherwise we use the
- * traditional <ctype.h> functions, which of course will not work as desired
- * in multibyte character sets.  Note that in either case we are effectively
- * assuming that the database character encoding matches the encoding implied
- * by LC_CTYPE.
- */
 
 /*
  * collation-aware, wide-character-aware lower function
@@ -1842,7 +1825,7 @@ str_casefold(const char *buff, size_t nbytes, Oid collid)
 		ereport(ERROR,
 				(errcode(ERRCODE_INDETERMINATE_COLLATION),
 				 errmsg("could not determine which collation to use for %s function",
-						"lower()"),
+						"casefold()"),
 				 errhint("Use the COLLATE clause to set the collation explicitly.")));
 	}
 
@@ -2009,8 +1992,8 @@ asc_toupper_z(const char *buff)
 	do { \
 		if (IS_SUFFIX_THth(_suf)) \
 		{ \
-			if (*(ptr)) (ptr) += pg_mblen(ptr); \
-			if (*(ptr)) (ptr) += pg_mblen(ptr); \
+			if (*(ptr)) (ptr) += pg_mblen_cstr(ptr); \
+			if (*(ptr)) (ptr) += pg_mblen_cstr(ptr); \
 		} \
 	} while (0)
 
@@ -3200,7 +3183,7 @@ DCH_from_char(FormatNode *node, const char *in, TmFromChar *out,
 				 * insist that the consumed character match the format's
 				 * character.
 				 */
-				s += pg_mblen(s);
+				s += pg_mblen_cstr(s);
 			}
 			continue;
 		}
@@ -3222,11 +3205,11 @@ DCH_from_char(FormatNode *node, const char *in, TmFromChar *out,
 				if (extra_skip > 0)
 					extra_skip--;
 				else
-					s += pg_mblen(s);
+					s += pg_mblen_cstr(s);
 			}
 			else
 			{
-				int			chlen = pg_mblen(s);
+				int			chlen = pg_mblen_cstr(s);
 
 				/*
 				 * Standard mode requires strict match of format characters.
@@ -4273,7 +4256,7 @@ parse_datetime(text *date_txt, text *fmt, Oid collid, bool strict,
 	{
 		if (flags & DCH_ZONED)
 		{
-			TimeTzADT  *result = palloc(sizeof(TimeTzADT));
+			TimeTzADT  *result = palloc_object(TimeTzADT);
 
 			if (ftz.has_tz)
 			{
@@ -5307,10 +5290,10 @@ NUM_prepare_locale(NUMProc *Np)
  * If there is no decimal point, return NULL (which will result in same
  * behavior as if FM hadn't been specified).
  */
-static char *
+static const char *
 get_last_relevant_decnum(const char *num)
 {
-	char	   *result,
+	const char *result,
 			   *p = strchr(num, '.');
 
 #ifdef DEBUG_TO_FROM_CHAR
@@ -5741,13 +5724,15 @@ NUM_numpart_to_char(NUMProc *Np, int id)
 static void
 NUM_eat_non_data_chars(NUMProc *Np, int n, size_t input_len)
 {
+	const char *end = Np->inout + input_len;
+
 	while (n-- > 0)
 	{
 		if (OVERLOAD_TEST)
 			break;				/* end of input */
 		if (strchr("0123456789.,+-", *Np->inout_p) != NULL)
 			break;				/* it's a data character */
-		Np->inout_p += pg_mblen(Np->inout_p);
+		Np->inout_p += pg_mblen_range(Np->inout_p, end);
 	}
 }
 
@@ -6184,7 +6169,7 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 			}
 			else
 			{
-				Np->inout_p += pg_mblen(Np->inout_p);
+				Np->inout_p += pg_mblen_range(Np->inout_p, Np->inout + input_len);
 			}
 			continue;
 		}

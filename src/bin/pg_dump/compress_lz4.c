@@ -3,7 +3,7 @@
  * compress_lz4.c
  *	 Routines for archivers to write a LZ4 compressed data stream.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -305,7 +305,7 @@ InitCompressorLZ4(CompressorState *cs, const pg_compress_specification compressi
 	if (cs->readF)
 		return;
 
-	state = pg_malloc0(sizeof(*state));
+	state = pg_malloc0_object(LZ4State);
 	if (cs->compression_spec.level >= 0)
 		state->prefs.compressionLevel = cs->compression_spec.level;
 
@@ -754,7 +754,7 @@ InitCompressFileHandleLZ4(CompressFileHandle *CFH,
 	CFH->get_error_func = LZ4Stream_get_error;
 
 	CFH->compression_spec = compression_spec;
-	state = pg_malloc0(sizeof(*state));
+	state = pg_malloc0_object(LZ4State);
 	if (CFH->compression_spec.level >= 0)
 		state->prefs.compressionLevel = CFH->compression_spec.level;
 

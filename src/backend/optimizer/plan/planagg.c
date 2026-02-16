@@ -17,7 +17,7 @@
  * scan all the rows anyway.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -336,7 +336,7 @@ build_minmax_path(PlannerInfo *root, MinMaxAggInfo *mminfo,
 	 * than before.  (This means that when we are done, there will be no Vars
 	 * of level 1, which is why the subquery can become an initplan.)
 	 */
-	subroot = (PlannerInfo *) palloc(sizeof(PlannerInfo));
+	subroot = palloc_object(PlannerInfo);
 	memcpy(subroot, root, sizeof(PlannerInfo));
 	subroot->query_level++;
 	subroot->parent_root = root;

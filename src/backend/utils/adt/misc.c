@@ -3,7 +3,7 @@
  * misc.c
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -487,7 +487,7 @@ pg_get_catalog_foreign_keys(PG_FUNCTION_ARGS)
 		 * array_in, and it wouldn't be very efficient if we could.  Fill an
 		 * FmgrInfo to use for the call.
 		 */
-		arrayinp = (FmgrInfo *) palloc(sizeof(FmgrInfo));
+		arrayinp = palloc_object(FmgrInfo);
 		fmgr_info(F_ARRAY_IN, arrayinp);
 		funcctx->user_fctx = arrayinp;
 

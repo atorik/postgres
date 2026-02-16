@@ -15,7 +15,7 @@
  * PgStat_EntryRef->pending, relying on PendingBackendStats instead so as it
  * is possible to report data within critical sections.
  *
- * Copyright (c) 2001-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2001-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/utils/activity/pgstat_backend.c
@@ -326,7 +326,7 @@ pgstat_create_backend(ProcNumber procnum)
 	PgStatShared_Backend *shstatent;
 
 	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_BACKEND, InvalidOid,
-											MyProcNumber, false);
+											procnum, false);
 	shstatent = (PgStatShared_Backend *) entry_ref->shared_stats;
 
 	/*

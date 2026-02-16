@@ -5,7 +5,7 @@
  *
  * See src/backend/access/transam/README for more information.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -555,9 +555,9 @@ MarkCurrentTransactionIdLoggedIfAny(void)
  * operation in a subtransaction.  We require that for logical decoding, see
  * LogicalDecodingProcessRecord.
  *
- * This returns true if wal_level >= logical and we are inside a valid
- * subtransaction, for which the assignment was not yet written to any WAL
- * record.
+ * This returns true if effective_wal_level is logical and we are inside
+ * a valid subtransaction, for which the assignment was not yet written to
+ * any WAL record.
  */
 bool
 IsSubxactTopXidLogPending(void)
@@ -566,7 +566,7 @@ IsSubxactTopXidLogPending(void)
 	if (CurrentTransactionState->topXidLogged)
 		return false;
 
-	/* wal_level has to be logical */
+	/* effective_wal_level has to be logical */
 	if (!XLogLogicalInfoActive())
 		return false;
 
@@ -667,7 +667,7 @@ AssignTransactionId(TransactionState s)
 		TransactionState *parents;
 		size_t		parentOffset = 0;
 
-		parents = palloc(sizeof(TransactionState) * s->nestingLevel);
+		parents = palloc_array(TransactionState, s->nestingLevel);
 		while (p != NULL && !FullTransactionIdIsValid(p->fullTransactionId))
 		{
 			parents[parentOffset++] = p;
@@ -685,14 +685,14 @@ AssignTransactionId(TransactionState s)
 	}
 
 	/*
-	 * When wal_level=logical, guarantee that a subtransaction's xid can only
-	 * be seen in the WAL stream if its toplevel xid has been logged before.
-	 * If necessary we log an xact_assignment record with fewer than
-	 * PGPROC_MAX_CACHED_SUBXIDS. Note that it is fine if didLogXid isn't set
-	 * for a transaction even though it appears in a WAL record, we just might
-	 * superfluously log something. That can happen when an xid is included
-	 * somewhere inside a wal record, but not in XLogRecord->xl_xid, like in
-	 * xl_standby_locks.
+	 * When effective_wal_level is logical, guarantee that a subtransaction's
+	 * xid can only be seen in the WAL stream if its toplevel xid has been
+	 * logged before. If necessary we log an xact_assignment record with fewer
+	 * than PGPROC_MAX_CACHED_SUBXIDS. Note that it is fine if didLogXid isn't
+	 * set for a transaction even though it appears in a WAL record, we just
+	 * might superfluously log something. That can happen when an xid is
+	 * included somewhere inside a wal record, but not in XLogRecord->xl_xid,
+	 * like in xl_standby_locks.
 	 */
 	if (isSubXact && XLogLogicalInfoActive() &&
 		!TopTransactionStateData.didLogXid)
@@ -1437,8 +1437,8 @@ RecordTransactionCommit(void)
 		 * Are we using the replication origins feature?  Or, in other words,
 		 * are we replaying remote actions?
 		 */
-		replorigin = (replorigin_session_origin != InvalidRepOriginId &&
-					  replorigin_session_origin != DoNotReplicateId);
+		replorigin = (replorigin_xact_state.origin != InvalidReplOriginId &&
+					  replorigin_xact_state.origin != DoNotReplicateId);
 
 		/*
 		 * Mark ourselves as within our "commit critical section".  This
@@ -1486,25 +1486,25 @@ RecordTransactionCommit(void)
 
 		if (replorigin)
 			/* Move LSNs forward for this replication origin */
-			replorigin_session_advance(replorigin_session_origin_lsn,
+			replorigin_session_advance(replorigin_xact_state.origin_lsn,
 									   XactLastRecEnd);
 
 		/*
 		 * Record commit timestamp.  The value comes from plain commit
 		 * timestamp if there's no replication origin; otherwise, the
-		 * timestamp was already set in replorigin_session_origin_timestamp by
-		 * replication.
+		 * timestamp was already set in replorigin_xact_state.origin_timestamp
+		 * by replication.
 		 *
 		 * We don't need to WAL-log anything here, as the commit record
 		 * written above already contains the data.
 		 */
 
-		if (!replorigin || replorigin_session_origin_timestamp == 0)
-			replorigin_session_origin_timestamp = GetCurrentTransactionStopTimestamp();
+		if (!replorigin || replorigin_xact_state.origin_timestamp == 0)
+			replorigin_xact_state.origin_timestamp = GetCurrentTransactionStopTimestamp();
 
 		TransactionTreeSetCommitTsData(xid, nchildren, children,
-									   replorigin_session_origin_timestamp,
-									   replorigin_session_origin);
+									   replorigin_xact_state.origin_timestamp,
+									   replorigin_xact_state.origin);
 	}
 
 	/*
@@ -1834,8 +1834,8 @@ RecordTransactionAbort(bool isSubXact)
 	 * Are we using the replication origins feature?  Or, in other words, are
 	 * we replaying remote actions?
 	 */
-	replorigin = (replorigin_session_origin != InvalidRepOriginId &&
-				  replorigin_session_origin != DoNotReplicateId);
+	replorigin = (replorigin_xact_state.origin != InvalidReplOriginId &&
+				  replorigin_xact_state.origin != DoNotReplicateId);
 
 	/* Fetch the data we need for the abort record */
 	nrels = smgrGetPendingDeletes(false, &rels);
@@ -1862,7 +1862,7 @@ RecordTransactionAbort(bool isSubXact)
 
 	if (replorigin)
 		/* Move LSNs forward for this replication origin */
-		replorigin_session_advance(replorigin_session_origin_lsn,
+		replorigin_session_advance(replorigin_xact_state.origin_lsn,
 								   XactLastRecEnd);
 
 	/*
@@ -2513,6 +2513,7 @@ CommitTransaction(void)
 	AtEOXact_Snapshot(true, false);
 	AtEOXact_ApplyLauncher(true);
 	AtEOXact_LogicalRepWorkers(true);
+	AtEOXact_LogicalCtl();
 	pgstat_report_xact_timestamp(0);
 
 	ResourceOwnerDelete(TopTransactionResourceOwner);
@@ -2808,6 +2809,7 @@ PrepareTransaction(void)
 	/* we treat PREPARE as ROLLBACK so far as waking workers goes */
 	AtEOXact_ApplyLauncher(false);
 	AtEOXact_LogicalRepWorkers(false);
+	AtEOXact_LogicalCtl();
 	pgstat_report_xact_timestamp(0);
 
 	CurrentResourceOwner = NULL;
@@ -3038,6 +3040,7 @@ AbortTransaction(void)
 		AtEOXact_PgStat(false, is_parallel_worker);
 		AtEOXact_ApplyLauncher(false);
 		AtEOXact_LogicalRepWorkers(false);
+		AtEOXact_LogicalCtl();
 		pgstat_report_xact_timestamp(0);
 	}
 
@@ -3719,7 +3722,8 @@ PreventInTransactionBlock(bool isTopLevel, const char *stmtType)
 		ereport(ERROR,
 				(errcode(ERRCODE_ACTIVE_SQL_TRANSACTION),
 		/* translator: %s represents an SQL statement name */
-				 errmsg("%s cannot be executed from a function", stmtType)));
+				 errmsg("%s cannot be executed from a function or procedure",
+						stmtType)));
 
 	/* If we got past IsTransactionBlock test, should be in default state */
 	if (CurrentTransactionState->blockState != TBLOCK_DEFAULT &&
@@ -5743,9 +5747,9 @@ ShowTransactionStateRec(const char *str, TransactionState s)
 							 s->name ? s->name : "unnamed",
 							 BlockStateAsString(s->blockState),
 							 TransStateAsString(s->state),
-							 (unsigned int) XidFromFullTransactionId(s->fullTransactionId),
-							 (unsigned int) s->subTransactionId,
-							 (unsigned int) currentCommandId,
+							 XidFromFullTransactionId(s->fullTransactionId),
+							 s->subTransactionId,
+							 currentCommandId,
 							 currentCommandIdUsed ? " (used)" : "",
 							 buf.data)));
 	pfree(buf.data);
@@ -5958,12 +5962,12 @@ XactLogCommitRecord(TimestampTz commit_time,
 	}
 
 	/* dump transaction origin information */
-	if (replorigin_session_origin != InvalidRepOriginId)
+	if (replorigin_xact_state.origin != InvalidReplOriginId)
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_ORIGIN;
 
-		xl_origin.origin_lsn = replorigin_session_origin_lsn;
-		xl_origin.origin_timestamp = replorigin_session_origin_timestamp;
+		xl_origin.origin_lsn = replorigin_xact_state.origin_lsn;
+		xl_origin.origin_timestamp = replorigin_xact_state.origin_timestamp;
 	}
 
 	if (xl_xinfo.xinfo != 0)
@@ -6111,12 +6115,12 @@ XactLogAbortRecord(TimestampTz abort_time,
 	 * Dump transaction origin information. We need this during recovery to
 	 * update the replication origin progress.
 	 */
-	if (replorigin_session_origin != InvalidRepOriginId)
+	if (replorigin_xact_state.origin != InvalidReplOriginId)
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_ORIGIN;
 
-		xl_origin.origin_lsn = replorigin_session_origin_lsn;
-		xl_origin.origin_timestamp = replorigin_session_origin_timestamp;
+		xl_origin.origin_lsn = replorigin_xact_state.origin_lsn;
+		xl_origin.origin_timestamp = replorigin_xact_state.origin_timestamp;
 	}
 
 	if (xl_xinfo.xinfo != 0)
@@ -6182,7 +6186,7 @@ static void
 xact_redo_commit(xl_xact_parsed_commit *parsed,
 				 TransactionId xid,
 				 XLogRecPtr lsn,
-				 RepOriginId origin_id)
+				 ReplOriginId origin_id)
 {
 	TransactionId max_xid;
 	TimestampTz commit_time;
@@ -6195,7 +6199,7 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 	AdvanceNextFullTransactionIdPastXid(max_xid);
 
 	Assert(((parsed->xinfo & XACT_XINFO_HAS_ORIGIN) == 0) ==
-		   (origin_id == InvalidRepOriginId));
+		   (origin_id == InvalidReplOriginId));
 
 	if (parsed->xinfo & XACT_XINFO_HAS_ORIGIN)
 		commit_time = parsed->origin_timestamp;
@@ -6334,7 +6338,7 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
  */
 static void
 xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid,
-				XLogRecPtr lsn, RepOriginId origin_id)
+				XLogRecPtr lsn, ReplOriginId origin_id)
 {
 	TransactionId max_xid;
 

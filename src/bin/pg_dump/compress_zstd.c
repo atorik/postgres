@@ -3,7 +3,7 @@
  * compress_zstd.c
  *	 Routines for archivers to write a Zstd compressed data stream.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -219,7 +219,7 @@ InitCompressorZstd(CompressorState *cs,
 
 	cs->compression_spec = compression_spec;
 
-	zstdcs = (ZstdCompressorState *) pg_malloc0(sizeof(*zstdcs));
+	zstdcs = pg_malloc0_object(ZstdCompressorState);
 	cs->private_data = zstdcs;
 
 	/* We expect that exactly one of readF/writeF is specified */

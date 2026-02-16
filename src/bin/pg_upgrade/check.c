@@ -3,12 +3,13 @@
  *
  *	server checks and output routines
  *
- *	Copyright (c) 2010-2025, PostgreSQL Global Development Group
+ *	Copyright (c) 2010-2026, PostgreSQL Global Development Group
  *	src/bin/pg_upgrade/check.c
  */
 
 #include "postgres_fe.h"
 
+#include "catalog/pg_am_d.h"
 #include "catalog/pg_authid_d.h"
 #include "catalog/pg_class_d.h"
 #include "fe_utils/string_utils.h"
@@ -24,6 +25,7 @@ static void check_for_user_defined_postfix_ops(ClusterInfo *cluster);
 static void check_for_incompatible_polymorphics(ClusterInfo *cluster);
 static void check_for_tables_with_oids(ClusterInfo *cluster);
 static void check_for_not_null_inheritance(ClusterInfo *cluster);
+static void check_for_gist_inet_ops(ClusterInfo *cluster);
 static void check_for_pg_role_prefix(ClusterInfo *cluster);
 static void check_for_new_tablespace_dir(void);
 static void check_for_user_defined_encoding_conversions(ClusterInfo *cluster);
@@ -398,8 +400,6 @@ process_data_type_check(DbInfo *dbinfo, PGresult *res, void *arg)
 	int			i_attname = PQfnumber(res, "attname");
 	FILE	   *script = NULL;
 
-	AssertVariableIsOfType(&process_data_type_check, UpgradeTaskProcessCB);
-
 	if (ntups == 0)
 		return;
 
@@ -622,7 +622,7 @@ check_and_dump_old_cluster(void)
 	{
 		/*
 		 * Logical replication slots can be migrated since PG17. See comments
-		 * atop get_old_cluster_logical_slot_infos().
+		 * in get_db_rel_and_slot_infos().
 		 */
 		check_old_cluster_for_valid_slots();
 
@@ -680,6 +680,21 @@ check_and_dump_old_cluster(void)
 	 */
 	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 1800)
 		check_for_not_null_inheritance(&old_cluster);
+
+	/*
+	 * The btree_gist extension contains gist_inet_ops and gist_cidr_ops
+	 * opclasses that do not reliably give correct answers.  We want to
+	 * deprecate and eventually remove those, and as a first step v19 marks
+	 * them not-opcdefault and instead marks the replacement in-core opclass
+	 * "inet_ops" as opcdefault.  That creates a problem for pg_upgrade: in
+	 * versions where those opclasses were marked opcdefault, pg_dump will
+	 * dump indexes using them with no explicit opclass specification, so that
+	 * restore would create them using the inet_ops opclass.  That would be
+	 * incompatible with what's actually in the on-disk files.  So refuse to
+	 * upgrade if there are any such indexes.
+	 */
+	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 1800)
+		check_for_gist_inet_ops(&old_cluster);
 
 	/*
 	 * Pre-PG 10 allowed tables with 'unknown' type columns and non WAL logged
@@ -1262,9 +1277,6 @@ process_isn_and_int8_passing_mismatch(DbInfo *dbinfo, PGresult *res, void *arg)
 	int			i_proname = PQfnumber(res, "proname");
 	UpgradeTaskReport *report = (UpgradeTaskReport *) arg;
 
-	AssertVariableIsOfType(&process_isn_and_int8_passing_mismatch,
-						   UpgradeTaskProcessCB);
-
 	if (ntups == 0)
 		return;
 
@@ -1350,9 +1362,6 @@ process_user_defined_postfix_ops(DbInfo *dbinfo, PGresult *res, void *arg)
 	int			i_oprname = PQfnumber(res, "oprname");
 	int			i_typnsp = PQfnumber(res, "typnsp");
 	int			i_typname = PQfnumber(res, "typname");
-
-	AssertVariableIsOfType(&process_user_defined_postfix_ops,
-						   UpgradeTaskProcessCB);
 
 	if (ntups == 0)
 		return;
@@ -1441,9 +1450,6 @@ process_incompat_polymorphics(DbInfo *dbinfo, PGresult *res, void *arg)
 	int			ntups = PQntuples(res);
 	int			i_objkind = PQfnumber(res, "objkind");
 	int			i_objname = PQfnumber(res, "objname");
-
-	AssertVariableIsOfType(&process_incompat_polymorphics,
-						   UpgradeTaskProcessCB);
 
 	if (ntups == 0)
 		return;
@@ -1575,8 +1581,6 @@ process_with_oids_check(DbInfo *dbinfo, PGresult *res, void *arg)
 	int			i_nspname = PQfnumber(res, "nspname");
 	int			i_relname = PQfnumber(res, "relname");
 
-	AssertVariableIsOfType(&process_with_oids_check, UpgradeTaskProcessCB);
-
 	if (ntups == 0)
 		return;
 
@@ -1646,9 +1650,6 @@ process_inconsistent_notnull(DbInfo *dbinfo, PGresult *res, void *arg)
 	int			i_relname = PQfnumber(res, "relname");
 	int			i_attname = PQfnumber(res, "attname");
 
-	AssertVariableIsOfType(&process_inconsistent_notnull,
-						   UpgradeTaskProcessCB);
-
 	if (ntups == 0)
 		return;
 
@@ -1715,6 +1716,80 @@ check_for_not_null_inheritance(ClusterInfo *cluster)
 				 "You can fix this by running\n"
 				 "    ALTER TABLE tablename ALTER column SET NOT NULL;\n"
 				 "on each column listed in the file:\n"
+				 "    %s", report.path);
+	}
+	else
+		check_ok();
+}
+
+/*
+ * Callback function for processing results of query for
+ * check_for_gist_inet_ops()'s UpgradeTask.  If the query returned any rows
+ * (i.e., the check failed), write the details to the report file.
+ */
+static void
+process_gist_inet_ops_check(DbInfo *dbinfo, PGresult *res, void *arg)
+{
+	UpgradeTaskReport *report = (UpgradeTaskReport *) arg;
+	int			ntups = PQntuples(res);
+	int			i_nspname = PQfnumber(res, "nspname");
+	int			i_relname = PQfnumber(res, "relname");
+
+	if (ntups == 0)
+		return;
+
+	if (report->file == NULL &&
+		(report->file = fopen_priv(report->path, "w")) == NULL)
+		pg_fatal("could not open file \"%s\": %m", report->path);
+
+	fprintf(report->file, "In database: %s\n", dbinfo->db_name);
+
+	for (int rowno = 0; rowno < ntups; rowno++)
+		fprintf(report->file, "  %s.%s\n",
+				PQgetvalue(res, rowno, i_nspname),
+				PQgetvalue(res, rowno, i_relname));
+}
+
+/*
+ * Verify that no indexes use gist_inet_ops/gist_cidr_ops, unless the
+ * opclasses have been changed to not-opcdefault (which would allow
+ * the old server to dump the index definitions with explicit opclasses).
+ */
+static void
+check_for_gist_inet_ops(ClusterInfo *cluster)
+{
+	UpgradeTaskReport report;
+	UpgradeTask *task = upgrade_task_create();
+	const char *query = "SELECT nc.nspname, cc.relname "
+		"FROM   pg_catalog.pg_opclass oc, pg_catalog.pg_index i, "
+		"       pg_catalog.pg_class cc, pg_catalog.pg_namespace nc "
+		"WHERE  oc.opcmethod = " CppAsString2(GIST_AM_OID)
+		"       AND oc.opcname IN ('gist_inet_ops', 'gist_cidr_ops')"
+		"       AND oc.opcdefault"
+		"       AND oc.oid = any(i.indclass)"
+		"       AND i.indexrelid = cc.oid AND cc.relnamespace = nc.oid";
+
+	prep_status("Checking for uses of gist_inet_ops/gist_cidr_ops");
+
+	report.file = NULL;
+	snprintf(report.path, sizeof(report.path), "%s/%s",
+			 log_opts.basedir,
+			 "gist_inet_ops.txt");
+
+	upgrade_task_add_step(task, query, process_gist_inet_ops_check,
+						  true, &report);
+	upgrade_task_run(task, cluster);
+	upgrade_task_free(task);
+
+	if (report.file)
+	{
+		fclose(report.file);
+		pg_log(PG_REPORT, "fatal");
+		pg_fatal("Your installation contains indexes that use btree_gist's\n"
+				 "gist_inet_ops or gist_cidr_ops opclasses,\n"
+				 "which cannot be binary-upgraded.  Replace them with indexes\n"
+				 "that use the built-in GiST inet_ops opclass.\n"
+				 "A list of indexes with the problem is in the file:\n"
 				 "    %s", report.path);
 	}
 	else
@@ -1792,9 +1867,6 @@ process_user_defined_encoding_conversions(DbInfo *dbinfo, PGresult *res, void *a
 	int			i_conoid = PQfnumber(res, "conoid");
 	int			i_conname = PQfnumber(res, "conname");
 	int			i_nspname = PQfnumber(res, "nspname");
-
-	AssertVariableIsOfType(&process_user_defined_encoding_conversions,
-						   UpgradeTaskProcessCB);
 
 	if (ntups == 0)
 		return;
@@ -2131,11 +2203,7 @@ check_new_cluster_replication_slots(void)
 
 	wal_level = PQgetvalue(res, 0, 0);
 
-	if (nslots_on_old > 0 && strcmp(wal_level, "logical") != 0)
-		pg_fatal("\"wal_level\" must be \"logical\" but is set to \"%s\"",
-				 wal_level);
-
-	if (old_cluster.sub_retain_dead_tuples &&
+	if ((nslots_on_old > 0 || old_cluster.sub_retain_dead_tuples) &&
 		strcmp(wal_level, "minimal") == 0)
 		pg_fatal("\"wal_level\" must be \"replica\" or \"logical\" but is set to \"%s\"",
 				 wal_level);
@@ -2309,8 +2377,6 @@ process_old_sub_state_check(DbInfo *dbinfo, PGresult *res, void *arg)
 	int			i_nspname = PQfnumber(res, "nspname");
 	int			i_relname = PQfnumber(res, "relname");
 
-	AssertVariableIsOfType(&process_old_sub_state_check, UpgradeTaskProcessCB);
-
 	if (ntups == 0)
 		return;
 
@@ -2387,9 +2453,9 @@ check_old_cluster_subscription_state(void)
 	 * states listed below are not supported:
 	 *
 	 * a) SUBREL_STATE_DATASYNC: A relation upgraded while in this state would
-	 * retain a replication slot, which could not be dropped by the sync
-	 * worker spawned after the upgrade because the subscription ID used for
-	 * the slot name won't match anymore.
+	 * retain a replication slot and origin. The sync worker spawned after the
+	 * upgrade cannot drop them because the subscription ID used for the slot
+	 * and origin name no longer matches.
 	 *
 	 * b) SUBREL_STATE_SYNCDONE: A relation upgraded while in this state would
 	 * retain the replication origin when there is a failure in tablesync

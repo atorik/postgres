@@ -4,7 +4,7 @@
  *	  Virtual file descriptor definitions.
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/storage/fd.h
@@ -55,12 +55,23 @@ typedef int File;
 #define IO_DIRECT_WAL			0x02
 #define IO_DIRECT_WAL_INIT		0x04
 
+enum FileExtendMethod
+{
+#ifdef HAVE_POSIX_FALLOCATE
+	FILE_EXTEND_METHOD_POSIX_FALLOCATE,
+#endif
+	FILE_EXTEND_METHOD_WRITE_ZEROS,
+};
+
+/* Default to the first available file_extend_method. */
+#define DEFAULT_FILE_EXTEND_METHOD 0
 
 /* GUC parameter */
 extern PGDLLIMPORT int max_files_per_process;
 extern PGDLLIMPORT bool data_sync_retry;
 extern PGDLLIMPORT int recovery_init_sync_method;
 extern PGDLLIMPORT int io_direct_flags;
+extern PGDLLIMPORT int file_extend_method;
 
 /*
  * This is private to fd.c, but exported for save/restore_backend_variables()
@@ -85,14 +96,29 @@ extern PGDLLIMPORT int max_safe_fds;
  * to the appropriate Windows flag in src/port/open.c.  We simulate it with
  * fcntl(F_NOCACHE) on macOS inside fd.c's open() wrapper.  We use the name
  * PG_O_DIRECT rather than defining O_DIRECT in that case (probably not a good
- * idea on a Unix).  We can only use it if the compiler will correctly align
- * PGIOAlignedBlock for us, though.
+ * idea on a Unix).
  */
-#if defined(O_DIRECT) && defined(pg_attribute_aligned)
+#if defined(O_DIRECT)
 #define		PG_O_DIRECT O_DIRECT
 #elif defined(F_NOCACHE)
 #define		PG_O_DIRECT 0x80000000
 #define		PG_O_DIRECT_USE_F_NOCACHE
+/*
+ * The value we defined to stand in for O_DIRECT when simulating it with
+ * F_NOCACHE had better not collide with any of the standard flags.
+ */
+StaticAssertDecl((PG_O_DIRECT &
+				  (O_APPEND |
+				   O_CLOEXEC |
+				   O_CREAT |
+				   O_DSYNC |
+				   O_EXCL |
+				   O_RDWR |
+				   O_RDONLY |
+				   O_SYNC |
+				   O_TRUNC |
+				   O_WRONLY)) == 0,
+				 "PG_O_DIRECT value collides with standard flag");
 #else
 #define		PG_O_DIRECT 0
 #endif

@@ -1,7 +1,7 @@
 /*
  * psql - the PostgreSQL interactive terminal
  *
- * Copyright (c) 2000-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2000-2026, PostgreSQL Global Development Group
  *
  * src/bin/psql/tab-complete.in.c
  *
@@ -2773,6 +2773,7 @@ match_previous_words(int pattern_id,
 					  "OWNER TO", "SET", "VALIDATE CONSTRAINT",
 					  "REPLICA IDENTITY", "ATTACH PARTITION",
 					  "DETACH PARTITION", "FORCE ROW LEVEL SECURITY",
+					  "SPLIT PARTITION", "MERGE PARTITIONS (",
 					  "OF", "NOT OF");
 	/* ALTER TABLE xxx ADD */
 	else if (Matches("ALTER", "TABLE", MatchAny, "ADD"))
@@ -3035,16 +3036,29 @@ match_previous_words(int pattern_id,
 		COMPLETE_WITH("FROM (", "IN (", "WITH (");
 
 	/*
-	 * If we have ALTER TABLE <foo> DETACH PARTITION, provide a list of
+	 * If we have ALTER TABLE <foo> DETACH|SPLIT PARTITION, provide a list of
 	 * partitions of <foo>.
 	 */
-	else if (Matches("ALTER", "TABLE", MatchAny, "DETACH", "PARTITION"))
+	else if (Matches("ALTER", "TABLE", MatchAny, "DETACH|SPLIT", "PARTITION"))
 	{
 		set_completion_reference(prev3_wd);
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_partition_of_table);
 	}
 	else if (Matches("ALTER", "TABLE", MatchAny, "DETACH", "PARTITION", MatchAny))
 		COMPLETE_WITH("CONCURRENTLY", "FINALIZE");
+
+	/* ALTER TABLE <name> SPLIT PARTITION <name> */
+	else if (Matches("ALTER", "TABLE", MatchAny, "SPLIT", "PARTITION", MatchAny))
+		COMPLETE_WITH("INTO ( PARTITION");
+
+	/* ALTER TABLE <name> MERGE PARTITIONS ( */
+	else if (Matches("ALTER", "TABLE", MatchAny, "MERGE", "PARTITIONS", "("))
+	{
+		set_completion_reference(prev4_wd);
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_partition_of_table);
+	}
+	else if (Matches("ALTER", "TABLE", MatchAny, "MERGE", "PARTITIONS", "(*)"))
+		COMPLETE_WITH("INTO");
 
 	/* ALTER TABLE <name> OF */
 	else if (Matches("ALTER", "TABLE", MatchAny, "OF"))
@@ -3156,6 +3170,9 @@ match_previous_words(int pattern_id,
 		else if (TailMatches("VERBOSE|SKIP_LOCKED"))
 			COMPLETE_WITH("ON", "OFF");
 	}
+	else if (Matches("ANALYZE", "(*)"))
+		COMPLETE_WITH_SCHEMA_QUERY_PLUS(Query_for_list_of_analyzables,
+										"ONLY");
 	else if (Matches("ANALYZE", MatchAnyN, "("))
 		/* "ANALYZE (" should be caught above, so assume we want columns */
 		COMPLETE_WITH_ATTR(prev2_wd);
@@ -3340,13 +3357,22 @@ match_previous_words(int pattern_id,
 	/* Complete COPY|\copy <sth> FROM|TO with filename or STDIN/STDOUT/PROGRAM */
 	else if (Matches("COPY|\\copy", MatchAny, "FROM|TO"))
 	{
-		/* COPY requires quoted filename */
-		bool		force_quote = HeadMatches("COPY");
-
-		if (TailMatches("FROM"))
-			COMPLETE_WITH_FILES_PLUS("", force_quote, "STDIN", "PROGRAM");
+		if (HeadMatches("COPY"))
+		{
+			/* COPY requires quoted filename */
+			if (TailMatches("FROM"))
+				COMPLETE_WITH_FILES_PLUS("", true, "STDIN", "PROGRAM");
+			else
+				COMPLETE_WITH_FILES_PLUS("", true, "STDOUT", "PROGRAM");
+		}
 		else
-			COMPLETE_WITH_FILES_PLUS("", force_quote, "STDOUT", "PROGRAM");
+		{
+			/* \copy supports pstdin and pstdout */
+			if (TailMatches("FROM"))
+				COMPLETE_WITH_FILES_PLUS("", false, "STDIN", "PSTDIN", "PROGRAM");
+			else
+				COMPLETE_WITH_FILES_PLUS("", false, "STDOUT", "PSTDOUT", "PROGRAM");
+		}
 	}
 
 	/* Complete COPY|\copy <sth> FROM|TO PROGRAM */
@@ -3364,30 +3390,50 @@ match_previous_words(int pattern_id,
 			 Matches("COPY|\\copy", MatchAny, "FROM", "PROGRAM", MatchAny))
 		COMPLETE_WITH("WITH (", "WHERE");
 
-	/* Complete COPY <sth> FROM [PROGRAM] filename WITH ( */
-	else if (Matches("COPY|\\copy", MatchAny, "FROM", MatchAnyExcept("PROGRAM"), "WITH", "(") ||
-			 Matches("COPY|\\copy", MatchAny, "FROM", "PROGRAM", MatchAny, "WITH", "("))
-		COMPLETE_WITH(Copy_from_options);
+	/* Complete COPY <sth> FROM|TO [PROGRAM] filename WITH ( */
+	else if (HeadMatches("COPY|\\copy", MatchAny, "FROM|TO", MatchAnyExcept("PROGRAM"), "WITH", "(*") ||
+			 HeadMatches("COPY|\\copy", MatchAny, "FROM|TO", "PROGRAM", MatchAny, "WITH", "(*"))
+	{
+		if (!HeadMatches("COPY|\\copy", MatchAny, "FROM|TO", MatchAnyExcept("PROGRAM"), "WITH", "(*)") &&
+			!HeadMatches("COPY|\\copy", MatchAny, "FROM|TO", "PROGRAM", MatchAny, "WITH", "(*)"))
+		{
+			/*
+			 * This fires if we're in an unfinished parenthesized option list.
+			 * get_previous_words treats a completed parenthesized option list
+			 * as one word, so the above tests are correct.
+			 */
 
-	/* Complete COPY <sth> TO [PROGRAM] filename WITH ( */
-	else if (Matches("COPY|\\copy", MatchAny, "TO", MatchAnyExcept("PROGRAM"), "WITH", "(") ||
-			 Matches("COPY|\\copy", MatchAny, "TO", "PROGRAM", MatchAny, "WITH", "("))
-		COMPLETE_WITH(Copy_to_options);
+			if (ends_with(prev_wd, '(') || ends_with(prev_wd, ','))
+			{
+				if (HeadMatches("COPY|\\copy", MatchAny, "FROM"))
+					COMPLETE_WITH(Copy_from_options);
+				else
+					COMPLETE_WITH(Copy_to_options);
+			}
 
-	/* Complete COPY <sth> FROM|TO [PROGRAM] <sth> WITH (FORMAT */
-	else if (Matches("COPY|\\copy", MatchAny, "FROM|TO", MatchAnyExcept("PROGRAM"), "WITH", "(", "FORMAT") ||
-			 Matches("COPY|\\copy", MatchAny, "FROM|TO", "PROGRAM", MatchAny, "WITH", "(", "FORMAT"))
-		COMPLETE_WITH("binary", "csv", "text");
+			/* Complete COPY <sth> FROM|TO filename WITH (FORMAT */
+			else if (TailMatches("FORMAT"))
+				COMPLETE_WITH("binary", "csv", "text");
 
-	/* Complete COPY <sth> FROM [PROGRAM] filename WITH (ON_ERROR */
-	else if (Matches("COPY|\\copy", MatchAny, "FROM", MatchAnyExcept("PROGRAM"), "WITH", "(", "ON_ERROR") ||
-			 Matches("COPY|\\copy", MatchAny, "FROM", "PROGRAM", MatchAny, "WITH", "(", "ON_ERROR"))
-		COMPLETE_WITH("stop", "ignore");
+			/* Complete COPY <sth> FROM|TO filename WITH (FREEZE */
+			else if (TailMatches("FREEZE"))
+				COMPLETE_WITH("true", "false");
 
-	/* Complete COPY <sth> FROM [PROGRAM] filename WITH (LOG_VERBOSITY */
-	else if (Matches("COPY|\\copy", MatchAny, "FROM", MatchAnyExcept("PROGRAM"), "WITH", "(", "LOG_VERBOSITY") ||
-			 Matches("COPY|\\copy", MatchAny, "FROM", "PROGRAM", MatchAny, "WITH", "(", "LOG_VERBOSITY"))
-		COMPLETE_WITH("silent", "default", "verbose");
+			/* Complete COPY <sth> FROM|TO filename WITH (HEADER */
+			else if (TailMatches("HEADER"))
+				COMPLETE_WITH("true", "false", "MATCH");
+
+			/* Complete COPY <sth> FROM filename WITH (ON_ERROR */
+			else if (TailMatches("ON_ERROR"))
+				COMPLETE_WITH("stop", "ignore");
+
+			/* Complete COPY <sth> FROM filename WITH (LOG_VERBOSITY */
+			else if (TailMatches("LOG_VERBOSITY"))
+				COMPLETE_WITH("silent", "default", "verbose");
+		}
+
+		/* A completed parenthesized option list should be caught below */
+	}
 
 	/* Complete COPY <sth> FROM [PROGRAM] <sth> WITH (<options>) */
 	else if (Matches("COPY|\\copy", MatchAny, "FROM", MatchAnyExcept("PROGRAM"), "WITH", MatchAny) ||
@@ -4951,7 +4997,8 @@ match_previous_words(int pattern_id,
 
 /* PREPARE xx AS */
 	else if (Matches("PREPARE", MatchAny, "AS"))
-		COMPLETE_WITH("SELECT", "UPDATE", "INSERT INTO", "DELETE FROM");
+		COMPLETE_WITH("SELECT", "UPDATE", "INSERT INTO", "DELETE FROM",
+					  "MERGE INTO", "VALUES", "WITH", "TABLE");
 
 /*
  * PREPARE TRANSACTION is missing on purpose. It's intended for transaction
@@ -5268,24 +5315,6 @@ match_previous_words(int pattern_id,
 										"VERBOSE",
 										"ANALYZE",
 										"ONLY");
-	else if (Matches("VACUUM", "FULL"))
-		COMPLETE_WITH_SCHEMA_QUERY_PLUS(Query_for_list_of_vacuumables,
-										"FREEZE",
-										"VERBOSE",
-										"ANALYZE",
-										"ONLY");
-	else if (Matches("VACUUM", MatchAnyN, "FREEZE"))
-		COMPLETE_WITH_SCHEMA_QUERY_PLUS(Query_for_list_of_vacuumables,
-										"VERBOSE",
-										"ANALYZE",
-										"ONLY");
-	else if (Matches("VACUUM", MatchAnyN, "VERBOSE"))
-		COMPLETE_WITH_SCHEMA_QUERY_PLUS(Query_for_list_of_vacuumables,
-										"ANALYZE",
-										"ONLY");
-	else if (Matches("VACUUM", MatchAnyN, "ANALYZE"))
-		COMPLETE_WITH_SCHEMA_QUERY_PLUS(Query_for_list_of_vacuumables,
-										"ONLY");
 	else if (HeadMatches("VACUUM", "(*") &&
 			 !HeadMatches("VACUUM", "(*)"))
 	{
@@ -5305,6 +5334,27 @@ match_previous_words(int pattern_id,
 		else if (TailMatches("INDEX_CLEANUP"))
 			COMPLETE_WITH("AUTO", "ON", "OFF");
 	}
+	else if (Matches("VACUUM", "(*)"))
+		COMPLETE_WITH_SCHEMA_QUERY_PLUS(Query_for_list_of_vacuumables,
+										"ONLY");
+	else if (Matches("VACUUM", "FULL"))
+		COMPLETE_WITH_SCHEMA_QUERY_PLUS(Query_for_list_of_vacuumables,
+										"FREEZE",
+										"VERBOSE",
+										"ANALYZE",
+										"ONLY");
+	else if (Matches("VACUUM", MatchAnyN, "FREEZE"))
+		COMPLETE_WITH_SCHEMA_QUERY_PLUS(Query_for_list_of_vacuumables,
+										"VERBOSE",
+										"ANALYZE",
+										"ONLY");
+	else if (Matches("VACUUM", MatchAnyN, "VERBOSE"))
+		COMPLETE_WITH_SCHEMA_QUERY_PLUS(Query_for_list_of_vacuumables,
+										"ANALYZE",
+										"ONLY");
+	else if (Matches("VACUUM", MatchAnyN, "ANALYZE"))
+		COMPLETE_WITH_SCHEMA_QUERY_PLUS(Query_for_list_of_vacuumables,
+										"ONLY");
 	else if (Matches("VACUUM", MatchAnyN, "("))
 		/* "VACUUM (" should be caught above, so assume we want columns */
 		COMPLETE_WITH_ATTR(prev2_wd);
@@ -5314,8 +5364,11 @@ match_previous_words(int pattern_id,
 /*
  * WAIT FOR LSN '<lsn>' [ WITH ( option [, ...] ) ]
  * where option can be:
+ *   MODE '<mode>'
  *   TIMEOUT '<timeout>'
  *   NO_THROW
+ * and mode can be:
+ *   standby_replay | standby_write | standby_flush | primary_flush
  */
 	else if (Matches("WAIT"))
 		COMPLETE_WITH("FOR");
@@ -5328,21 +5381,24 @@ match_previous_words(int pattern_id,
 		COMPLETE_WITH("WITH");
 	else if (Matches("WAIT", "FOR", "LSN", MatchAny, "WITH"))
 		COMPLETE_WITH("(");
+
+	/*
+	 * Handle parenthesized option list.  This fires when we're in an
+	 * unfinished parenthesized option list.  get_previous_words treats a
+	 * completed parenthesized option list as one word, so the above test is
+	 * correct.
+	 *
+	 * 'mode' takes a string value (one of the listed above), 'timeout' takes
+	 * a string value, and 'no_throw' takes no value.  We do not offer
+	 * completions for the *values* of 'timeout' or 'no_throw'.
+	 */
 	else if (HeadMatches("WAIT", "FOR", "LSN", MatchAny, "WITH", "(*") &&
 			 !HeadMatches("WAIT", "FOR", "LSN", MatchAny, "WITH", "(*)"))
 	{
-		/*
-		 * This fires if we're in an unfinished parenthesized option list.
-		 * get_previous_words treats a completed parenthesized option list as
-		 * one word, so the above test is correct.
-		 */
 		if (ends_with(prev_wd, '(') || ends_with(prev_wd, ','))
-			COMPLETE_WITH("timeout", "no_throw");
-
-		/*
-		 * timeout takes a string value, no_throw takes no value. We don't
-		 * offer completions for these values.
-		 */
+			COMPLETE_WITH("mode", "timeout", "no_throw");
+		else if (TailMatches("mode"))
+			COMPLETE_WITH("'standby_replay'", "'standby_write'", "'standby_flush'", "'primary_flush'");
 	}
 
 /* WITH [RECURSIVE] */

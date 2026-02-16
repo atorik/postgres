@@ -3,7 +3,7 @@
  * ipci.c
  *	  POSTGRES inter-process communication initialization code.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -140,6 +140,7 @@ CalculateShmemSize(void)
 	size = add_size(size, SlotSyncShmemSize());
 	size = add_size(size, AioShmemSize());
 	size = add_size(size, WaitLSNShmemSize());
+	size = add_size(size, LogicalDecodingCtlShmemSize());
 
 	/* include additional requested shmem from preload libraries */
 	size = add_size(size, total_addin_request);
@@ -211,12 +212,10 @@ CreateSharedMemoryAndSemaphores(void)
 	Assert(strcmp("unknown",
 				  GetConfigOption("huge_pages_status", false, false)) != 0);
 
-	InitShmemAccess(seghdr);
-
 	/*
 	 * Set up shared memory allocation mechanism
 	 */
-	InitShmemAllocation();
+	InitShmemAllocator(seghdr);
 
 	/* Initialize subsystems */
 	CreateOrAttachShmemStructs();
@@ -328,6 +327,7 @@ CreateOrAttachShmemStructs(void)
 	InjectionPointShmemInit();
 	AioShmemInit();
 	WaitLSNShmemInit();
+	LogicalDecodingCtlShmemInit();
 }
 
 /*
@@ -361,7 +361,9 @@ InitializeShmemGUCs(void)
 	{
 		Size		hp_required;
 
-		hp_required = add_size(size_b / hp_size, 1);
+		hp_required = size_b / hp_size;
+		if (size_b % hp_size != 0)
+			hp_required = add_size(hp_required, 1);
 		sprintf(buf, "%zu", hp_required);
 		SetConfigOption("shared_memory_size_in_huge_pages", buf,
 						PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);

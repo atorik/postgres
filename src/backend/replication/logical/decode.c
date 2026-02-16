@@ -16,7 +16,7 @@
  *		contents of records in here except turning them into a more usable
  *		format.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -66,7 +66,7 @@ static inline bool FilterPrepare(LogicalDecodingContext *ctx,
 								 TransactionId xid, const char *gid);
 static bool DecodeTXNNeedSkip(LogicalDecodingContext *ctx,
 							  XLogRecordBuffer *buf, Oid txn_dbid,
-							  RepOriginId origin_id);
+							  ReplOriginId origin_id);
 
 /*
  * Take every XLogReadRecord()ed record and perform the actions required to
@@ -149,39 +149,34 @@ xlog_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 			 * can restart from there.
 			 */
 			break;
-		case XLOG_PARAMETER_CHANGE:
+		case XLOG_LOGICAL_DECODING_STATUS_CHANGE:
 			{
-				xl_parameter_change *xlrec =
-					(xl_parameter_change *) XLogRecGetData(buf->record);
+				bool		logical_decoding;
+
+				memcpy(&logical_decoding, XLogRecGetData(buf->record), sizeof(bool));
 
 				/*
-				 * If wal_level on the primary is reduced to less than
-				 * logical, we want to prevent existing logical slots from
-				 * being used.  Existing logical slots on the standby get
-				 * invalidated when this WAL record is replayed; and further,
-				 * slot creation fails when wal_level is not sufficient; but
-				 * all these operations are not synchronized, so a logical
-				 * slot may creep in while the wal_level is being reduced.
-				 * Hence this extra check.
+				 * Error out as we should not decode this WAL record.
+				 *
+				 * Logical decoding is disabled, and existing logical slots on
+				 * the standby are invalidated when this WAL record is
+				 * replayed. No logical decoder can process this WAL record
+				 * until replay completes, and by then the slots are already
+				 * invalidated. Furthermore, no new logical slots can be
+				 * created while logical decoding is disabled. This cannot
+				 * occur even on primary either, since it will not restart
+				 * with wal_level < replica if any logical slots exist.
 				 */
-				if (xlrec->wal_level < WAL_LEVEL_LOGICAL)
-				{
-					/*
-					 * This can occur only on a standby, as a primary would
-					 * not allow to restart after changing wal_level < logical
-					 * if there is pre-existing logical slot.
-					 */
-					Assert(RecoveryInProgress());
-					ereport(ERROR,
-							(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-							 errmsg("logical decoding on standby requires \"wal_level\" >= \"logical\" on the primary")));
-				}
+				elog(ERROR, "unexpected logical decoding status change %d",
+					 logical_decoding);
+
 				break;
 			}
 		case XLOG_NOOP:
 		case XLOG_NEXTOID:
 		case XLOG_SWITCH:
 		case XLOG_BACKUP_END:
+		case XLOG_PARAMETER_CHANGE:
 		case XLOG_RESTORE_POINT:
 		case XLOG_FPW_CHANGE:
 		case XLOG_FPI_FOR_HINT:
@@ -521,18 +516,9 @@ heap_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 
 			/*
 			 * Inplace updates are only ever performed on catalog tuples and
-			 * can, per definition, not change tuple visibility.  Inplace
-			 * updates don't affect storage or interpretation of table rows,
-			 * so they don't affect logicalrep_write_tuple() outcomes.  Hence,
-			 * we don't process invalidations from the original operation.  If
-			 * inplace updates did affect those things, invalidations wouldn't
-			 * make it work, since there are no snapshot-specific versions of
-			 * inplace-updated values.  Since we also don't decode catalog
-			 * tuples, we're not interested in the record's contents.
-			 *
-			 * WAL contains likely-unnecessary commit-time invals from the
-			 * CacheInvalidateHeapTuple() call in
-			 * heap_inplace_update_and_unlock(). Excess invalidation is safe.
+			 * can, per definition, not change tuple visibility.  Since we
+			 * also don't decode catalog tuples, we're not interested in the
+			 * record's contents.
 			 */
 			break;
 
@@ -580,7 +566,7 @@ FilterPrepare(LogicalDecodingContext *ctx, TransactionId xid,
 }
 
 static inline bool
-FilterByOrigin(LogicalDecodingContext *ctx, RepOriginId origin_id)
+FilterByOrigin(LogicalDecodingContext *ctx, ReplOriginId origin_id)
 {
 	if (ctx->callbacks.filter_by_origin_cb == NULL)
 		return false;
@@ -598,7 +584,7 @@ logicalmsg_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	XLogReaderState *r = buf->record;
 	TransactionId xid = XLogRecGetXid(r);
 	uint8		info = XLogRecGetInfo(r) & ~XLR_INFO_MASK;
-	RepOriginId origin_id = XLogRecGetOrigin(r);
+	ReplOriginId origin_id = XLogRecGetOrigin(r);
 	Snapshot	snapshot = NULL;
 	xl_logical_message *message;
 
@@ -679,7 +665,7 @@ DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 {
 	XLogRecPtr	origin_lsn = InvalidXLogRecPtr;
 	TimestampTz commit_time = parsed->xact_time;
-	RepOriginId origin_id = XLogRecGetOrigin(buf->record);
+	ReplOriginId origin_id = XLogRecGetOrigin(buf->record);
 	int			i;
 
 	if (parsed->xinfo & XACT_XINFO_HAS_ORIGIN)
@@ -775,7 +761,7 @@ DecodePrepare(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 	SnapBuild  *builder = ctx->snapshot_builder;
 	XLogRecPtr	origin_lsn = parsed->origin_lsn;
 	TimestampTz prepare_time = parsed->xact_time;
-	RepOriginId origin_id = XLogRecGetOrigin(buf->record);
+	ReplOriginId origin_id = XLogRecGetOrigin(buf->record);
 	int			i;
 	TransactionId xid = parsed->twophase_xid;
 
@@ -851,7 +837,7 @@ DecodeAbort(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 	int			i;
 	XLogRecPtr	origin_lsn = InvalidXLogRecPtr;
 	TimestampTz abort_time = parsed->xact_time;
-	RepOriginId origin_id = XLogRecGetOrigin(buf->record);
+	ReplOriginId origin_id = XLogRecGetOrigin(buf->record);
 	bool		skip_xact;
 
 	if (parsed->xinfo & XACT_XINFO_HAS_ORIGIN)
@@ -1303,7 +1289,7 @@ DecodeXLogTuple(char *data, Size len, HeapTuple tuple)
  */
 static bool
 DecodeTXNNeedSkip(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
-				  Oid txn_dbid, RepOriginId origin_id)
+				  Oid txn_dbid, ReplOriginId origin_id)
 {
 	if (SnapBuildXactNeedsSkip(ctx->snapshot_builder, buf->origptr) ||
 		(txn_dbid != InvalidOid && txn_dbid != ctx->slot->data.database) ||

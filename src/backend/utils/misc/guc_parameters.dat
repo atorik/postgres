@@ -4,7 +4,7 @@
 #
 # See src/backend/utils/misc/README for design notes.
 #
-# Portions Copyright (c) 2000-2025, PostgreSQL Global Development Group
+# Portions Copyright (c) 2000-2026, PostgreSQL Global Development Group
 #
 # src/backend/utils/misc/guc_parameters.dat
 #
@@ -617,6 +617,13 @@
   max => 'MAX_DEBUG_DISCARD_CACHES',
 },
 
+{ name => 'debug_exec_backend', type => 'bool', context => 'PGC_INTERNAL', group => 'PRESET_OPTIONS',
+  short_desc => 'Shows whether the running server is built with EXEC_BACKEND enabled.',
+  flags => 'GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE',
+  variable => 'exec_backend_enabled',
+  boot_val => 'EXEC_BACKEND_ENABLED',
+},
+
 { name => 'debug_io_direct', type => 'string', context => 'PGC_POSTMASTER', group => 'DEVELOPER_OPTIONS',
   short_desc => 'Use direct I/O for file access.',
   long_desc => 'An empty string disables direct I/O.',
@@ -687,7 +694,7 @@
   short_desc => 'Set this to force all parse and plan trees to be passed through outfuncs.c/readfuncs.c, to facilitate catching errors and omissions in those modules.',
   flags => 'GUC_NOT_IN_SAMPLE',
   variable => 'Debug_write_read_parse_plan_trees',
-  boot_val => 'DEFAULT_DEBUG_READ_WRITE_PARSE_PLAN_TREES',
+  boot_val => 'DEFAULT_DEBUG_WRITE_READ_PARSE_PLAN_TREES',
   ifdef => 'DEBUG_NODE_TESTS_ENABLED',
 },
 
@@ -796,6 +803,15 @@
   boot_val => 'DEFAULT_EFFECTIVE_IO_CONCURRENCY',
   min => '0',
   max => 'MAX_IO_CONCURRENCY',
+},
+
+{ name => 'effective_wal_level', type => 'enum', context => 'PGC_INTERNAL', group => 'PRESET_OPTIONS',
+  short_desc => 'Show effective WAL level.',
+  flags => 'GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE',
+  variable => 'effective_wal_level',
+  boot_val => 'WAL_LEVEL_REPLICA',
+  options => 'wal_level_options',
+  show_hook => 'show_effective_wal_level',
 },
 
 { name => 'enable_async_append', type => 'bool', context => 'PGC_USERSET', group => 'QUERY_TUNING_METHOD',
@@ -975,12 +991,6 @@
   boot_val => 'true',
 },
 
-{ name => 'escape_string_warning', type => 'bool', context => 'PGC_USERSET', group => 'COMPAT_OPTIONS_PREVIOUS',
-  short_desc => 'Warn about backslash escapes in ordinary string literals.',
-  variable => 'escape_string_warning',
-  boot_val => 'true',
-},
-
 { name => 'event_source', type => 'string', context => 'PGC_POSTMASTER', group => 'LOGGING_WHERE',
   short_desc => 'Sets the application name used to identify PostgreSQL messages in the event log.',
   variable => 'event_source',
@@ -1030,6 +1040,13 @@
   variable => 'file_copy_method',
   boot_val => 'FILE_COPY_METHOD_COPY',
   options => 'file_copy_method_options',
+},
+
+{ name => 'file_extend_method', type => 'enum', context => 'PGC_SIGHUP', group => 'RESOURCES_DISK',
+  short_desc => 'Selects the method used for extending data files.',
+  variable => 'file_extend_method',
+  boot_val => 'DEFAULT_FILE_EXTEND_METHOD',
+  options => 'file_extend_method_options',
 },
 
 { name => 'from_collapse_limit', type => 'int', context => 'PGC_USERSET', group => 'QUERY_TUNING_OTHER',
@@ -1676,12 +1693,14 @@
   options => 'server_message_level_options',
 },
 
-{ name => 'log_min_messages', type => 'enum', context => 'PGC_SUSET', group => 'LOGGING_WHEN',
+{ name => 'log_min_messages', type => 'string', context => 'PGC_SUSET', group => 'LOGGING_WHEN',
   short_desc => 'Sets the message levels that are logged.',
   long_desc => 'Each level includes all the levels that follow it. The later the level, the fewer messages are sent.',
-  variable => 'log_min_messages',
-  boot_val => 'WARNING',
-  options => 'server_message_level_options',
+  flags => 'GUC_LIST_INPUT',
+  variable => 'log_min_messages_string',
+  boot_val => '"warning"',
+  check_hook => 'check_log_min_messages',
+  assign_hook => 'assign_log_min_messages',
 },
 
 { name => 'log_parameter_max_length', type => 'int', context => 'PGC_SUSET', group => 'LOGGING_WHAT',
@@ -2232,6 +2251,16 @@
   options => 'password_encryption_options',
 },
 
+{ name => 'password_expiration_warning_threshold', type => 'int', context => 'PGC_SIGHUP', group => 'CONN_AUTH_AUTH',
+  short_desc => 'Threshold for password expiration warnings.',
+  long_desc => '0 means not to emit these warnings.',
+  flags => 'GUC_UNIT_S',
+  variable => 'password_expiration_warning_threshold',
+  boot_val => '604800',
+  min => '0',
+  max => 'INT_MAX',
+},
+
 { name => 'plan_cache_mode', type => 'enum', context => 'PGC_USERSET', group => 'QUERY_TUNING_OTHER',
   short_desc => 'Controls the planner\'s selection of custom or generic plan.',
   long_desc => 'Prepared statements can have custom and generic plans, and the planner will attempt to choose which is better.  This can be set to override the default behavior.',
@@ -2743,11 +2772,15 @@
   boot_val => '""',
 },
 
+# We removed support for non-conforming string literals in PostgreSQL 19,
+# but this parameter must be kept indefinitely, since client code might
+# consult it or attempt to set it.  We allow it to be explicitly set to true.
 { name => 'standard_conforming_strings', type => 'bool', context => 'PGC_USERSET', group => 'COMPAT_OPTIONS_PREVIOUS',
-  short_desc => 'Causes \'...\' strings to treat backslashes literally.',
-  flags => 'GUC_REPORT',
+  short_desc => 'Nonstandard strings are no longer supported; this can only be true.',
+  flags => 'GUC_REPORT | GUC_NOT_IN_SAMPLE',
   variable => 'standard_conforming_strings',
   boot_val => 'true',
+  check_hook => 'check_standard_conforming_strings',
 },
 
 { name => 'statement_timeout', type => 'int', context => 'PGC_USERSET', group => 'CLIENT_CONN_STATEMENT',

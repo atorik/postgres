@@ -3,7 +3,7 @@
  * fd.c
  *	  Virtual file descriptor code.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -163,6 +163,9 @@ bool		data_sync_retry = false;
 
 /* How SyncDataDirectory() should do its job. */
 int			recovery_init_sync_method = DATA_DIR_SYNC_METHOD_FSYNC;
+
+/* How data files should be bulk-extended with zeros. */
+int			file_extend_method = DEFAULT_FILE_EXTEND_METHOD;
 
 /* Which kinds of files should be opened with PG_O_DIRECT. */
 int			io_direct_flags;
@@ -1111,23 +1114,6 @@ BasicOpenFilePerm(const char *fileName, int fileFlags, mode_t fileMode)
 
 tryAgain:
 #ifdef PG_O_DIRECT_USE_F_NOCACHE
-
-	/*
-	 * The value we defined to stand in for O_DIRECT when simulating it with
-	 * F_NOCACHE had better not collide with any of the standard flags.
-	 */
-	StaticAssertStmt((PG_O_DIRECT &
-					  (O_APPEND |
-					   O_CLOEXEC |
-					   O_CREAT |
-					   O_DSYNC |
-					   O_EXCL |
-					   O_RDWR |
-					   O_RDONLY |
-					   O_SYNC |
-					   O_TRUNC |
-					   O_WRONLY)) == 0,
-					 "PG_O_DIRECT value collides with standard flag");
 	fd = open(fileName, fileFlags & ~PG_O_DIRECT, fileMode);
 #else
 	fd = open(fileName, fileFlags, fileMode);
@@ -3185,9 +3171,10 @@ GetNextTempTableSpace(void)
 /*
  * AtEOSubXact_Files
  *
- * Take care of subtransaction commit/abort.  At abort, we close temp files
- * that the subtransaction may have opened.  At commit, we reassign the
- * files that were opened to the parent subtransaction.
+ * Take care of subtransaction commit/abort.  At abort, we close AllocateDescs
+ * that the subtransaction may have opened.  At commit, we reassign them to
+ * the parent subtransaction.  (Temporary files are tracked by ResourceOwners
+ * instead.)
  */
 void
 AtEOSubXact_Files(bool isCommit, SubTransactionId mySubid,

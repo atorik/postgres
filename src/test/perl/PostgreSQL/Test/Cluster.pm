@@ -1,5 +1,5 @@
 
-# Copyright (c) 2021-2025, PostgreSQL Global Development Group
+# Copyright (c) 2021-2026, PostgreSQL Global Development Group
 
 =pod
 
@@ -1647,9 +1647,9 @@ sub new
 	  or
 	  BAIL_OUT("could not create data directory \"$node->{_basedir}\": $!");
 
-	$node->dump_info;
-
 	$node->_set_pg_version;
+
+	$node->dump_info;
 
 	my $ver = $node->{_pg_version};
 
@@ -1793,13 +1793,20 @@ sub _get_env
 	return (%inst_env);
 }
 
-# Private routine to get an installation path qualified command.
-#
-# IPC::Run maintains a cache, %cmd_cache, mapping commands to paths.  Tests
-# which use nodes spanning more than one postgres installation path need to
-# avoid confusing which installation's binaries get run.  Setting $ENV{PATH} is
-# insufficient, as IPC::Run does not check to see if the path has changed since
-# caching a command.
+=pod
+
+=item $node->installed_command(cmd)
+
+Get an installation path qualified command.
+
+IPC::Run maintains a cache, %cmd_cache, mapping commands to paths.  Tests
+which use nodes spanning more than one postgres installation path need to
+avoid confusing which installation's binaries get run.  Setting $ENV{PATH} is
+insufficient, as IPC::Run does not check to see if the path has changed since
+caching a command.
+
+=cut
+
 sub installed_command
 {
 	my ($self, $cmd) = @_;
@@ -3528,25 +3535,9 @@ If successful, returns the length of the entire log file, in bytes.
 sub wait_for_log
 {
 	my ($self, $regexp, $offset) = @_;
-	$offset = 0 unless defined $offset;
 
-	my $max_attempts = 10 * $PostgreSQL::Test::Utils::timeout_default;
-	my $attempts = 0;
-
-	while ($attempts < $max_attempts)
-	{
-		my $log =
-		  PostgreSQL::Test::Utils::slurp_file($self->logfile, $offset);
-
-		return $offset + length($log) if ($log =~ m/$regexp/);
-
-		# Wait 0.1 second before retrying.
-		usleep(100_000);
-
-		$attempts++;
-	}
-
-	croak "timed out waiting for match: $regexp";
+	return PostgreSQL::Test::Utils::wait_for_file($self->logfile, $regexp,
+		$offset);
 }
 
 =pod

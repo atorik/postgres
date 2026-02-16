@@ -3,7 +3,7 @@
  * pg_combinebackup.c
  *		Combine incremental backups with prior backups.
  *
- * Copyright (c) 2017-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2017-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/bin/pg_combinebackup/pg_combinebackup.c
@@ -501,7 +501,7 @@ add_tablespace_mapping(cb_options *opt, char *arg)
 				 tsmap->old_dir);
 
 	if (!is_absolute_path(tsmap->new_dir))
-		pg_fatal("old directory is not an absolute path in tablespace mapping: %s",
+		pg_fatal("new directory is not an absolute path in tablespace mapping: %s",
 				 tsmap->new_dir);
 
 	/* Canonicalize paths to avoid spurious failures when comparing. */

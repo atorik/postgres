@@ -34,7 +34,7 @@
  * in the file to be read or written while holding only shared lock.
  *
  *
- * Copyright (c) 2008-2025, PostgreSQL Global Development Group
+ * Copyright (c) 2008-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  contrib/pg_stat_statements/pg_stat_statements.c
@@ -1093,7 +1093,7 @@ pgss_ExecutorEnd(QueryDesc *queryDesc)
 				   queryDesc->plannedstmt->stmt_location,
 				   queryDesc->plannedstmt->stmt_len,
 				   PGSS_EXEC,
-				   queryDesc->totaltime->total * 1000.0,	/* convert to msec */
+				   INSTR_TIME_GET_MILLISEC(queryDesc->totaltime->total),
 				   queryDesc->estate->es_total_processed,
 				   &queryDesc->totaltime->bufusage,
 				   &queryDesc->totaltime->walusage,
@@ -2990,9 +2990,6 @@ fill_in_constant_lengths(JumbleState *jstate, const char *query,
 							 &yyextra,
 							 &ScanKeywords,
 							 ScanKeywordTokens);
-
-	/* we don't want to re-emit any escape string warnings */
-	yyextra.escape_string_warning = false;
 
 	/* Search for each constant, in sequence */
 	for (int i = 0; i < jstate->clocations_count; i++)

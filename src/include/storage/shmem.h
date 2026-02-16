@@ -11,7 +11,7 @@
  * at the same address.  This means shared memory pointers can be passed
  * around directly between different processes.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/storage/shmem.h
@@ -29,8 +29,7 @@
 extern PGDLLIMPORT slock_t *ShmemLock;
 typedef struct PGShmemHeader PGShmemHeader; /* avoid including
 											 * storage/pg_shmem.h here */
-extern void InitShmemAccess(PGShmemHeader *seghdr);
-extern void InitShmemAllocation(void);
+extern void InitShmemAllocator(PGShmemHeader *seghdr);
 extern void *ShmemAlloc(Size size);
 extern void *ShmemAllocNoError(Size size);
 extern bool ShmemAddrIsValid(const void *addr);

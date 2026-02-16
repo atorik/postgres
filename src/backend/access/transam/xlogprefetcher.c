@@ -3,7 +3,7 @@
  * xlogprefetcher.c
  *		Prefetching support for recovery.
  *
- * Portions Copyright (c) 2022-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2022-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -364,7 +364,7 @@ XLogPrefetcherAllocate(XLogReaderState *reader)
 	XLogPrefetcher *prefetcher;
 	HASHCTL		ctl;
 
-	prefetcher = palloc0(sizeof(XLogPrefetcher));
+	prefetcher = palloc0_object(XLogPrefetcher);
 	prefetcher->reader = reader;
 
 	ctl.keysize = sizeof(RelFileLocator);
@@ -967,7 +967,7 @@ XLogPrefetcherBeginRead(XLogPrefetcher *prefetcher, XLogRecPtr recPtr)
 	/* Book-keeping to avoid readahead on first read. */
 	prefetcher->begin_ptr = recPtr;
 
-	prefetcher->no_readahead_until = 0;
+	prefetcher->no_readahead_until = InvalidXLogRecPtr;
 
 	/* This will forget about any queued up records in the decoder. */
 	XLogBeginRead(prefetcher->reader, recPtr);

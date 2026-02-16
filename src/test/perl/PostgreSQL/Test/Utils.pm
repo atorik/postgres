@@ -1,5 +1,5 @@
 
-# Copyright (c) 2021-2025, PostgreSQL Global Development Group
+# Copyright (c) 2021-2026, PostgreSQL Global Development Group
 
 =pod
 
@@ -58,6 +58,7 @@ use File::Temp ();
 use IPC::Run;
 use POSIX qw(locale_h);
 use PostgreSQL::Test::SimpleTee;
+use Time::HiRes qw(usleep);
 
 # We need a version of Test::More recent enough to support subtests
 use Test::More 0.98;
@@ -68,10 +69,12 @@ our @EXPORT = qw(
   slurp_file
   append_to_file
   string_replace_file
+  read_head_tail
   check_mode_recursive
   chmod_recursive
   check_pg_config
   compare_files
+  wait_for_file
   dir_symlink
   scan_server_header
   system_or_bail
@@ -590,6 +593,55 @@ sub string_replace_file
 
 =pod
 
+=item read_head_tail(filename)
+
+Return lines from the head and the tail of a file.  If the file is smaller
+than the number of lines requested, all its contents are returned in @head,
+leaving @tail empty.
+
+If the PG_TEST_FILE_READ_LINES environment variable is set, use it instead
+of the default of 50 lines.
+
+=cut
+
+sub read_head_tail
+{
+	my $filename = shift;
+	my (@head, @tail);
+	my $line_count = 50;
+
+	# Use PG_TEST_FILE_READ_LINES if set.
+	if (defined $ENV{PG_TEST_FILE_READ_LINES})
+	{
+		$line_count = $ENV{PG_TEST_FILE_READ_LINES};
+	}
+
+	return ([], []) if $line_count <= 0;
+
+	open my $fh, '<', $filename or die "couldn't open file: $filename\n";
+	my @lines = <$fh>;
+	close $fh;
+
+	chomp @lines;
+
+	my $total = scalar @lines;
+
+	# If the file is small enough, return all lines in @head.
+	if (2 * $line_count >= $total)
+	{
+		@head = @lines;
+		@tail = ();
+		return (\@head, \@tail);
+	}
+
+	@head = @lines[ 0 .. $line_count - 1 ];
+	@tail = @lines[ $total - $line_count .. $total - 1 ];
+
+	return (\@head, \@tail);
+}
+
+=pod
+
 =item check_mode_recursive(dir, expected_dir_mode, expected_file_mode, ignore_list)
 
 Check that all file/dir modes in a directory match the expected values,
@@ -814,6 +866,43 @@ sub compare_files
 	}
 
 	return;
+}
+
+=pod
+
+=item wait_for_file(filename, regexp[, offset])
+
+Waits for the contents of the specified file, starting at the given offset, to
+match the supplied regular expression.  Checks the entire file if no offset is
+given.  Times out after $timeout_default seconds.
+
+If successful, returns the length of the entire file, in bytes.
+
+=cut
+
+sub wait_for_file
+{
+	my ($filename, $regexp, $offset) = @_;
+	$offset = 0 unless defined $offset;
+
+	my $max_attempts = 10 * $timeout_default;
+	my $attempts = 0;
+
+	while ($attempts < $max_attempts)
+	{
+		if (-e $filename)
+		{
+			my $contents = slurp_file($filename, $offset);
+			return $offset + length($contents) if ($contents =~ m/$regexp/);
+		}
+
+		# Wait 0.1 second before retrying.
+		usleep(100_000);
+
+		$attempts++;
+	}
+
+	croak "timed out waiting for file $filename contents to match: $regexp";
 }
 
 =pod

@@ -2,7 +2,7 @@
  *
  * walmethods.c - implementations of different ways to write received wal
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		  src/bin/pg_basebackup/walmethods.c
@@ -359,7 +359,7 @@ dir_write(Walfile *f, const void *buf, size_t count)
 				return -1;
 			}
 
-			inbuf = ((char *) inbuf) + chunk;
+			inbuf = ((const char *) inbuf) + chunk;
 		}
 
 		/* Our caller keeps track of the uncompressed size. */

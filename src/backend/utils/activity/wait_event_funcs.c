@@ -3,7 +3,7 @@
  * wait_event_funcs.c
  *	  Functions for accessing wait event data.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -31,7 +31,7 @@ static const struct
 
 			waitEventData[] =
 {
-#include "wait_event_funcs_data.c"
+#include "utils/wait_event_funcs_data.c"
 	/* end of list */
 	{NULL, NULL, NULL}
 };

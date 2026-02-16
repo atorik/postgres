@@ -3,7 +3,7 @@
  * joinrels.c
  *	  Routines to determine which relations should be joined
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -1513,6 +1513,7 @@ void
 mark_dummy_rel(RelOptInfo *rel)
 {
 	MemoryContext oldcontext;
+	AppendPathInput in = {0};
 
 	/* Already marked? */
 	if (is_dummy_rel(rel))
@@ -1529,7 +1530,7 @@ mark_dummy_rel(RelOptInfo *rel)
 	rel->partial_pathlist = NIL;
 
 	/* Set up the dummy path */
-	add_path(rel, (Path *) create_append_path(NULL, rel, NIL, NIL,
+	add_path(rel, (Path *) create_append_path(NULL, rel, in,
 											  NIL, rel->lateral_relids,
 											  0, false, -1));
 
@@ -1990,8 +1991,7 @@ compute_partition_bounds(PlannerInfo *root, RelOptInfo *rel1,
 		Assert(nparts > 0);
 		joinrel->boundinfo = boundinfo;
 		joinrel->nparts = nparts;
-		joinrel->part_rels =
-			(RelOptInfo **) palloc0(sizeof(RelOptInfo *) * nparts);
+		joinrel->part_rels = palloc0_array(RelOptInfo *, nparts);
 	}
 	else
 	{

@@ -3,7 +3,7 @@
  * tid.c
  *	  Functions for the built-in type tuple id
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -17,7 +17,6 @@
  */
 #include "postgres.h"
 
-#include <math.h>
 #include <limits.h>
 
 #include "access/sysattr.h"
@@ -104,7 +103,7 @@ tidin(PG_FUNCTION_ARGS)
 						"tid", str)));
 	offsetNumber = (OffsetNumber) cvt;
 
-	result = (ItemPointer) palloc(sizeof(ItemPointerData));
+	result = (ItemPointer) palloc_object(ItemPointerData);
 
 	ItemPointerSet(result, blockNumber, offsetNumber);
 
@@ -146,7 +145,7 @@ tidrecv(PG_FUNCTION_ARGS)
 	blockNumber = pq_getmsgint(buf, sizeof(blockNumber));
 	offsetNumber = pq_getmsgint(buf, sizeof(offsetNumber));
 
-	result = (ItemPointer) palloc(sizeof(ItemPointerData));
+	result = (ItemPointer) palloc_object(ItemPointerData);
 
 	ItemPointerSet(result, blockNumber, offsetNumber);
 
@@ -300,7 +299,7 @@ currtid_internal(Relation rel, const ItemPointerData *tid)
 	Snapshot	snapshot;
 	TableScanDesc scan;
 
-	result = (ItemPointer) palloc(sizeof(ItemPointerData));
+	result = (ItemPointer) palloc_object(ItemPointerData);
 
 	aclresult = pg_class_aclcheck(RelationGetRelid(rel), GetUserId(),
 								  ACL_SELECT);

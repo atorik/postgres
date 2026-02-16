@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, PostgreSQL Global Development Group
+# Copyright (c) 2022-2026, PostgreSQL Global Development Group
 
 tests += {
   'name': 'recovery',
@@ -58,6 +58,8 @@ tests += {
       't/047_checkpoint_physical_slot.pl',
       't/048_vacuum_horizon_floor.pl',
       't/049_wait_for_lsn.pl',
+      't/050_redo_segment_missing.pl',
+      't/051_effective_wal_level.pl',
     ],
   },
 }

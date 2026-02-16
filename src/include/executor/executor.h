@@ -4,7 +4,7 @@
  *	  support for the POSTGRES executor module
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/executor/executor.h
@@ -405,7 +405,7 @@ ExecEvalExpr(ExprState *state,
  * Like ExecEvalExpr(), but for cases where no return value is expected,
  * because the side-effects of expression evaluation are what's desired. This
  * is e.g. used for projection and aggregate transition computation.
-
+ *
  * Evaluate expression identified by "state" in the execution context
  * given by "econtext".
  *
@@ -770,13 +770,13 @@ extern bool RelationFindDeletedTupleInfoSeq(Relation rel,
 											TupleTableSlot *searchslot,
 											TransactionId oldestxmin,
 											TransactionId *delete_xid,
-											RepOriginId *delete_origin,
+											ReplOriginId *delete_origin,
 											TimestampTz *delete_time);
 extern bool RelationFindDeletedTupleInfoByIndex(Relation rel, Oid idxoid,
 												TupleTableSlot *searchslot,
 												TransactionId oldestxmin,
 												TransactionId *delete_xid,
-												RepOriginId *delete_origin,
+												ReplOriginId *delete_origin,
 												TimestampTz *delete_time);
 extern void ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 									 EState *estate, TupleTableSlot *slot);

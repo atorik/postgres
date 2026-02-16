@@ -4,7 +4,7 @@
  *	  WAL replay logic for SP-GiST
  *
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -901,7 +901,7 @@ spgRedoVacuumRedirect(XLogReaderState *record)
 			int			max = PageGetMaxOffsetNumber(page);
 			OffsetNumber *toDelete;
 
-			toDelete = palloc(sizeof(OffsetNumber) * max);
+			toDelete = palloc_array(OffsetNumber, max);
 
 			for (i = xldata->firstPlaceholder; i <= max; i++)
 				toDelete[i - xldata->firstPlaceholder] = i;

@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, PostgreSQL Global Development Group
+# Copyright (c) 2022-2026, PostgreSQL Global Development Group
 
 pgport_sources = [
   'bsearch_arg.c',
@@ -10,7 +10,7 @@ pgport_sources = [
   'pg_localeconv_r.c',
   'pg_numa.c',
   'pg_popcount_aarch64.c',
-  'pg_popcount_avx512.c',
+  'pg_popcount_x86.c',
   'pg_strong_random.c',
   'pgcheckdir.c',
   'pgmkdirp.c',
@@ -72,7 +72,6 @@ replace_funcs_neg = [
   ['mkdtemp'],
   ['strlcat'],
   ['strlcpy'],
-  ['strnlen'],
   ['strsep'],
   ['timingsafe_bcmp'],
 ]

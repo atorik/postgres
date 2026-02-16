@@ -3,7 +3,7 @@
  * ts_selfuncs.c
  *	  Selectivity estimation functions for text search operators.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -108,12 +108,14 @@ tsmatchsel(PG_FUNCTION_ARGS)
 	 * OK, there's a Var and a Const we're dealing with here.  We need the
 	 * Const to be a TSQuery, else we can't do anything useful.  We have to
 	 * check this because the Var might be the TSQuery not the TSVector.
+	 *
+	 * Also check that the Var really is a TSVector, in case this estimator is
+	 * mistakenly attached to some other operator.
 	 */
-	if (((Const *) other)->consttype == TSQUERYOID)
+	if (((Const *) other)->consttype == TSQUERYOID &&
+		vardata.vartype == TSVECTOROID)
 	{
 		/* tsvector @@ tsquery or the other way around */
-		Assert(vardata.vartype == TSVECTOROID);
-
 		selec = tsquerysel(&vardata, ((Const *) other)->constvalue);
 	}
 	else
@@ -226,7 +228,7 @@ mcelem_tsquery_selec(TSQuery query, const Datum *mcelem, int nmcelem,
 	/*
 	 * Transpose the data into a single array so we can use bsearch().
 	 */
-	lookup = (TextFreq *) palloc(sizeof(TextFreq) * nmcelem);
+	lookup = palloc_array(TextFreq, nmcelem);
 	for (i = 0; i < nmcelem; i++)
 	{
 		/*

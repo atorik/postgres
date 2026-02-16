@@ -140,7 +140,7 @@
  *	SLRU per-bank locks
  *		- Protects SerialSlruCtl
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -190,7 +190,7 @@
  * two-phase commit support
  *		AtPrepare_PredicateLocks(void);
  *		PostPrepare_PredicateLocks(TransactionId xid);
- *		PredicateLockTwoPhaseFinish(TransactionId xid, bool isCommit);
+ *		PredicateLockTwoPhaseFinish(FullTransactionId fxid, bool isCommit);
  *		predicatelock_twophase_recover(FullTransactionId fxid, uint16 info,
  *									   void *recdata, uint32 len);
  */
@@ -1451,7 +1451,7 @@ GetPredicateLockStatusData(void)
 	HASH_SEQ_STATUS seqstat;
 	PREDICATELOCK *predlock;
 
-	data = (PredicateLockData *) palloc(sizeof(PredicateLockData));
+	data = palloc_object(PredicateLockData);
 
 	/*
 	 * To ensure consistency, take simultaneous locks on all partition locks
@@ -1464,10 +1464,8 @@ GetPredicateLockStatusData(void)
 	/* Get number of locks and allocate appropriately-sized arrays. */
 	els = hash_get_num_entries(PredicateLockHash);
 	data->nelements = els;
-	data->locktags = (PREDICATELOCKTARGETTAG *)
-		palloc(sizeof(PREDICATELOCKTARGETTAG) * els);
-	data->xacts = (SERIALIZABLEXACT *)
-		palloc(sizeof(SERIALIZABLEXACT) * els);
+	data->locktags = palloc_array(PREDICATELOCKTARGETTAG, els);
+	data->xacts = palloc_array(SERIALIZABLEXACT, els);
 
 
 	/* Scan through PredicateLockHash and copy contents */
@@ -4988,7 +4986,7 @@ predicatelock_twophase_recover(FullTransactionId fxid, uint16 info,
 											   HASH_ENTER, &found);
 		Assert(sxid != NULL);
 		Assert(!found);
-		sxid->myXact = (SERIALIZABLEXACT *) sxact;
+		sxid->myXact = sxact;
 
 		/*
 		 * Update global xmin. Note that this is a special case compared to

@@ -3,7 +3,7 @@
  * pgtz.c
  *	  Timezone Library Integration Functions
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/timezone/pgtz.c
@@ -396,7 +396,7 @@ struct pg_tzenum
 pg_tzenum *
 pg_tzenumerate_start(void)
 {
-	pg_tzenum  *ret = (pg_tzenum *) palloc0(sizeof(pg_tzenum));
+	pg_tzenum  *ret = palloc0_object(pg_tzenum);
 	char	   *startdir = pstrdup(pg_TZDIR());
 
 	ret->baselen = strlen(startdir) + 1;

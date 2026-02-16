@@ -3,7 +3,7 @@
  * tsvector_op.c
  *	  operations over tsvector
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -1212,7 +1212,7 @@ checkclass_str(CHKVAL *chkval, WordEntry *entry, QueryOperand *val,
 			/*
 			 * Filter position information by weights
 			 */
-			dptr = data->pos = palloc(sizeof(WordEntryPos) * posvec->npos);
+			dptr = data->pos = palloc_array(WordEntryPos, posvec->npos);
 			data->allocated = true;
 
 			/* Is there a position with a matching weight? */
@@ -1391,12 +1391,12 @@ checkcondition_str(void *checkval, QueryOperand *val, ExecPhraseData *data)
 						if (totalpos == 0)
 						{
 							totalpos = 256;
-							allpos = palloc(sizeof(WordEntryPos) * totalpos);
+							allpos = palloc_array(WordEntryPos, totalpos);
 						}
 						else
 						{
 							totalpos *= 2;
-							allpos = repalloc(allpos, sizeof(WordEntryPos) * totalpos);
+							allpos = repalloc_array(allpos, WordEntryPos, totalpos);
 						}
 					}
 
@@ -2456,7 +2456,7 @@ ts_setup_firstcall(FunctionCallInfo fcinfo, FuncCallContext *funcctx,
 
 	oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
-	stat->stack = palloc0(sizeof(StatEntry *) * (stat->maxdepth + 1));
+	stat->stack = palloc0_array(StatEntry *, stat->maxdepth + 1);
 	stat->stackpos = 0;
 
 	node = stat->root;
@@ -2604,11 +2604,15 @@ ts_stat_sql(MemoryContext persistentContext, text *txt, text *ws)
 	if (ws)
 	{
 		char	   *buf;
+		const char *end;
 
 		buf = VARDATA_ANY(ws);
-		while (buf - VARDATA_ANY(ws) < VARSIZE_ANY_EXHDR(ws))
+		end = buf + VARSIZE_ANY_EXHDR(ws);
+		while (buf < end)
 		{
-			if (pg_mblen(buf) == 1)
+			int			len = pg_mblen_range(buf, end);
+
+			if (len == 1)
 			{
 				switch (*buf)
 				{
@@ -2632,7 +2636,7 @@ ts_stat_sql(MemoryContext persistentContext, text *txt, text *ws)
 						stat->weight |= 0;
 				}
 			}
-			buf += pg_mblen(buf);
+			buf += len;
 		}
 	}
 
@@ -2839,7 +2843,7 @@ tsvector_update_trigger(PG_FUNCTION_ARGS, bool config_column)
 	prs.lenwords = 32;
 	prs.curwords = 0;
 	prs.pos = 0;
-	prs.words = (ParsedWord *) palloc(sizeof(ParsedWord) * prs.lenwords);
+	prs.words = palloc_array(ParsedWord, prs.lenwords);
 
 	/* find all words in indexable column(s) */
 	for (i = 2; i < trigger->tgnargs; i++)
