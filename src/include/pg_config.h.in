@@ -12,9 +12,6 @@
 /* The normal alignment of `int64_t', in bytes. */
 #undef ALIGNOF_INT64_T
 
-/* The normal alignment of `long', in bytes. */
-#undef ALIGNOF_LONG
-
 /* The normal alignment of `PG_INT128_TYPE', in bytes. */
 #undef ALIGNOF_PG_INT128_TYPE
 
@@ -71,6 +68,14 @@
 
 /* Define to 1 if you have the <crtdefs.h> header file. */
 #undef HAVE_CRTDEFS_H
+
+/* Define to 1 if your C++ compiler understands `typeof' or something similar.
+   */
+#undef HAVE_CXX_TYPEOF
+
+/* Define to 1 if your C++ compiler understands `typeof_unqual' or something
+   similar. */
+#undef HAVE_CXX_TYPEOF_UNQUAL
 
 /* Define to 1 if you have the declaration of `fdatasync', and to 0 if you
    don't. */
@@ -130,6 +135,9 @@
 
 /* Define to 1 if you have the `explicit_bzero' function. */
 #undef HAVE_EXPLICIT_BZERO
+
+/* Define to 1 if you have the `explicit_memset' function. */
+#undef HAVE_EXPLICIT_MEMSET
 
 /* Define to 1 if fseeko (and presumably ftello) exists and is declared. */
 #undef HAVE_FSEEKO
@@ -280,6 +288,9 @@
 /* Define to 1 if you have the <memory.h> header file. */
 #undef HAVE_MEMORY_H
 
+/* Define to 1 if you have the `memset_explicit' function. */
+#undef HAVE_MEMSET_EXPLICIT
+
 /* Define to 1 if you have the `mkdtemp' function. */
 #undef HAVE_MKDTEMP
 
@@ -367,9 +378,6 @@
 /* Define to 1 if you have the `SSL_CTX_set_num_tickets' function. */
 #undef HAVE_SSL_CTX_SET_NUM_TICKETS
 
-/* Define to 1 if your compiler supports statement expressions. */
-#undef HAVE_STATEMENT_EXPRESSIONS
-
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
 
@@ -454,6 +462,10 @@
 /* Define to 1 if your compiler understands `typeof' or something similar. */
 #undef HAVE_TYPEOF
 
+/* Define to 1 if your compiler understands `typeof_unqual' or something
+   similar. */
+#undef HAVE_TYPEOF_UNQUAL
+
 /* Define to 1 if you have the <uchar.h> header file. */
 #undef HAVE_UCHAR_H
 
@@ -525,9 +537,6 @@
 
 /* Define to 1 if your compiler understands __builtin_$op_overflow. */
 #undef HAVE__BUILTIN_OP_OVERFLOW
-
-/* Define to 1 if your compiler understands __builtin_popcount. */
-#undef HAVE__BUILTIN_POPCOUNT
 
 /* Define to 1 if your compiler understands __builtin_types_compatible_p. */
 #undef HAVE__BUILTIN_TYPES_COMPATIBLE_P
@@ -780,11 +789,11 @@
 /* Define for large files, on AIX-style hosts. */
 #undef _LARGE_FILES
 
-/* Define to `__inline__' or `__inline' if that's what the C compiler
-   calls it, or to nothing if 'inline' is not supported under any name.  */
-#ifndef __cplusplus
-#undef inline
-#endif
+/* Define to how the C++ compiler spells `typeof'. */
+#undef pg_cxx_typeof
+
+/* Define to how the C++ compiler spells `typeof_unqual'. */
+#undef pg_cxx_typeof_unqual
 
 /* Define to keyword to use for C99 restrict support, or to nothing if not
    supported */
@@ -806,3 +815,6 @@
 
 /* Define to how the compiler spells `typeof'. */
 #undef typeof
+
+/* Define to how the compiler spells `typeof_unqual'. */
+#undef typeof_unqual

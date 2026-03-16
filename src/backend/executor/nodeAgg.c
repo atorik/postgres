@@ -1682,7 +1682,7 @@ find_hash_columns(AggState *aggstate)
 							  &perhash->hashfunctions);
 		perhash->hashslot =
 			ExecAllocTableSlot(&estate->es_tupleTable, hashDesc,
-							   &TTSOpsMinimalTuple);
+							   &TTSOpsMinimalTuple, 0);
 
 		list_free(hashTlist);
 		bms_free(colnos);
@@ -2257,7 +2257,7 @@ ExecAgg(PlanState *pstate)
 			case AGG_HASHED:
 				if (!node->table_filled)
 					agg_fill_hash_table(node);
-				/* FALLTHROUGH */
+				pg_fallthrough;
 			case AGG_MIXED:
 				result = agg_retrieve_hash_table(node);
 				break;
@@ -4407,7 +4407,7 @@ ExecEndAgg(AggState *node)
 	{
 		AggregateInstrumentation *si;
 
-		Assert(ParallelWorkerNumber <= node->shared_info->num_workers);
+		Assert(ParallelWorkerNumber < node->shared_info->num_workers);
 		si = &node->shared_info->sinstrument[ParallelWorkerNumber];
 		si->hash_batches_used = node->hash_batches_used;
 		si->hash_disk_used = node->hash_disk_used;

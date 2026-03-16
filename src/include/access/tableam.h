@@ -683,7 +683,6 @@ typedef struct TableAmRoutine
 	 * callback).
 	 */
 	bool		(*scan_analyze_next_tuple) (TableScanDesc scan,
-											TransactionId OldestXmin,
 											double *liverows,
 											double *deadrows,
 											TupleTableSlot *slot);
@@ -1503,8 +1502,8 @@ table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
  *	slot - newly constructed tuple data to store
  *	tmfd - filled in failure cases (see below)
  *	lockmode - filled with lock mode acquired on tuple
- *	update_indexes - in success cases this is set to true if new index entries
- *		are required for this tuple
+ *	update_indexes - in success cases this is set if new index entries
+ *		are required for this tuple; see TU_UpdateIndexes
  *
  * Normal, successful return value is TM_Ok, which means we did actually
  * update it.  Failure return codes are TM_SelfModified, TM_Updated, and
@@ -1726,11 +1725,11 @@ table_scan_analyze_next_block(TableScanDesc scan, ReadStream *stream)
  * tuples.
  */
 static inline bool
-table_scan_analyze_next_tuple(TableScanDesc scan, TransactionId OldestXmin,
+table_scan_analyze_next_tuple(TableScanDesc scan,
 							  double *liverows, double *deadrows,
 							  TupleTableSlot *slot)
 {
-	return scan->rs_rd->rd_tableam->scan_analyze_next_tuple(scan, OldestXmin,
+	return scan->rs_rd->rd_tableam->scan_analyze_next_tuple(scan,
 															liverows, deadrows,
 															slot);
 }

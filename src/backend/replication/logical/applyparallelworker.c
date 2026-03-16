@@ -166,11 +166,14 @@
 #include "replication/origin.h"
 #include "replication/worker_internal.h"
 #include "storage/ipc.h"
+#include "storage/latch.h"
 #include "storage/lmgr.h"
+#include "storage/proc.h"
 #include "tcop/tcopprot.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
+#include "utils/wait_event.h"
 
 #define PG_LOGICAL_APPLY_SHM_MAGIC 0x787ca067
 
@@ -879,7 +882,6 @@ ParallelApplyWorkerMain(Datum main_arg)
 	 * receiving SIGTERM.
 	 */
 	pqsignal(SIGHUP, SignalHandlerForConfigReload);
-	pqsignal(SIGTERM, die);
 	pqsignal(SIGUSR2, SignalHandlerForShutdownRequest);
 	BackgroundWorkerUnblockSignals();
 

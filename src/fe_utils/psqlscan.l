@@ -293,6 +293,8 @@ less_equals		"<="
 greater_equals	">="
 less_greater	"<>"
 not_equals		"!="
+/* Note there is no need for left_arrow, since "<-" is not a single operator. */
+right_arrow		"->"
 
 /*
  * "self" is the set of chars that should be returned as single-character
@@ -304,7 +306,7 @@ not_equals		"!="
  * If you change either set, adjust the character lists appearing in the
  * rule for "operator"!
  */
-self			[,()\[\].;\:\+\-\*\/\%\^\<\>\=]
+self			[,()\[\].;\:\|\+\-\*\/\%\^\<\>\=]
 op_chars		[\~\!\@\#\^\&\|\`\?\+\-\*\/\%\<\>\=]
 operator		{op_chars}+
 
@@ -649,6 +651,10 @@ other			.
 				}
 
 {not_equals}	{
+					ECHO;
+				}
+
+{right_arrow}	{
 					ECHO;
 				}
 
@@ -1002,7 +1008,7 @@ psql_scan_create(const PsqlScanCallbacks *callbacks)
 {
 	PsqlScanState state;
 
-	state = (PsqlScanStateData *) pg_malloc0(sizeof(PsqlScanStateData));
+	state = pg_malloc0_object(PsqlScanStateData);
 
 	state->callbacks = callbacks;
 
@@ -1376,7 +1382,7 @@ psqlscan_push_new_buffer(PsqlScanState state, const char *newstr,
 {
 	StackElem  *stackelem;
 
-	stackelem = (StackElem *) pg_malloc(sizeof(StackElem));
+	stackelem = pg_malloc_object(StackElem);
 
 	/*
 	 * In current usage, the passed varname points at the current flex input
@@ -1479,7 +1485,7 @@ psqlscan_prepare_buffer(PsqlScanState state, const char *txt, int len,
 	char	   *newtxt;
 
 	/* Flex wants two \0 characters after the actual data */
-	newtxt = pg_malloc(len + 2);
+	newtxt = pg_malloc_array(char, (len + 2));
 	*txtcopy = newtxt;
 	newtxt[len] = newtxt[len + 1] = YY_END_OF_BUFFER_CHAR;
 
@@ -1548,7 +1554,7 @@ psqlscan_emit(PsqlScanState state, const char *txt, int len)
 char *
 psqlscan_extract_substring(PsqlScanState state, const char *txt, int len)
 {
-	char	   *result = (char *) pg_malloc(len + 1);
+	char	   *result = pg_malloc_array(char, (len + 1));
 
 	if (state->safe_encoding)
 		memcpy(result, txt, len);

@@ -53,6 +53,7 @@
 #include "storage/standby.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
+#include "utils/wait_event.h"
 
 /* GUC variables */
 int			DeadlockTimeout = 1000;
@@ -304,7 +305,7 @@ InitProcGlobal(void)
 		 * dummy PGPROCs don't need these though - they're never associated
 		 * with a real process
 		 */
-		if (i < MaxBackends + NUM_AUXILIARY_PROCS)
+		if (i < FIRST_PREPARED_XACT_PROC_NUMBER)
 		{
 			proc->sem = PGSemaphoreCreate();
 			InitSharedLatch(&(proc->procLatch));
@@ -323,25 +324,25 @@ InitProcGlobal(void)
 		if (i < MaxConnections)
 		{
 			/* PGPROC for normal backend, add to freeProcs list */
-			dlist_push_tail(&ProcGlobal->freeProcs, &proc->links);
+			dlist_push_tail(&ProcGlobal->freeProcs, &proc->freeProcsLink);
 			proc->procgloballist = &ProcGlobal->freeProcs;
 		}
 		else if (i < MaxConnections + autovacuum_worker_slots + NUM_SPECIAL_WORKER_PROCS)
 		{
 			/* PGPROC for AV or special worker, add to autovacFreeProcs list */
-			dlist_push_tail(&ProcGlobal->autovacFreeProcs, &proc->links);
+			dlist_push_tail(&ProcGlobal->autovacFreeProcs, &proc->freeProcsLink);
 			proc->procgloballist = &ProcGlobal->autovacFreeProcs;
 		}
 		else if (i < MaxConnections + autovacuum_worker_slots + NUM_SPECIAL_WORKER_PROCS + max_worker_processes)
 		{
 			/* PGPROC for bgworker, add to bgworkerFreeProcs list */
-			dlist_push_tail(&ProcGlobal->bgworkerFreeProcs, &proc->links);
+			dlist_push_tail(&ProcGlobal->bgworkerFreeProcs, &proc->freeProcsLink);
 			proc->procgloballist = &ProcGlobal->bgworkerFreeProcs;
 		}
 		else if (i < MaxBackends)
 		{
 			/* PGPROC for walsender, add to walsenderFreeProcs list */
-			dlist_push_tail(&ProcGlobal->walsenderFreeProcs, &proc->links);
+			dlist_push_tail(&ProcGlobal->walsenderFreeProcs, &proc->freeProcsLink);
 			proc->procgloballist = &ProcGlobal->walsenderFreeProcs;
 		}
 
@@ -369,7 +370,7 @@ InitProcGlobal(void)
 	 * processes and prepared transactions.
 	 */
 	AuxiliaryProcs = &procs[MaxBackends];
-	PreparedXactProcs = &procs[MaxBackends + NUM_AUXILIARY_PROCS];
+	PreparedXactProcs = &procs[FIRST_PREPARED_XACT_PROC_NUMBER];
 }
 
 /*
@@ -424,7 +425,7 @@ InitProcess(void)
 
 	if (!dlist_is_empty(procgloballist))
 	{
-		MyProc = dlist_container(PGPROC, links, dlist_pop_head_node(procgloballist));
+		MyProc = dlist_container(PGPROC, freeProcsLink, dlist_pop_head_node(procgloballist));
 		SpinLockRelease(&ProcGlobal->freeProcsLock);
 	}
 	else
@@ -457,7 +458,7 @@ InitProcess(void)
 	 * Initialize all fields of MyProc, except for those previously
 	 * initialized by InitProcGlobal.
 	 */
-	dlist_node_init(&MyProc->links);
+	dlist_node_init(&MyProc->freeProcsLink);
 	MyProc->waitStatus = PROC_WAIT_STATUS_OK;
 	MyProc->fpVXIDLock = false;
 	MyProc->fpLocalTransactionId = InvalidLocalTransactionId;
@@ -479,6 +480,7 @@ InitProcess(void)
 	MyProc->lwWaiting = LW_WS_NOT_WAITING;
 	MyProc->lwWaitMode = 0;
 	MyProc->waitLock = NULL;
+	dlist_node_init(&MyProc->waitLink);
 	MyProc->waitProcLock = NULL;
 	pg_atomic_write_u64(&MyProc->waitStart, 0);
 #ifdef USE_ASSERT_CHECKING
@@ -658,7 +660,7 @@ InitAuxiliaryProcess(void)
 	 * Initialize all fields of MyProc, except for those previously
 	 * initialized by InitProcGlobal.
 	 */
-	dlist_node_init(&MyProc->links);
+	dlist_node_init(&MyProc->freeProcsLink);
 	MyProc->waitStatus = PROC_WAIT_STATUS_OK;
 	MyProc->fpVXIDLock = false;
 	MyProc->fpLocalTransactionId = InvalidLocalTransactionId;
@@ -675,6 +677,7 @@ InitAuxiliaryProcess(void)
 	MyProc->lwWaiting = LW_WS_NOT_WAITING;
 	MyProc->lwWaitMode = 0;
 	MyProc->waitLock = NULL;
+	dlist_node_init(&MyProc->waitLink);
 	MyProc->waitProcLock = NULL;
 	pg_atomic_write_u64(&MyProc->waitStart, 0);
 #ifdef USE_ASSERT_CHECKING
@@ -686,6 +689,7 @@ InitAuxiliaryProcess(void)
 			Assert(dlist_is_empty(&(MyProc->myProcLocks[i])));
 	}
 #endif
+	pg_atomic_write_u32(&MyProc->pendingRecoveryConflicts, 0);
 
 	/*
 	 * Acquire ownership of the PGPROC's latch, so that we can use WaitLatch
@@ -835,7 +839,7 @@ LockErrorCleanup(void)
 	partitionLock = LockHashPartitionLock(lockAwaited->hashcode);
 	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
 
-	if (!dlist_node_is_detached(&MyProc->links))
+	if (!dlist_node_is_detached(&MyProc->waitLink))
 	{
 		/* We could not have been granted the lock yet */
 		RemoveFromWaitQueue(MyProc, lockAwaited->hashcode);
@@ -967,7 +971,7 @@ ProcKill(int code, Datum arg)
 
 				/* Leader exited first; return its PGPROC. */
 				SpinLockAcquire(&ProcGlobal->freeProcsLock);
-				dlist_push_head(procgloballist, &leader->links);
+				dlist_push_head(procgloballist, &leader->freeProcsLink);
 				SpinLockRelease(&ProcGlobal->freeProcsLock);
 			}
 		}
@@ -1012,7 +1016,7 @@ ProcKill(int code, Datum arg)
 		Assert(dlist_is_empty(&proc->lockGroupMembers));
 
 		/* Return PGPROC structure (and semaphore) to appropriate freelist */
-		dlist_push_tail(procgloballist, &proc->links);
+		dlist_push_tail(procgloballist, &proc->freeProcsLink);
 	}
 
 	/* Update shared estimate of spins_per_delay */
@@ -1201,7 +1205,7 @@ JoinWaitQueue(LOCALLOCK *locallock, LockMethod lockMethodTable, bool dontWait)
 
 		dclist_foreach(iter, waitQueue)
 		{
-			PGPROC	   *proc = dlist_container(PGPROC, links, iter.cur);
+			PGPROC	   *proc = dlist_container(PGPROC, waitLink, iter.cur);
 
 			/*
 			 * If we're part of the same locking group as this waiter, its
@@ -1265,9 +1269,9 @@ JoinWaitQueue(LOCALLOCK *locallock, LockMethod lockMethodTable, bool dontWait)
 	 * Insert self into queue, at the position determined above.
 	 */
 	if (insert_before)
-		dclist_insert_before(waitQueue, &insert_before->links, &MyProc->links);
+		dclist_insert_before(waitQueue, &insert_before->waitLink, &MyProc->waitLink);
 	else
-		dclist_push_tail(waitQueue, &MyProc->links);
+		dclist_push_tail(waitQueue, &MyProc->waitLink);
 
 	lock->waitMask |= LOCKBIT_ON(lockmode);
 
@@ -1305,6 +1309,7 @@ ProcSleep(LOCALLOCK *locallock)
 	TimestampTz standbyWaitStart = 0;
 	bool		allow_autovacuum_cancel = true;
 	bool		logged_recovery_conflict = false;
+	bool		logged_lock_wait = false;
 	ProcWaitStatus myWaitStatus;
 	DeadLockState deadlock_state;
 
@@ -1602,12 +1607,29 @@ ProcSleep(LOCALLOCK *locallock)
 			}
 
 			if (myWaitStatus == PROC_WAIT_STATUS_WAITING)
-				ereport(LOG,
-						(errmsg("process %d still waiting for %s on %s after %ld.%03d ms",
-								MyProcPid, modename, buf.data, msecs, usecs),
-						 (errdetail_log_plural("Process holding the lock: %s. Wait queue: %s.",
-											   "Processes holding the lock: %s. Wait queue: %s.",
-											   lockHoldersNum, lock_holders_sbuf.data, lock_waiters_sbuf.data))));
+			{
+				/*
+				 * Guard the "still waiting on lock" log message so it is
+				 * reported at most once while waiting for the lock.
+				 *
+				 * Without this guard, the message can be emitted whenever the
+				 * lock-wait sleep is interrupted (for example by SIGHUP for
+				 * config reload or by client_connection_check_interval). For
+				 * example, if client_connection_check_interval is set very
+				 * low (e.g., 100 ms), the message could be logged repeatedly,
+				 * flooding the log and making it difficult to use.
+				 */
+				if (!logged_lock_wait)
+				{
+					ereport(LOG,
+							(errmsg("process %d still waiting for %s on %s after %ld.%03d ms",
+									MyProcPid, modename, buf.data, msecs, usecs),
+							 (errdetail_log_plural("Process holding the lock: %s. Wait queue: %s.",
+												   "Processes holding the lock: %s. Wait queue: %s.",
+												   lockHoldersNum, lock_holders_sbuf.data, lock_waiters_sbuf.data))));
+					logged_lock_wait = true;
+				}
+			}
 			else if (myWaitStatus == PROC_WAIT_STATUS_OK)
 				ereport(LOG,
 						(errmsg("process %d acquired %s on %s after %ld.%03d ms",
@@ -1689,7 +1711,7 @@ ProcSleep(LOCALLOCK *locallock)
 /*
  * ProcWakeup -- wake up a process by setting its latch.
  *
- *	 Also remove the process from the wait queue and set its links invalid.
+ *	 Also remove the process from the wait queue and set its waitLink invalid.
  *
  * The appropriate lock partition lock must be held by caller.
  *
@@ -1701,19 +1723,19 @@ ProcSleep(LOCALLOCK *locallock)
 void
 ProcWakeup(PGPROC *proc, ProcWaitStatus waitStatus)
 {
-	if (dlist_node_is_detached(&proc->links))
+	if (dlist_node_is_detached(&proc->waitLink))
 		return;
 
 	Assert(proc->waitStatus == PROC_WAIT_STATUS_WAITING);
 
 	/* Remove process from wait queue */
-	dclist_delete_from_thoroughly(&proc->waitLock->waitProcs, &proc->links);
+	dclist_delete_from_thoroughly(&proc->waitLock->waitProcs, &proc->waitLink);
 
 	/* Clean up process' state and pass it the ok/fail signal */
 	proc->waitLock = NULL;
 	proc->waitProcLock = NULL;
 	proc->waitStatus = waitStatus;
-	pg_atomic_write_u64(&MyProc->waitStart, 0);
+	pg_atomic_write_u64(&proc->waitStart, 0);
 
 	/* And awaken it */
 	SetLatch(&proc->procLatch);
@@ -1738,7 +1760,7 @@ ProcLockWakeup(LockMethod lockMethodTable, LOCK *lock)
 
 	dclist_foreach_modify(miter, waitQueue)
 	{
-		PGPROC	   *proc = dlist_container(PGPROC, links, miter.cur);
+		PGPROC	   *proc = dlist_container(PGPROC, waitLink, miter.cur);
 		LOCKMODE	lockmode = proc->waitLockMode;
 
 		/*
@@ -1802,8 +1824,7 @@ CheckDeadLock(void)
 	 * We check by looking to see if we've been unlinked from the wait queue.
 	 * This is safe because we hold the lock partition lock.
 	 */
-	if (MyProc->links.prev == NULL ||
-		MyProc->links.next == NULL)
+	if (dlist_node_is_detached(&MyProc->waitLink))
 	{
 		result = DS_NO_DEADLOCK;
 		goto check_done;

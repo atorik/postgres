@@ -11,17 +11,20 @@
 #ifndef PGSTAT_H
 #define PGSTAT_H
 
-#include "access/transam.h"		/* for FullTransactionId */
 #include "datatype/timestamp.h"
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
 #include "replication/conflict.h"
-#include "replication/worker_internal.h"
 #include "utils/backend_progress.h" /* for backward compatibility */	/* IWYU pragma: export */
 #include "utils/backend_status.h"	/* for backward compatibility */	/* IWYU pragma: export */
 #include "utils/pgstat_kind.h"
-#include "utils/relcache.h"
-#include "utils/wait_event.h"	/* for backward compatibility */	/* IWYU pragma: export */
+
+
+/* avoid including access/transam.h */
+typedef struct FullTransactionId FullTransactionId;
+
+/* avoid including utils/relcache.h */
+typedef struct RelationData *Relation;
 
 
 /* ----------
@@ -775,8 +778,7 @@ extern PgStat_SLRUStats *pgstat_fetch_slru(void);
  * Functions in pgstat_subscription.c
  */
 
-extern void pgstat_report_subscription_error(Oid subid,
-											 LogicalRepWorkerType wtype);
+extern void pgstat_report_subscription_error(Oid subid);
 extern void pgstat_report_subscription_conflict(Oid subid, ConflictType type);
 extern void pgstat_create_subscription(Oid subid);
 extern void pgstat_drop_subscription(Oid subid);

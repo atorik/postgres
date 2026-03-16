@@ -79,13 +79,13 @@ MakeTidOpExpr(OpExpr *expr, TidRangeScanState *tidstate)
 	{
 		case TIDLessEqOperator:
 			tidopexpr->inclusive = true;
-			/* fall through */
+			pg_fallthrough;
 		case TIDLessOperator:
 			tidopexpr->exprtype = invert ? TIDEXPR_LOWER_BOUND : TIDEXPR_UPPER_BOUND;
 			break;
 		case TIDGreaterEqOperator:
 			tidopexpr->inclusive = true;
-			/* fall through */
+			pg_fallthrough;
 		case TIDGreaterOperator:
 			tidopexpr->exprtype = invert ? TIDEXPR_UPPER_BOUND : TIDEXPR_LOWER_BOUND;
 			break;
@@ -394,7 +394,8 @@ ExecInitTidRangeScan(TidRangeScan *node, EState *estate, int eflags)
 	 */
 	ExecInitScanTupleSlot(estate, &tidrangestate->ss,
 						  RelationGetDescr(currentRelation),
-						  table_slot_callbacks(currentRelation));
+						  table_slot_callbacks(currentRelation),
+						  TTS_FLAG_OBEYS_NOT_NULL_CONSTRAINTS);
 
 	/*
 	 * Initialize result type and projection.

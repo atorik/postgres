@@ -129,6 +129,7 @@ initGinState(GinState *state, Relation index)
 							   attr->attndims);
 			TupleDescInitEntryCollation(state->tupdesc[i], (AttrNumber) 2,
 										attr->attcollation);
+			TupleDescFinalize(state->tupdesc[i]);
 		}
 
 		/*
@@ -663,9 +664,9 @@ ginUpdateStats(Relation index, const GinStatsData *stats, bool is_build)
 		PageSetLSN(metapage, recptr);
 	}
 
-	UnlockReleaseBuffer(metabuffer);
-
 	END_CRIT_SECTION();
+
+	UnlockReleaseBuffer(metabuffer);
 }
 
 /*

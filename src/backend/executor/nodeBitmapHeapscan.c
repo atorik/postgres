@@ -45,6 +45,7 @@
 #include "storage/bufmgr.h"
 #include "utils/rel.h"
 #include "utils/spccache.h"
+#include "utils/wait_event.h"
 
 static void BitmapTableScanSetup(BitmapHeapScanState *node);
 static TupleTableSlot *BitmapHeapNext(BitmapHeapScanState *node);
@@ -275,7 +276,7 @@ ExecEndBitmapHeapScan(BitmapHeapScanState *node)
 	{
 		BitmapHeapScanInstrumentation *si;
 
-		Assert(ParallelWorkerNumber <= node->sinstrument->num_workers);
+		Assert(ParallelWorkerNumber < node->sinstrument->num_workers);
 		si = &node->sinstrument->sinstrument[ParallelWorkerNumber];
 
 		/*
@@ -381,7 +382,8 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 	 */
 	ExecInitScanTupleSlot(estate, &scanstate->ss,
 						  RelationGetDescr(currentRelation),
-						  table_slot_callbacks(currentRelation));
+						  table_slot_callbacks(currentRelation),
+						  TTS_FLAG_OBEYS_NOT_NULL_CONSTRAINTS);
 
 	/*
 	 * Initialize result type and projection.

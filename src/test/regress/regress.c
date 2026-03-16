@@ -729,6 +729,13 @@ test_fdw_handler(PG_FUNCTION_ARGS)
 	PG_RETURN_NULL();
 }
 
+PG_FUNCTION_INFO_V1(test_fdw_connection);
+Datum
+test_fdw_connection(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_TEXT_P(cstring_to_text("dbname=regress_doesnotexist user=doesnotexist password=secret"));
+}
+
 PG_FUNCTION_INFO_V1(is_catalog_text_unique_index_oid);
 Datum
 is_catalog_text_unique_index_oid(PG_FUNCTION_ARGS)
@@ -1251,7 +1258,7 @@ PG_FUNCTION_INFO_V1(test_valid_server_encoding);
 Datum
 test_valid_server_encoding(PG_FUNCTION_ARGS)
 {
-	return pg_valid_server_encoding(text_to_cstring(PG_GETARG_TEXT_PP(0)));
+	PG_RETURN_BOOL(pg_valid_server_encoding(text_to_cstring(PG_GETARG_TEXT_PP(0))) >= 0);
 }
 
 /* Provide SQL access to IsBinaryCoercible() */

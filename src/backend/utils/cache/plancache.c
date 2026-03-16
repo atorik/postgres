@@ -106,8 +106,10 @@ static void ScanQueryForLocks(Query *parsetree, bool acquire);
 static bool ScanQueryWalker(Node *node, bool *acquire);
 static TupleDesc PlanCacheComputeResultDesc(List *stmt_list);
 static void PlanCacheRelCallback(Datum arg, Oid relid);
-static void PlanCacheObjectCallback(Datum arg, int cacheid, uint32 hashvalue);
-static void PlanCacheSysCallback(Datum arg, int cacheid, uint32 hashvalue);
+static void PlanCacheObjectCallback(Datum arg, SysCacheIdentifier cacheid,
+									uint32 hashvalue);
+static void PlanCacheSysCallback(Datum arg, SysCacheIdentifier cacheid,
+								 uint32 hashvalue);
 
 /* ResourceOwner callbacks to track plancache references */
 static void ResOwnerReleaseCachedPlan(Datum res);
@@ -2012,7 +2014,11 @@ ScanQueryForLocks(Query *parsetree, bool acquire)
 				break;
 
 			case RTE_SUBQUERY:
-				/* If this was a view, must lock/unlock the view */
+
+				/*
+				 * If this was a view or a property graph, must lock/unlock
+				 * it.
+				 */
 				if (OidIsValid(rte->relid))
 				{
 					if (acquire)
@@ -2201,7 +2207,7 @@ PlanCacheRelCallback(Datum arg, Oid relid)
  * or all plans mentioning any member of this cache if hashvalue == 0.
  */
 static void
-PlanCacheObjectCallback(Datum arg, int cacheid, uint32 hashvalue)
+PlanCacheObjectCallback(Datum arg, SysCacheIdentifier cacheid, uint32 hashvalue)
 {
 	dlist_iter	iter;
 
@@ -2310,7 +2316,7 @@ PlanCacheObjectCallback(Datum arg, int cacheid, uint32 hashvalue)
  * Just invalidate everything...
  */
 static void
-PlanCacheSysCallback(Datum arg, int cacheid, uint32 hashvalue)
+PlanCacheSysCallback(Datum arg, SysCacheIdentifier cacheid, uint32 hashvalue)
 {
 	ResetPlanCache();
 }

@@ -3192,6 +3192,31 @@ ORDER BY 1;
 
 reset enable_nestloop;
 --
+-- test that estimate_hash_bucket_stats estimates correctly with skewed data
+-- (we should choose to hash the filtered table)
+--
+create temp table skewedtable (val int not null, filt int not null);
+insert into skewedtable
+select
+    case when g <= 100 then 0 else (g % 100) + 1 end,
+    g % 10
+from generate_series(1, 1000) g;
+analyze skewedtable;
+explain (costs off)
+select * from skewedtable t1 join skewedtable t2 on t1.val = t2.val
+where t1.filt = 5;
+               QUERY PLAN               
+----------------------------------------
+ Hash Join
+   Hash Cond: (t2.val = t1.val)
+   ->  Seq Scan on skewedtable t2
+   ->  Hash
+         ->  Seq Scan on skewedtable t1
+               Filter: (filt = 5)
+(6 rows)
+
+drop table skewedtable;
+--
 -- basic semijoin and antijoin recognition tests
 --
 explain (costs off)
@@ -4486,6 +4511,57 @@ where ss.x is null;
                      Output: 'bar'::text
 (12 rows)
 
+-- Test computation of varnullingrels when translating appendrel Var
+begin;
+create temp table t_append (a int not null, b int);
+insert into t_append values (1, 1);
+insert into t_append values (2, 3);
+explain (verbose, costs off)
+select t1.a, s.a from t_append t1
+  left join t_append t2 on t1.a = t2.b
+  join lateral (
+    select t1.a as a union all select t2.a as a
+  ) s on true
+where s.a is not null;
+                    QUERY PLAN                     
+---------------------------------------------------
+ Nested Loop
+   Output: t1.a, (t1.a)
+   ->  Merge Left Join
+         Output: t1.a, t2.a
+         Merge Cond: (t1.a = t2.b)
+         ->  Sort
+               Output: t1.a
+               Sort Key: t1.a
+               ->  Seq Scan on pg_temp.t_append t1
+                     Output: t1.a
+         ->  Sort
+               Output: t2.a, t2.b
+               Sort Key: t2.b
+               ->  Seq Scan on pg_temp.t_append t2
+                     Output: t2.a, t2.b
+   ->  Append
+         ->  Result
+               Output: t1.a
+         ->  Result
+               Output: t2.a
+               One-Time Filter: (t2.a IS NOT NULL)
+(21 rows)
+
+select t1.a, s.a from t_append t1
+  left join t_append t2 on t1.a = t2.b
+  join lateral (
+    select t1.a as a union all select t2.a as a
+  ) s on true
+where s.a is not null;
+ a | a 
+---+---
+ 1 | 1
+ 1 | 1
+ 2 | 2
+(3 rows)
+
+rollback;
 --
 -- test inlining of immutable functions
 --
@@ -9378,19 +9454,19 @@ select * from fkest f1
   join fkest f2 on (f1.x = f2.x and f1.x10 = f2.x10b and f1.x100 = f2.x100)
   join fkest f3 on f1.x = f3.x
   where f1.x100 = 2;
-                        QUERY PLAN                         
------------------------------------------------------------
+                     QUERY PLAN                      
+-----------------------------------------------------
  Hash Join
-   Hash Cond: (f1.x = f3.x)
+   Hash Cond: ((f2.x = f1.x) AND (f2.x10b = f1.x10))
    ->  Hash Join
-         Hash Cond: ((f2.x = f1.x) AND (f2.x10b = f1.x10))
-         ->  Seq Scan on fkest f2
-               Filter: (x100 = 2)
+         Hash Cond: (f3.x = f2.x)
+         ->  Seq Scan on fkest f3
          ->  Hash
-               ->  Seq Scan on fkest f1
+               ->  Seq Scan on fkest f2
                      Filter: (x100 = 2)
    ->  Hash
-         ->  Seq Scan on fkest f3
+         ->  Seq Scan on fkest f1
+               Filter: (x100 = 2)
 (11 rows)
 
 rollback;

@@ -86,7 +86,7 @@ static void pgoutput_stream_prepare_txn(LogicalDecodingContext *ctx,
 static bool publications_valid;
 
 static List *LoadPublications(List *pubnames);
-static void publication_invalidation_cb(Datum arg, int cacheid,
+static void publication_invalidation_cb(Datum arg, SysCacheIdentifier cacheid,
 										uint32 hashvalue);
 static void send_repl_origin(LogicalDecodingContext *ctx,
 							 ReplOriginId origin_id, XLogRecPtr origin_lsn,
@@ -227,7 +227,7 @@ static void send_relation_and_attrs(Relation relation, TransactionId xid,
 									LogicalDecodingContext *ctx,
 									RelationSyncEntry *relentry);
 static void rel_sync_cache_relation_cb(Datum arg, Oid relid);
-static void rel_sync_cache_publication_cb(Datum arg, int cacheid,
+static void rel_sync_cache_publication_cb(Datum arg, SysCacheIdentifier cacheid,
 										  uint32 hashvalue);
 static void set_schema_sent_in_streamed_txn(RelationSyncEntry *entry,
 											TransactionId xid);
@@ -1559,7 +1559,7 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		if (relentry->attrmap)
 		{
 			TupleTableSlot *slot = MakeTupleTableSlot(RelationGetDescr(targetrel),
-													  &TTSOpsVirtual);
+													  &TTSOpsVirtual, 0);
 
 			old_slot = execute_attr_map_slot(relentry->attrmap, old_slot, slot);
 		}
@@ -1574,7 +1574,7 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		if (relentry->attrmap)
 		{
 			TupleTableSlot *slot = MakeTupleTableSlot(RelationGetDescr(targetrel),
-													  &TTSOpsVirtual);
+													  &TTSOpsVirtual, 0);
 
 			new_slot = execute_attr_map_slot(relentry->attrmap, new_slot, slot);
 		}
@@ -1828,7 +1828,8 @@ LoadPublications(List *pubnames)
  * Called for invalidations on pg_publication.
  */
 static void
-publication_invalidation_cb(Datum arg, int cacheid, uint32 hashvalue)
+publication_invalidation_cb(Datum arg, SysCacheIdentifier cacheid,
+							uint32 hashvalue)
 {
 	publications_valid = false;
 }
@@ -2088,7 +2089,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 	if (!entry->replicate_valid)
 	{
 		Oid			schemaId = get_rel_namespace(relid);
-		List	   *pubids = GetRelationPublications(relid);
+		List	   *pubids = GetRelationIncludedPublications(relid);
 
 		/*
 		 * We don't acquire a lock on the namespace system table as we build
@@ -2205,14 +2206,47 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 			 */
 			if (pub->alltables)
 			{
-				publish = true;
-				if (pub->pubviaroot && am_partition)
+				List	   *exceptpubids = NIL;
+
+				if (am_partition)
 				{
 					List	   *ancestors = get_partition_ancestors(relid);
+					Oid			last_ancestor_relid = llast_oid(ancestors);
 
-					pub_relid = llast_oid(ancestors);
-					ancestor_level = list_length(ancestors);
+					/*
+					 * For a partition, changes are published via top-most
+					 * ancestor when pubviaroot is true, so populate pub_relid
+					 * accordingly.
+					 */
+					if (pub->pubviaroot)
+					{
+						pub_relid = last_ancestor_relid;
+						ancestor_level = list_length(ancestors);
+					}
+
+					/*
+					 * Only the top-most ancestor can appear in the EXCEPT
+					 * clause. Therefore, for a partition, exclusion must be
+					 * evaluated at the top-most ancestor.
+					 */
+					exceptpubids = GetRelationExcludedPublications(last_ancestor_relid);
 				}
+				else
+				{
+					/*
+					 * For a regular table or a root partitioned table, check
+					 * exclusion on table itself.
+					 */
+					exceptpubids = GetRelationExcludedPublications(pub_relid);
+				}
+
+				if (!list_member_oid(exceptpubids, pub->oid))
+					publish = true;
+
+				list_free(exceptpubids);
+
+				if (!publish)
+					continue;
 			}
 
 			if (!publish)
@@ -2431,7 +2465,8 @@ rel_sync_cache_relation_cb(Datum arg, Oid relid)
  * Called for invalidations on pg_namespace.
  */
 static void
-rel_sync_cache_publication_cb(Datum arg, int cacheid, uint32 hashvalue)
+rel_sync_cache_publication_cb(Datum arg, SysCacheIdentifier cacheid,
+							  uint32 hashvalue)
 {
 	HASH_SEQ_STATUS status;
 	RelationSyncEntry *entry;

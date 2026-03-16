@@ -3904,7 +3904,7 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 							(errcode(ERRCODE_SYNTAX_ERROR),
 							 errmsg("--%s must be first argument", optarg)));
 
-				/* FALLTHROUGH */
+				pg_fallthrough;
 			case 'c':
 				{
 					char	   *name,
@@ -5028,7 +5028,7 @@ PostgresMain(const char *dbname, const char *username)
 				/* for the cumulative statistics system */
 				pgStatSessionEndCause = DISCONNECT_CLIENT_EOF;
 
-				/* FALLTHROUGH */
+				pg_fallthrough;
 
 			case PqMsg_Terminate:
 

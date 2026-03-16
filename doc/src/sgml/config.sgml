@@ -1188,7 +1188,8 @@ include_dir 'conf.d'
       <listitem>
        <para>
         Controls whether a <literal>WARNING</literal> about MD5 password
-        deprecation is produced when a <command>CREATE ROLE</command> or
+        deprecation is produced upon successful MD5 password authentication or
+        when a <command>CREATE ROLE</command> or
         <command>ALTER ROLE</command> statement sets an MD5-encrypted password.
         The default value is <literal>on</literal>.
        </para>
@@ -1562,6 +1563,15 @@ include_dir 'conf.d'
         <filename>postgresql.conf</filename> file or on the server command line.
         The default is <literal>X25519:prime256v1</literal>.
        </para>
+
+       <note>
+        <para>
+         <literal>X25519</literal> is not allowed when
+         <productname>OpenSSL</productname> is configured for FIPS mode and
+         must be removed from the server configuration when FIPS mode is
+         enabled.
+        </para>
+       </note>
 
        <para>
         <productname>OpenSSL</productname> names for the most common curves
@@ -4324,6 +4334,21 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
         The precise stopping point is also influenced by
         <xref linkend="guc-recovery-target-inclusive"/>.
        </para>
+
+       <para>
+        The value can be specified as either a 32-bit transaction ID or a 64-bit
+        transaction ID (consisting of an epoch and a 32-bit ID), such as the
+        value returned by <function>pg_current_xact_id()</function>. When a
+        64-bit transaction ID is provided, only its 32-bit transaction ID
+        portion is used as the recovery target. For example, the values
+        4294968296 (epoch 1) and 8589935592 (epoch 2) both refer to the same
+        32-bit transaction ID, 1000.
+       </para>
+
+       <para>
+        The effective transaction ID (the 32-bit portion) must be greater than
+        or equal to 3.
+       </para>
       </listitem>
      </varlistentry>
 
@@ -5240,9 +5265,6 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
         If this value is specified without units, it is taken as milliseconds.
         The default value is 60 seconds.
         A value of zero disables the timeout mechanism.
-        This parameter can only be set in
-        the <filename>postgresql.conf</filename> file or on the server
-        command line.
        </para>
       </listitem>
      </varlistentry>
@@ -10013,7 +10035,8 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
         The supported compression methods are <literal>pglz</literal> and
         (if <productname>PostgreSQL</productname> was compiled with
         <option>--with-lz4</option>) <literal>lz4</literal>.
-        The default is <literal>pglz</literal>.
+        The default is <literal>lz4</literal> (if available); otherwise,
+        <literal>pglz</literal>.
        </para>
       </listitem>
      </varlistentry>

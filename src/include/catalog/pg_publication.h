@@ -26,6 +26,8 @@
  *		typedef struct FormData_pg_publication
  * ----------------
  */
+BEGIN_CATALOG_STRUCT
+
 CATALOG(pg_publication,6104,PublicationRelationId)
 {
 	Oid			oid;			/* oid */
@@ -67,6 +69,8 @@ CATALOG(pg_publication,6104,PublicationRelationId)
 	 */
 	char		pubgencols;
 } FormData_pg_publication;
+
+END_CATALOG_STRUCT
 
 /* ----------------
  *		Form_pg_publication corresponds to a pointer to a tuple with
@@ -146,16 +150,19 @@ typedef struct PublicationRelInfo
 	Relation	relation;
 	Node	   *whereClause;
 	List	   *columns;
+	bool		except;
 } PublicationRelInfo;
 
 extern Publication *GetPublication(Oid pubid);
 extern Publication *GetPublicationByName(const char *pubname, bool missing_ok);
-extern List *GetRelationPublications(Oid relid);
+extern List *GetRelationIncludedPublications(Oid relid);
+extern List *GetRelationExcludedPublications(Oid relid);
 
 /*---------
- * Expected values for pub_partopt parameter of GetPublicationRelations(),
- * which allows callers to specify which partitions of partitioned tables
- * mentioned in the publication they expect to see.
+ * Expected values for pub_partopt parameter of
+ * GetIncludedPublicationRelations(), which allows callers to specify which
+ * partitions of partitioned tables mentioned in the publication they expect to
+ * see.
  *
  *	ROOT:	only the table explicitly mentioned in the publication
  *	LEAF:	only leaf partitions in given tree
@@ -168,9 +175,12 @@ typedef enum PublicationPartOpt
 	PUBLICATION_PART_ALL,
 } PublicationPartOpt;
 
-extern List *GetPublicationRelations(Oid pubid, PublicationPartOpt pub_partopt);
+extern List *GetIncludedPublicationRelations(Oid pubid,
+											 PublicationPartOpt pub_partopt);
+extern List *GetExcludedPublicationTables(Oid pubid,
+										  PublicationPartOpt pub_partopt);
 extern List *GetAllTablesPublications(void);
-extern List *GetAllPublicationRelations(char relkind, bool pubviaroot);
+extern List *GetAllPublicationRelations(Oid pubid, char relkind, bool pubviaroot);
 extern List *GetPublicationSchemas(Oid pubid);
 extern List *GetSchemaPublications(Oid schemaid);
 extern List *GetSchemaPublicationRelations(Oid schemaid,

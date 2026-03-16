@@ -79,6 +79,7 @@
 #include "utils/pg_lsn.h"
 #include "utils/ps_status.h"
 #include "utils/timestamp.h"
+#include "utils/wait_event.h"
 
 
 /*
@@ -192,7 +193,7 @@ WalReceiverMain(const void *startup_data, size_t startup_data_len)
 		case WALRCV_STOPPING:
 			/* If we've already been requested to stop, don't start up. */
 			walrcv->walRcvState = WALRCV_STOPPED;
-			/* fall through */
+			pg_fallthrough;
 
 		case WALRCV_STOPPED:
 			SpinLockRelease(&walrcv->mutex);

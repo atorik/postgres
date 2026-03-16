@@ -84,6 +84,14 @@
 #include <libintl.h>
 #endif
 
+#ifdef __cplusplus
+extern "C++"
+{
+/* This header is used in the definition of various C++ things below. */
+#include <type_traits>
+}
+#endif
+
  /* Pull in fundamental symbols that we also expose to applications */
 #include "postgres_ext.h"
 
@@ -130,6 +138,18 @@
 #define pg_attribute_unused() __attribute__((unused))
 #else
 #define pg_attribute_unused()
+#endif
+
+/*
+ * pg_fallthrough indicates that the fall through from the previous case is
+ * intentional.
+ */
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L) || (defined(__cplusplus) && __cplusplus >= 201703L)
+#define pg_fallthrough [[fallthrough]]
+#elif __has_attribute(fallthrough)
+#define pg_fallthrough __attribute__((fallthrough))
+#else
+#define pg_fallthrough
 #endif
 
 /*
@@ -411,6 +431,40 @@
 #define likely(x)	((x) != 0)
 #define unlikely(x) ((x) != 0)
 #endif
+
+/*
+ * Provide typeof in C++ for C++ compilers that don't support typeof natively.
+ * It might be spelled __typeof__ instead of typeof, in which case
+ * pg_cxx_typeof provides that mapping. If neither is supported, we can use
+ * decltype, but to make it equivalent to C's typeof, we need to remove
+ * references from the result [1]. Also ensure HAVE_TYPEOF is set so that
+ * typeof-dependent code is always enabled in C++ mode.
+ *
+ * [1]: https://www.open-std.org/jtc1/sc22/wg14/www/docs/n2927.htm#existing-decltype
+ */
+#if defined(__cplusplus)
+#undef typeof
+#ifdef pg_cxx_typeof
+#define typeof(x) pg_cxx_typeof(x)
+#elif !defined(HAVE_CXX_TYPEOF)
+#define typeof(x) std::remove_reference<decltype(x)>::type
+#endif
+#ifndef HAVE_TYPEOF
+#define HAVE_TYPEOF 1
+#endif
+/*
+ * and analogously for typeof_unqual
+ */
+#undef typeof_unqual
+#ifdef pg_cxx_typeof_unqual
+#define typeof_unqual(x) pg_cxx_typeof_unqual(x)
+#elif !defined(HAVE_CXX_TYPEOF_UNQUAL)
+#define typeof_unqual(x) std::remove_cv<std::remove_reference<decltype(x)>::type>::type
+#endif
+#ifndef HAVE_TYPEOF_UNQUAL
+#define HAVE_TYPEOF_UNQUAL 1
+#endif
+#endif							/* __cplusplus */
 
 /*
  * CppAsString
@@ -821,7 +875,7 @@ typedef NameData *Name;
 
 #define SHORTALIGN(LEN)			TYPEALIGN(ALIGNOF_SHORT, (LEN))
 #define INTALIGN(LEN)			TYPEALIGN(ALIGNOF_INT, (LEN))
-#define LONGALIGN(LEN)			TYPEALIGN(ALIGNOF_LONG, (LEN))
+#define INT64ALIGN(LEN)			TYPEALIGN(ALIGNOF_INT64_T, (LEN))
 #define DOUBLEALIGN(LEN)		TYPEALIGN(ALIGNOF_DOUBLE, (LEN))
 #define MAXALIGN(LEN)			TYPEALIGN(MAXIMUM_ALIGNOF, (LEN))
 /* MAXALIGN covers only built-in types, not buffers */
@@ -833,7 +887,7 @@ typedef NameData *Name;
 
 #define SHORTALIGN_DOWN(LEN)	TYPEALIGN_DOWN(ALIGNOF_SHORT, (LEN))
 #define INTALIGN_DOWN(LEN)		TYPEALIGN_DOWN(ALIGNOF_INT, (LEN))
-#define LONGALIGN_DOWN(LEN)		TYPEALIGN_DOWN(ALIGNOF_LONG, (LEN))
+#define INT64ALIGN_DOWN(LEN)	TYPEALIGN_DOWN(ALIGNOF_INT64_T, (LEN))
 #define DOUBLEALIGN_DOWN(LEN)	TYPEALIGN_DOWN(ALIGNOF_DOUBLE, (LEN))
 #define MAXALIGN_DOWN(LEN)		TYPEALIGN_DOWN(MAXIMUM_ALIGNOF, (LEN))
 #define BUFFERALIGN_DOWN(LEN)	TYPEALIGN_DOWN(ALIGNOF_BUFFER, (LEN))
@@ -948,18 +1002,32 @@ pg_noreturn extern void ExceptionalCondition(const char *conditionName,
 /*
  * StaticAssertExpr() is for use in an expression.
  *
- * For compilers without GCC statement expressions, we fall back on a kluge
- * that assumes the compiler will complain about a negative width for a struct
- * bit-field.  This will not include a helpful error message, but it beats not
- * getting an error at all.
+ * See <https://www.open-std.org/jtc1/sc22/wg14/www/docs/n3715.pdf> for some
+ * rationale for the precise behavior of this implementation.  See
+ * <https://stackoverflow.com/questions/31311748> about the C++
+ * implementation.
+ *
+ * For compilers that don't support this, we fall back on a kluge that assumes
+ * the compiler will complain about a negative width for a struct bit-field.
+ * This will not include a helpful error message, but it beats not getting an
+ * error at all.
  */
-#ifdef HAVE_STATEMENT_EXPRESSIONS
+#ifndef __cplusplus
+#if !defined(_MSC_VER) || _MSC_VER >= 1933
 #define StaticAssertExpr(condition, errmessage) \
-	((void) ({ static_assert(condition, errmessage); true; }))
-#else
+	((void) sizeof(struct {static_assert(condition, errmessage); char a;}))
+#else							/* _MSC_VER < 1933 */
+/*
+ * This compiler is buggy and fails to compile the previous variant; use a
+ * fallback implementation.
+ */
 #define StaticAssertExpr(condition, errmessage) \
 	((void) sizeof(struct { int static_assert_failure : (condition) ? 1 : -1; }))
-#endif							/* HAVE_STATEMENT_EXPRESSIONS */
+#endif							/* _MSC_VER < 1933 */
+#else							/* __cplusplus */
+#define StaticAssertExpr(condition, errmessage) \
+	([]{static_assert(condition, errmessage);})
+#endif
 
 
 /*
@@ -975,10 +1043,10 @@ pg_noreturn extern void ExceptionalCondition(const char *conditionName,
  */
 #ifdef HAVE__BUILTIN_TYPES_COMPATIBLE_P
 #define StaticAssertVariableIsOfType(varname, typename) \
-	StaticAssertDecl(__builtin_types_compatible_p(__typeof__(varname), typename), \
+	StaticAssertDecl(__builtin_types_compatible_p(typeof(varname), typename), \
 	CppAsString(varname) " does not have type " CppAsString(typename))
 #define StaticAssertVariableIsOfTypeMacro(varname, typename) \
-	(StaticAssertExpr(__builtin_types_compatible_p(__typeof__(varname), typename), \
+	(StaticAssertExpr(__builtin_types_compatible_p(typeof(varname), typename), \
 	 CppAsString(varname) " does not have type " CppAsString(typename)))
 #else							/* !HAVE__BUILTIN_TYPES_COMPATIBLE_P */
 #define StaticAssertVariableIsOfType(varname, typename) \
@@ -1240,20 +1308,13 @@ typedef struct PGAlignedXLogBlock PGAlignedXLogBlock;
 #if defined(__cplusplus)
 #define unconstify(underlying_type, expr) const_cast<underlying_type>(expr)
 #define unvolatize(underlying_type, expr) const_cast<underlying_type>(expr)
-#elif defined(HAVE__BUILTIN_TYPES_COMPATIBLE_P)
-#define unconstify(underlying_type, expr) \
-	(StaticAssertExpr(__builtin_types_compatible_p(__typeof(expr), const underlying_type), \
-					  "wrong cast"), \
-	 (underlying_type) (expr))
-#define unvolatize(underlying_type, expr) \
-	(StaticAssertExpr(__builtin_types_compatible_p(__typeof(expr), volatile underlying_type), \
-					  "wrong cast"), \
-	 (underlying_type) (expr))
 #else
 #define unconstify(underlying_type, expr) \
-	((underlying_type) (expr))
+	(StaticAssertVariableIsOfTypeMacro(expr, const underlying_type), \
+	 (underlying_type) (expr))
 #define unvolatize(underlying_type, expr) \
-	((underlying_type) (expr))
+	(StaticAssertVariableIsOfTypeMacro(expr, volatile underlying_type), \
+	 (underlying_type) (expr))
 #endif
 
 /*

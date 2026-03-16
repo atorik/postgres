@@ -44,6 +44,7 @@
 #include "utils/pg_lsn.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+#include "utils/wait_event.h"
 
 /* max sleep time between cycles (3min) */
 #define DEFAULT_NAPTIME_PER_CYCLE 180000L
@@ -1213,7 +1214,6 @@ ApplyLauncherMain(Datum main_arg)
 
 	/* Establish signal handlers. */
 	pqsignal(SIGHUP, SignalHandlerForConfigReload);
-	pqsignal(SIGTERM, die);
 	BackgroundWorkerUnblockSignals();
 
 	/*
