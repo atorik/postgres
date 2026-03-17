@@ -14,6 +14,7 @@
 #define EXECPARALLEL_H
 
 #include "access/parallel.h"
+#include "executor/instrument.h"
 #include "nodes/execnodes.h"
 #include "nodes/parsenodes.h"
 #include "nodes/plannodes.h"
