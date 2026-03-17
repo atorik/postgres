@@ -101,6 +101,7 @@
 #include "utils/guc_hooks.h"
 #include "utils/resowner.h"
 #include "utils/varlena.h"
+#include "utils/wait_event.h"
 
 /* Define PG_FLUSH_DATA_WORKS if we have an implementation for pg_flush_data */
 #if defined(HAVE_SYNC_FILE_RANGE)
@@ -163,6 +164,9 @@ bool		data_sync_retry = false;
 
 /* How SyncDataDirectory() should do its job. */
 int			recovery_init_sync_method = DATA_DIR_SYNC_METHOD_FSYNC;
+
+/* How data files should be bulk-extended with zeros. */
+int			file_extend_method = DEFAULT_FILE_EXTEND_METHOD;
 
 /* Which kinds of files should be opened with PG_O_DIRECT. */
 int			io_direct_flags;

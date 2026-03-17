@@ -79,6 +79,7 @@
 #include "utils/pg_lsn.h"
 #include "utils/ps_status.h"
 #include "utils/timestamp.h"
+#include "utils/wait_event.h"
 
 
 /*
@@ -169,7 +170,6 @@ WalReceiverMain(const void *startup_data, size_t startup_data_len)
 
 	Assert(startup_data_len == 0);
 
-	MyBackendType = B_WAL_RECEIVER;
 	AuxiliaryProcessMainCommon();
 
 	/*
@@ -193,7 +193,7 @@ WalReceiverMain(const void *startup_data, size_t startup_data_len)
 		case WALRCV_STOPPING:
 			/* If we've already been requested to stop, don't start up. */
 			walrcv->walRcvState = WALRCV_STOPPED;
-			/* fall through */
+			pg_fallthrough;
 
 		case WALRCV_STOPPED:
 			SpinLockRelease(&walrcv->mutex);
@@ -1122,8 +1122,8 @@ XLogWalRcvClose(XLogRecPtr recptr, TimeLineID tli)
 static void
 XLogWalRcvSendReply(bool force, bool requestReply)
 {
-	static XLogRecPtr writePtr = 0;
-	static XLogRecPtr flushPtr = 0;
+	static XLogRecPtr writePtr = InvalidXLogRecPtr;
+	static XLogRecPtr flushPtr = InvalidXLogRecPtr;
 	XLogRecPtr	applyPtr;
 	TimestampTz now;
 

@@ -52,6 +52,7 @@
 #include "storage/sinvaladt.h"
 #include "utils/guc.h"
 #include "utils/injection_point.h"
+#include "utils/wait_event.h"
 
 /* GUCs */
 int			shared_memory_type = DEFAULT_SHARED_MEMORY_TYPE;
@@ -212,12 +213,10 @@ CreateSharedMemoryAndSemaphores(void)
 	Assert(strcmp("unknown",
 				  GetConfigOption("huge_pages_status", false, false)) != 0);
 
-	InitShmemAccess(seghdr);
-
 	/*
 	 * Set up shared memory allocation mechanism
 	 */
-	InitShmemAllocation();
+	InitShmemAllocator(seghdr);
 
 	/* Initialize subsystems */
 	CreateOrAttachShmemStructs();

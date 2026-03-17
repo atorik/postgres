@@ -36,12 +36,14 @@
 #include "miscadmin.h"
 #include "port/atomics.h"
 #include "storage/bufmgr.h"
+#include "storage/fd.h"
 #include "storage/shmem.h"
 #include "storage/smgr.h"
 #include "utils/fmgrprotos.h"
 #include "utils/guc_hooks.h"
 #include "utils/hsearch.h"
 #include "utils/timestamp.h"
+#include "utils/tuplestore.h"
 
 /*
  * Every time we process this much WAL, we'll update the values in
@@ -967,7 +969,7 @@ XLogPrefetcherBeginRead(XLogPrefetcher *prefetcher, XLogRecPtr recPtr)
 	/* Book-keeping to avoid readahead on first read. */
 	prefetcher->begin_ptr = recPtr;
 
-	prefetcher->no_readahead_until = 0;
+	prefetcher->no_readahead_until = InvalidXLogRecPtr;
 
 	/* This will forget about any queued up records in the decoder. */
 	XLogBeginRead(prefetcher->reader, recPtr);

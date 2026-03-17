@@ -650,14 +650,13 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 	ListCell   *icols;
 	ListCell   *attnos;
 	ListCell   *lc;
-	bool		isOnConflictUpdate;
+	bool		requiresUpdatePerm;
 	AclMode		targetPerms;
 
 	/* There can't be any outer WITH to worry about */
 	Assert(pstate->p_ctenamespace == NIL);
 
 	qry->commandType = CMD_INSERT;
-	pstate->p_is_insert = true;
 
 	/* process the WITH clause independently of all else */
 	if (stmt->withClause)
@@ -669,8 +668,14 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 
 	qry->override = stmt->override;
 
-	isOnConflictUpdate = (stmt->onConflictClause &&
-						  stmt->onConflictClause->action == ONCONFLICT_UPDATE);
+	/*
+	 * ON CONFLICT DO UPDATE and ON CONFLICT DO SELECT FOR UPDATE/SHARE
+	 * require UPDATE permission on the target relation.
+	 */
+	requiresUpdatePerm = (stmt->onConflictClause &&
+						  (stmt->onConflictClause->action == ONCONFLICT_UPDATE ||
+						   (stmt->onConflictClause->action == ONCONFLICT_SELECT &&
+							stmt->onConflictClause->lockStrength != LCS_NONE)));
 
 	/*
 	 * We have three cases to deal with: DEFAULT VALUES (selectStmt == NULL),
@@ -720,7 +725,7 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 	 * to the joinlist or namespace.
 	 */
 	targetPerms = ACL_INSERT;
-	if (isOnConflictUpdate)
+	if (requiresUpdatePerm)
 		targetPerms |= ACL_UPDATE;
 	qry->resultRelation = setTargetTable(pstate, stmt->relation,
 										 false, false, targetPerms);
@@ -1027,6 +1032,15 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 						 false, true, true);
 	}
 
+	/* ON CONFLICT DO SELECT requires a RETURNING clause */
+	if (stmt->onConflictClause &&
+		stmt->onConflictClause->action == ONCONFLICT_SELECT &&
+		!stmt->returningClause)
+		ereport(ERROR,
+				errcode(ERRCODE_SYNTAX_ERROR),
+				errmsg("ON CONFLICT DO SELECT requires a RETURNING clause"),
+				parser_errposition(pstate, stmt->onConflictClause->location));
+
 	/* Process ON CONFLICT, if any. */
 	if (stmt->onConflictClause)
 		qry->onConflict = transformOnConflictClause(pstate,
@@ -1185,12 +1199,13 @@ transformOnConflictClause(ParseState *pstate,
 	OnConflictExpr *result;
 
 	/*
-	 * If this is ON CONFLICT ... UPDATE, first create the range table entry
-	 * for the EXCLUDED pseudo relation, so that that will be present while
-	 * processing arbiter expressions.  (You can't actually reference it from
-	 * there, but this provides a useful error message if you try.)
+	 * If this is ON CONFLICT DO SELECT/UPDATE, first create the range table
+	 * entry for the EXCLUDED pseudo relation, so that that will be present
+	 * while processing arbiter expressions.  (You can't actually reference it
+	 * from there, but this provides a useful error message if you try.)
 	 */
-	if (onConflictClause->action == ONCONFLICT_UPDATE)
+	if (onConflictClause->action == ONCONFLICT_UPDATE ||
+		onConflictClause->action == ONCONFLICT_SELECT)
 	{
 		Relation	targetrel = pstate->p_target_relation;
 		RangeTblEntry *exclRte;
@@ -1219,28 +1234,22 @@ transformOnConflictClause(ParseState *pstate,
 	transformOnConflictArbiter(pstate, onConflictClause, &arbiterElems,
 							   &arbiterWhere, &arbiterConstraint);
 
-	/* Process DO UPDATE */
-	if (onConflictClause->action == ONCONFLICT_UPDATE)
+	/* Process DO SELECT/UPDATE */
+	if (onConflictClause->action == ONCONFLICT_UPDATE ||
+		onConflictClause->action == ONCONFLICT_SELECT)
 	{
 		/*
-		 * Expressions in the UPDATE targetlist need to be handled like UPDATE
-		 * not INSERT.  We don't need to save/restore this because all INSERT
-		 * expressions have been parsed already.
-		 */
-		pstate->p_is_insert = false;
-
-		/*
 		 * Add the EXCLUDED pseudo relation to the query namespace, making it
-		 * available in the UPDATE subexpressions.
+		 * available in SET and WHERE subexpressions.
 		 */
 		addNSItemToQuery(pstate, exclNSItem, false, true, true);
 
-		/*
-		 * Now transform the UPDATE subexpressions.
-		 */
-		onConflictSet =
-			transformUpdateTargetList(pstate, onConflictClause->targetList);
+		/* Process the UPDATE SET clause */
+		if (onConflictClause->action == ONCONFLICT_UPDATE)
+			onConflictSet =
+				transformUpdateTargetList(pstate, onConflictClause->targetList);
 
+		/* Process the SELECT/UPDATE WHERE clause */
 		onConflictWhere = transformWhereClause(pstate,
 											   onConflictClause->whereClause,
 											   EXPR_KIND_WHERE, "WHERE");
@@ -1254,13 +1263,14 @@ transformOnConflictClause(ParseState *pstate,
 		pstate->p_namespace = list_delete_last(pstate->p_namespace);
 	}
 
-	/* Finally, build ON CONFLICT DO [NOTHING | UPDATE] expression */
+	/* Finally, build ON CONFLICT DO [NOTHING | SELECT | UPDATE] expression */
 	result = makeNode(OnConflictExpr);
 
 	result->action = onConflictClause->action;
 	result->arbiterElems = arbiterElems;
 	result->arbiterWhere = arbiterWhere;
 	result->constraint = arbiterConstraint;
+	result->lockStrength = onConflictClause->lockStrength;
 	result->onConflictSet = onConflictSet;
 	result->onConflictWhere = onConflictWhere;
 	result->exclRelIndex = exclRelIndex;
@@ -2132,7 +2142,6 @@ transformSetOperationTree(ParseState *pstate, SelectStmt *stmt,
 		Query	   *selectQuery;
 		ParseNamespaceItem *nsitem;
 		RangeTblRef *rtr;
-		ListCell   *tl;
 
 		/*
 		 * Transform SelectStmt into a Query.
@@ -2172,6 +2181,8 @@ transformSetOperationTree(ParseState *pstate, SelectStmt *stmt,
 		 */
 		if (targetlist)
 		{
+			ListCell   *tl;
+
 			*targetlist = NIL;
 			foreach(tl, selectQuery->targetList)
 			{
@@ -2204,8 +2215,6 @@ transformSetOperationTree(ParseState *pstate, SelectStmt *stmt,
 		SetOperationStmt *op = makeNode(SetOperationStmt);
 		List	   *ltargetlist;
 		List	   *rtargetlist;
-		ListCell   *ltl;
-		ListCell   *rtl;
 		const char *context;
 		bool		recursive = (pstate->p_parent_cte &&
 								 pstate->p_parent_cte->cterecursive);
@@ -2240,161 +2249,182 @@ transformSetOperationTree(ParseState *pstate, SelectStmt *stmt,
 											 false,
 											 &rtargetlist);
 
-		/*
-		 * Verify that the two children have the same number of non-junk
-		 * columns, and determine the types of the merged output columns.
-		 */
-		if (list_length(ltargetlist) != list_length(rtargetlist))
-			ereport(ERROR,
-					(errcode(ERRCODE_SYNTAX_ERROR),
-					 errmsg("each %s query must have the same number of columns",
-							context),
-					 parser_errposition(pstate,
-										exprLocation((Node *) rtargetlist))));
-
-		if (targetlist)
-			*targetlist = NIL;
-		op->colTypes = NIL;
-		op->colTypmods = NIL;
-		op->colCollations = NIL;
-		op->groupClauses = NIL;
-		forboth(ltl, ltargetlist, rtl, rtargetlist)
-		{
-			TargetEntry *ltle = (TargetEntry *) lfirst(ltl);
-			TargetEntry *rtle = (TargetEntry *) lfirst(rtl);
-			Node	   *lcolnode = (Node *) ltle->expr;
-			Node	   *rcolnode = (Node *) rtle->expr;
-			Oid			lcoltype = exprType(lcolnode);
-			Oid			rcoltype = exprType(rcolnode);
-			Node	   *bestexpr;
-			int			bestlocation;
-			Oid			rescoltype;
-			int32		rescoltypmod;
-			Oid			rescolcoll;
-
-			/* select common type, same as CASE et al */
-			rescoltype = select_common_type(pstate,
-											list_make2(lcolnode, rcolnode),
-											context,
-											&bestexpr);
-			bestlocation = exprLocation(bestexpr);
-
-			/*
-			 * Verify the coercions are actually possible.  If not, we'd fail
-			 * later anyway, but we want to fail now while we have sufficient
-			 * context to produce an error cursor position.
-			 *
-			 * For all non-UNKNOWN-type cases, we verify coercibility but we
-			 * don't modify the child's expression, for fear of changing the
-			 * child query's semantics.
-			 *
-			 * If a child expression is an UNKNOWN-type Const or Param, we
-			 * want to replace it with the coerced expression.  This can only
-			 * happen when the child is a leaf set-op node.  It's safe to
-			 * replace the expression because if the child query's semantics
-			 * depended on the type of this output column, it'd have already
-			 * coerced the UNKNOWN to something else.  We want to do this
-			 * because (a) we want to verify that a Const is valid for the
-			 * target type, or resolve the actual type of an UNKNOWN Param,
-			 * and (b) we want to avoid unnecessary discrepancies between the
-			 * output type of the child query and the resolved target type.
-			 * Such a discrepancy would disable optimization in the planner.
-			 *
-			 * If it's some other UNKNOWN-type node, eg a Var, we do nothing
-			 * (knowing that coerce_to_common_type would fail).  The planner
-			 * is sometimes able to fold an UNKNOWN Var to a constant before
-			 * it has to coerce the type, so failing now would just break
-			 * cases that might work.
-			 */
-			if (lcoltype != UNKNOWNOID)
-				lcolnode = coerce_to_common_type(pstate, lcolnode,
-												 rescoltype, context);
-			else if (IsA(lcolnode, Const) ||
-					 IsA(lcolnode, Param))
-			{
-				lcolnode = coerce_to_common_type(pstate, lcolnode,
-												 rescoltype, context);
-				ltle->expr = (Expr *) lcolnode;
-			}
-
-			if (rcoltype != UNKNOWNOID)
-				rcolnode = coerce_to_common_type(pstate, rcolnode,
-												 rescoltype, context);
-			else if (IsA(rcolnode, Const) ||
-					 IsA(rcolnode, Param))
-			{
-				rcolnode = coerce_to_common_type(pstate, rcolnode,
-												 rescoltype, context);
-				rtle->expr = (Expr *) rcolnode;
-			}
-
-			rescoltypmod = select_common_typmod(pstate,
-												list_make2(lcolnode, rcolnode),
-												rescoltype);
-
-			/*
-			 * Select common collation.  A common collation is required for
-			 * all set operators except UNION ALL; see SQL:2008 7.13 <query
-			 * expression> Syntax Rule 15c.  (If we fail to identify a common
-			 * collation for a UNION ALL column, the colCollations element
-			 * will be set to InvalidOid, which may result in a runtime error
-			 * if something at a higher query level wants to use the column's
-			 * collation.)
-			 */
-			rescolcoll = select_common_collation(pstate,
-												 list_make2(lcolnode, rcolnode),
-												 (op->op == SETOP_UNION && op->all));
-
-			/* emit results */
-			op->colTypes = lappend_oid(op->colTypes, rescoltype);
-			op->colTypmods = lappend_int(op->colTypmods, rescoltypmod);
-			op->colCollations = lappend_oid(op->colCollations, rescolcoll);
-
-			/*
-			 * For all cases except UNION ALL, identify the grouping operators
-			 * (and, if available, sorting operators) that will be used to
-			 * eliminate duplicates.
-			 */
-			if (op->op != SETOP_UNION || !op->all)
-			{
-				ParseCallbackState pcbstate;
-
-				setup_parser_errposition_callback(&pcbstate, pstate,
-												  bestlocation);
-
-				/*
-				 * If it's a recursive union, we need to require hashing
-				 * support.
-				 */
-				op->groupClauses = lappend(op->groupClauses,
-										   makeSortGroupClauseForSetOp(rescoltype, recursive));
-
-				cancel_parser_errposition_callback(&pcbstate);
-			}
-
-			/*
-			 * Construct a dummy tlist entry to return.  We use a SetToDefault
-			 * node for the expression, since it carries exactly the fields
-			 * needed, but any other expression node type would do as well.
-			 */
-			if (targetlist)
-			{
-				SetToDefault *rescolnode = makeNode(SetToDefault);
-				TargetEntry *restle;
-
-				rescolnode->typeId = rescoltype;
-				rescolnode->typeMod = rescoltypmod;
-				rescolnode->collation = rescolcoll;
-				rescolnode->location = bestlocation;
-				restle = makeTargetEntry((Expr *) rescolnode,
-										 0, /* no need to set resno */
-										 NULL,
-										 false);
-				*targetlist = lappend(*targetlist, restle);
-			}
-		}
+		constructSetOpTargetlist(pstate, op, ltargetlist, rtargetlist, targetlist,
+								 context, recursive);
 
 		return (Node *) op;
+	}
+}
+
+/*
+ * constructSetOpTargetlist
+ *		Compute the types, typmods and collations of the columns in the target
+ *		list of the given set operation.
+ *
+ * For every pair of columns in the targetlists of the children, compute the
+ * common type, typmod, and collation representing the output (UNION) column.
+ * If targetlist is not NULL, also build the dummy output targetlist
+ * containing non-resjunk output columns.  The values are stored into the
+ * given SetOperationStmt node.  context is a string for error messages
+ * ("UNION" etc.).  recursive is true if it is a recursive union.
+ */
+void
+constructSetOpTargetlist(ParseState *pstate, SetOperationStmt *op,
+						 const List *ltargetlist, const List *rtargetlist,
+						 List **targetlist, const char *context, bool recursive)
+{
+	ListCell   *ltl;
+	ListCell   *rtl;
+
+	/*
+	 * Verify that the two children have the same number of non-junk columns,
+	 * and determine the types of the merged output columns.
+	 */
+	if (list_length(ltargetlist) != list_length(rtargetlist))
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("each %s query must have the same number of columns",
+						context),
+				 parser_errposition(pstate,
+									exprLocation((const Node *) rtargetlist))));
+
+	if (targetlist)
+		*targetlist = NIL;
+	op->colTypes = NIL;
+	op->colTypmods = NIL;
+	op->colCollations = NIL;
+	op->groupClauses = NIL;
+
+	forboth(ltl, ltargetlist, rtl, rtargetlist)
+	{
+		TargetEntry *ltle = (TargetEntry *) lfirst(ltl);
+		TargetEntry *rtle = (TargetEntry *) lfirst(rtl);
+		Node	   *lcolnode = (Node *) ltle->expr;
+		Node	   *rcolnode = (Node *) rtle->expr;
+		Oid			lcoltype = exprType(lcolnode);
+		Oid			rcoltype = exprType(rcolnode);
+		Node	   *bestexpr;
+		int			bestlocation;
+		Oid			rescoltype;
+		int32		rescoltypmod;
+		Oid			rescolcoll;
+
+		/* select common type, same as CASE et al */
+		rescoltype = select_common_type(pstate,
+										list_make2(lcolnode, rcolnode),
+										context,
+										&bestexpr);
+		bestlocation = exprLocation(bestexpr);
+
+		/*
+		 * Verify the coercions are actually possible.  If not, we'd fail
+		 * later anyway, but we want to fail now while we have sufficient
+		 * context to produce an error cursor position.
+		 *
+		 * For all non-UNKNOWN-type cases, we verify coercibility but we don't
+		 * modify the child's expression, for fear of changing the child
+		 * query's semantics.
+		 *
+		 * If a child expression is an UNKNOWN-type Const or Param, we want to
+		 * replace it with the coerced expression.  This can only happen when
+		 * the child is a leaf set-op node.  It's safe to replace the
+		 * expression because if the child query's semantics depended on the
+		 * type of this output column, it'd have already coerced the UNKNOWN
+		 * to something else.  We want to do this because (a) we want to
+		 * verify that a Const is valid for the target type, or resolve the
+		 * actual type of an UNKNOWN Param, and (b) we want to avoid
+		 * unnecessary discrepancies between the output type of the child
+		 * query and the resolved target type. Such a discrepancy would
+		 * disable optimization in the planner.
+		 *
+		 * If it's some other UNKNOWN-type node, eg a Var, we do nothing
+		 * (knowing that coerce_to_common_type would fail).  The planner is
+		 * sometimes able to fold an UNKNOWN Var to a constant before it has
+		 * to coerce the type, so failing now would just break cases that
+		 * might work.
+		 */
+		if (lcoltype != UNKNOWNOID)
+			lcolnode = coerce_to_common_type(pstate, lcolnode,
+											 rescoltype, context);
+		else if (IsA(lcolnode, Const) ||
+				 IsA(lcolnode, Param))
+		{
+			lcolnode = coerce_to_common_type(pstate, lcolnode,
+											 rescoltype, context);
+			ltle->expr = (Expr *) lcolnode;
+		}
+
+		if (rcoltype != UNKNOWNOID)
+			rcolnode = coerce_to_common_type(pstate, rcolnode,
+											 rescoltype, context);
+		else if (IsA(rcolnode, Const) ||
+				 IsA(rcolnode, Param))
+		{
+			rcolnode = coerce_to_common_type(pstate, rcolnode,
+											 rescoltype, context);
+			rtle->expr = (Expr *) rcolnode;
+		}
+
+		rescoltypmod = select_common_typmod(pstate,
+											list_make2(lcolnode, rcolnode),
+											rescoltype);
+
+		/*
+		 * Select common collation.  A common collation is required for all
+		 * set operators except UNION ALL; see SQL:2008 7.13 <query
+		 * expression> Syntax Rule 15c.  (If we fail to identify a common
+		 * collation for a UNION ALL column, the colCollations element will be
+		 * set to InvalidOid, which may result in a runtime error if something
+		 * at a higher query level wants to use the column's collation.)
+		 */
+		rescolcoll = select_common_collation(pstate,
+											 list_make2(lcolnode, rcolnode),
+											 (op->op == SETOP_UNION && op->all));
+
+		/* emit results */
+		op->colTypes = lappend_oid(op->colTypes, rescoltype);
+		op->colTypmods = lappend_int(op->colTypmods, rescoltypmod);
+		op->colCollations = lappend_oid(op->colCollations, rescolcoll);
+
+		/*
+		 * For all cases except UNION ALL, identify the grouping operators
+		 * (and, if available, sorting operators) that will be used to
+		 * eliminate duplicates.
+		 */
+		if (op->op != SETOP_UNION || !op->all)
+		{
+			ParseCallbackState pcbstate;
+
+			setup_parser_errposition_callback(&pcbstate, pstate,
+											  bestlocation);
+
+			/* If it's a recursive union, we need to require hashing support. */
+			op->groupClauses = lappend(op->groupClauses,
+									   makeSortGroupClauseForSetOp(rescoltype, recursive));
+
+			cancel_parser_errposition_callback(&pcbstate);
+		}
+
+		/*
+		 * Construct a dummy tlist entry to return.  We use a SetToDefault
+		 * node for the expression, since it carries exactly the fields
+		 * needed, but any other expression node type would do as well.
+		 */
+		if (targetlist)
+		{
+			SetToDefault *rescolnode = makeNode(SetToDefault);
+			TargetEntry *restle;
+
+			rescolnode->typeId = rescoltype;
+			rescolnode->typeMod = rescoltypmod;
+			rescolnode->collation = rescolcoll;
+			rescolnode->location = bestlocation;
+			restle = makeTargetEntry((Expr *) rescolnode,
+									 0, /* no need to set resno */
+									 NULL,
+									 false);
+			*targetlist = lappend(*targetlist, restle);
+		}
 	}
 }
 
@@ -2495,7 +2525,6 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 	Node	   *qual;
 
 	qry->commandType = CMD_UPDATE;
-	pstate->p_is_insert = false;
 
 	/* process the WITH clause independently of all else */
 	if (stmt->withClause)

@@ -52,10 +52,13 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/bulk_write.h"
+#include "storage/condition_variable.h"
+#include "storage/proc.h"
 #include "tcop/tcopprot.h"
 #include "utils/rel.h"
 #include "utils/sortsupport.h"
 #include "utils/tuplesort.h"
+#include "utils/wait_event.h"
 
 
 /* Magic numbers for parallel state sharing */
@@ -69,8 +72,8 @@
 /*
  * DISABLE_LEADER_PARTICIPATION disables the leader's participation in
  * parallel index builds.  This may be useful as a debugging aid.
-#undef DISABLE_LEADER_PARTICIPATION
  */
+/* #define DISABLE_LEADER_PARTICIPATION */
 
 /*
  * Status record for spooling/sorting phase.  (Note we may have two of

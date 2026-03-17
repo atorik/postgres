@@ -159,8 +159,8 @@ static void
 AlterObjectRename_internal(Relation rel, Oid objectId, const char *new_name)
 {
 	Oid			classId = RelationGetRelid(rel);
-	int			oidCacheId = get_object_catcache_oid(classId);
-	int			nameCacheId = get_object_catcache_name(classId);
+	SysCacheIdentifier oidCacheId = get_object_catcache_oid(classId);
+	SysCacheIdentifier nameCacheId = get_object_catcache_name(classId);
 	AttrNumber	Anum_name = get_object_attnum_name(classId);
 	AttrNumber	Anum_namespace = get_object_attnum_namespace(classId);
 	AttrNumber	Anum_owner = get_object_attnum_owner(classId);
@@ -390,6 +390,7 @@ ExecRenameStmt(RenameStmt *stmt)
 		case OBJECT_MATVIEW:
 		case OBJECT_INDEX:
 		case OBJECT_FOREIGN_TABLE:
+		case OBJECT_PROPGRAPH:
 			return RenameRelation(stmt);
 
 		case OBJECT_COLUMN:
@@ -543,6 +544,7 @@ ExecAlterObjectSchemaStmt(AlterObjectSchemaStmt *stmt,
 		case OBJECT_TABLE:
 		case OBJECT_VIEW:
 		case OBJECT_MATVIEW:
+		case OBJECT_PROPGRAPH:
 			address = AlterTableNamespace(stmt,
 										  oldSchemaAddr ? &oldNspOid : NULL);
 			break;
@@ -686,8 +688,8 @@ static Oid
 AlterObjectNamespace_internal(Relation rel, Oid objid, Oid nspOid)
 {
 	Oid			classId = RelationGetRelid(rel);
-	int			oidCacheId = get_object_catcache_oid(classId);
-	int			nameCacheId = get_object_catcache_name(classId);
+	SysCacheIdentifier oidCacheId = get_object_catcache_oid(classId);
+	SysCacheIdentifier nameCacheId = get_object_catcache_name(classId);
 	AttrNumber	Anum_name = get_object_attnum_name(classId);
 	AttrNumber	Anum_namespace = get_object_attnum_namespace(classId);
 	AttrNumber	Anum_owner = get_object_attnum_owner(classId);
@@ -876,6 +878,7 @@ ExecAlterOwnerStmt(AlterOwnerStmt *stmt)
 		case OBJECT_OPCLASS:
 		case OBJECT_OPFAMILY:
 		case OBJECT_PROCEDURE:
+		case OBJECT_PROPGRAPH:
 		case OBJECT_ROUTINE:
 		case OBJECT_STATISTIC_EXT:
 		case OBJECT_TABLESPACE:
@@ -884,11 +887,26 @@ ExecAlterOwnerStmt(AlterOwnerStmt *stmt)
 			{
 				ObjectAddress address;
 
-				address = get_object_address(stmt->objectType,
-											 stmt->object,
-											 NULL,
-											 AccessExclusiveLock,
-											 false);
+				if (stmt->relation)
+				{
+					Relation	relation;
+
+					address = get_object_address_rv(stmt->objectType,
+													stmt->relation,
+													NIL,
+													&relation,
+													AccessExclusiveLock,
+													false);
+					relation_close(relation, NoLock);
+				}
+				else
+				{
+					address = get_object_address(stmt->objectType,
+												 stmt->object,
+												 NULL,
+												 AccessExclusiveLock,
+												 false);
+				}
 
 				AlterObjectOwner_internal(address.classId, address.objectId,
 										  newowner);

@@ -67,6 +67,7 @@
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/resowner.h"
+#include "utils/wait_event.h"
 
 
 /*----------
@@ -199,7 +200,6 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 
 	Assert(startup_data_len == 0);
 
-	MyBackendType = B_CHECKPOINTER;
 	AuxiliaryProcessMainCommon();
 
 	CheckpointerShmem->checkpointer_pid = MyProcPid;

@@ -32,6 +32,7 @@
 #include "funcapi.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "pageinspect.h"
 #include "port/pg_bitutils.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -101,7 +102,7 @@ text_to_bits(char *str, int len)
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),
 					 errmsg("invalid character \"%.*s\" in t_bits string",
-							pg_mblen(str + off), str + off)));
+							pg_mblen_cstr(str + off), str + off)));
 
 		if (off % 8 == 7)
 			bits[off / 8] = byte;
@@ -132,24 +133,16 @@ heap_page_items(PG_FUNCTION_ARGS)
 	bytea	   *raw_page = PG_GETARG_BYTEA_P(0);
 	heap_page_items_state *inter_call_data = NULL;
 	FuncCallContext *fctx;
-	int			raw_page_size;
 
 	if (!superuser())
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("must be superuser to use raw page functions")));
 
-	raw_page_size = VARSIZE(raw_page) - VARHDRSZ;
-
 	if (SRF_IS_FIRSTCALL())
 	{
 		TupleDesc	tupdesc;
 		MemoryContext mctx;
-
-		if (raw_page_size < SizeOfPageHeaderData)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("input page too small (%d bytes)", raw_page_size)));
 
 		fctx = SRF_FIRSTCALL_INIT();
 		mctx = MemoryContextSwitchTo(fctx->multi_call_memory_ctx);
@@ -163,7 +156,7 @@ heap_page_items(PG_FUNCTION_ARGS)
 		inter_call_data->tupd = tupdesc;
 
 		inter_call_data->offset = FirstOffsetNumber;
-		inter_call_data->page = VARDATA(raw_page);
+		inter_call_data->page = get_page_from_raw(raw_page);
 
 		fctx->max_calls = PageGetMaxOffsetNumber(inter_call_data->page);
 		fctx->user_fctx = inter_call_data;
@@ -209,7 +202,7 @@ heap_page_items(PG_FUNCTION_ARGS)
 		if (ItemIdHasStorage(id) &&
 			lp_len >= MinHeapTupleSize &&
 			lp_offset == MAXALIGN(lp_offset) &&
-			lp_offset + lp_len <= raw_page_size)
+			lp_offset + lp_len <= BLCKSZ)
 		{
 			HeapTupleHeader tuphdr;
 
@@ -396,7 +389,7 @@ tuple_data_split_internal(Oid relid, char *tupdata,
 						 errmsg("unexpected end of tuple data")));
 
 			if (attr->attlen == -1 && do_detoast)
-				attr_data = pg_detoast_datum_copy((struct varlena *) (tupdata + off));
+				attr_data = pg_detoast_datum_copy((varlena *) (tupdata + off));
 			else
 			{
 				attr_data = (bytea *) palloc(len + VARHDRSZ);

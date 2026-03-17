@@ -90,6 +90,7 @@
 #include "storage/aio_subsys.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
+#include "storage/fd.h"
 #include "storage/latch.h"
 #include "storage/lmgr.h"
 #include "storage/pmsignal.h"
@@ -109,6 +110,7 @@
 #include "utils/syscache.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
+#include "utils/wait_event.h"
 
 
 /*
@@ -385,7 +387,6 @@ AutoVacLauncherMain(const void *startup_data, size_t startup_data_len)
 		PostmasterContext = NULL;
 	}
 
-	MyBackendType = B_AUTOVAC_LAUNCHER;
 	init_ps_display(NULL);
 
 	ereport(DEBUG1,
@@ -1398,7 +1399,6 @@ AutoVacWorkerMain(const void *startup_data, size_t startup_data_len)
 		PostmasterContext = NULL;
 	}
 
-	MyBackendType = B_AUTOVAC_WORKER;
 	init_ps_display(NULL);
 
 	Assert(GetProcessingMode() == InitProcessing);

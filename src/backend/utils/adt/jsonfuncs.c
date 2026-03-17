@@ -38,6 +38,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
+#include "utils/tuplestore.h"
 #include "utils/typcache.h"
 
 /* Operations available for setPath */
@@ -695,7 +696,7 @@ report_json_context(JsonLexContext *lex)
 	{
 		/* Advance to next multibyte character */
 		if (IS_HIGHBIT_SET(*context_start))
-			context_start += pg_mblen(context_start);
+			context_start += pg_mblen_range(context_start, context_end);
 		else
 			context_start++;
 	}

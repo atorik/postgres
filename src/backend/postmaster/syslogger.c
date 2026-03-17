@@ -51,6 +51,7 @@
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
+#include "utils/wait_event.h"
 
 /*
  * We read() into a temp buffer twice as big as a chunk, so that any fragment
@@ -206,7 +207,6 @@ SysLoggerMain(const void *startup_data, size_t startup_data_len)
 
 	now = MyStartTime;
 
-	MyBackendType = B_LOGGER;
 	init_ps_display(NULL);
 
 	/*

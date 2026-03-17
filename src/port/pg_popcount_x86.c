@@ -14,19 +14,12 @@
 
 #ifdef HAVE_X86_64_POPCNTQ
 
-#if defined(HAVE__GET_CPUID) || defined(HAVE__GET_CPUID_COUNT)
-#include <cpuid.h>
-#endif
-
 #ifdef USE_AVX512_POPCNT_WITH_RUNTIME_CHECK
 #include <immintrin.h>
 #endif
 
-#if defined(HAVE__CPUID) || defined(HAVE__CPUIDEX)
-#include <intrin.h>
-#endif
-
 #include "port/pg_bitutils.h"
+#include "port/pg_cpu.h"
 
 /*
  * The SSE4.2 versions are built regardless of whether we are building the
@@ -36,8 +29,6 @@
  * operation, but in practice this is close enough, and "sse42" seems easier to
  * follow than "popcnt" for these names.
  */
-static inline int pg_popcount32_sse42(uint32 word);
-static inline int pg_popcount64_sse42(uint64 word);
 static uint64 pg_popcount_sse42(const char *buf, int bytes);
 static uint64 pg_popcount_masked_sse42(const char *buf, int bytes, bits8 mask);
 
@@ -55,92 +46,13 @@ static uint64 pg_popcount_masked_avx512(const char *buf, int bytes, bits8 mask);
  * what the current CPU supports) and then will call the pointer to fulfill the
  * caller's request.
  */
-static int	pg_popcount32_choose(uint32 word);
-static int	pg_popcount64_choose(uint64 word);
 static uint64 pg_popcount_choose(const char *buf, int bytes);
 static uint64 pg_popcount_masked_choose(const char *buf, int bytes, bits8 mask);
-int			(*pg_popcount32) (uint32 word) = pg_popcount32_choose;
-int			(*pg_popcount64) (uint64 word) = pg_popcount64_choose;
 uint64		(*pg_popcount_optimized) (const char *buf, int bytes) = pg_popcount_choose;
 uint64		(*pg_popcount_masked_optimized) (const char *buf, int bytes, bits8 mask) = pg_popcount_masked_choose;
 
-/*
- * Return true if CPUID indicates that the POPCNT instruction is available.
- */
-static bool
-pg_popcount_sse42_available(void)
-{
-	unsigned int exx[4] = {0, 0, 0, 0};
-
-#if defined(HAVE__GET_CPUID)
-	__get_cpuid(1, &exx[0], &exx[1], &exx[2], &exx[3]);
-#elif defined(HAVE__CPUID)
-	__cpuid(exx, 1);
-#else
-#error cpuid instruction not available
-#endif
-
-	return (exx[2] & (1 << 23)) != 0;	/* POPCNT */
-}
 
 #ifdef USE_AVX512_POPCNT_WITH_RUNTIME_CHECK
-
-/*
- * Does CPUID say there's support for XSAVE instructions?
- */
-static inline bool
-xsave_available(void)
-{
-	unsigned int exx[4] = {0, 0, 0, 0};
-
-#if defined(HAVE__GET_CPUID)
-	__get_cpuid(1, &exx[0], &exx[1], &exx[2], &exx[3]);
-#elif defined(HAVE__CPUID)
-	__cpuid(exx, 1);
-#else
-#error cpuid instruction not available
-#endif
-	return (exx[2] & (1 << 27)) != 0;	/* osxsave */
-}
-
-/*
- * Does XGETBV say the ZMM registers are enabled?
- *
- * NB: Caller is responsible for verifying that xsave_available() returns true
- * before calling this.
- */
-#ifdef HAVE_XSAVE_INTRINSICS
-pg_attribute_target("xsave")
-#endif
-static inline bool
-zmm_regs_available(void)
-{
-#ifdef HAVE_XSAVE_INTRINSICS
-	return (_xgetbv(0) & 0xe6) == 0xe6;
-#else
-	return false;
-#endif
-}
-
-/*
- * Does CPUID say there's support for AVX-512 popcount and byte-and-word
- * instructions?
- */
-static inline bool
-avx512_popcnt_available(void)
-{
-	unsigned int exx[4] = {0, 0, 0, 0};
-
-#if defined(HAVE__GET_CPUID_COUNT)
-	__get_cpuid_count(7, 0, &exx[0], &exx[1], &exx[2], &exx[3]);
-#elif defined(HAVE__CPUIDEX)
-	__cpuidex(exx, 7, 0);
-#else
-#error cpuid instruction not available
-#endif
-	return (exx[2] & (1 << 14)) != 0 && /* avx512-vpopcntdq */
-		(exx[1] & (1 << 30)) != 0;	/* avx512-bw */
-}
 
 /*
  * Returns true if the CPU supports the instructions required for the AVX-512
@@ -149,15 +61,14 @@ avx512_popcnt_available(void)
 static bool
 pg_popcount_avx512_available(void)
 {
-	return xsave_available() &&
-		zmm_regs_available() &&
-		avx512_popcnt_available();
+	return x86_feature_available(PG_AVX512_BW) &&
+		x86_feature_available(PG_AVX512_VPOPCNTDQ);
 }
 
 #endif							/* USE_AVX512_POPCNT_WITH_RUNTIME_CHECK */
 
 /*
- * These functions get called on the first call to pg_popcount32 etc.
+ * These functions get called on the first call to pg_popcount(), etc.
  * They detect whether we can use the asm implementations, and replace
  * the function pointers so that subsequent calls are routed directly to
  * the chosen implementation.
@@ -165,17 +76,13 @@ pg_popcount_avx512_available(void)
 static inline void
 choose_popcount_functions(void)
 {
-	if (pg_popcount_sse42_available())
+	if (x86_feature_available(PG_POPCNT))
 	{
-		pg_popcount32 = pg_popcount32_sse42;
-		pg_popcount64 = pg_popcount64_sse42;
 		pg_popcount_optimized = pg_popcount_sse42;
 		pg_popcount_masked_optimized = pg_popcount_masked_sse42;
 	}
 	else
 	{
-		pg_popcount32 = pg_popcount32_portable;
-		pg_popcount64 = pg_popcount64_portable;
 		pg_popcount_optimized = pg_popcount_portable;
 		pg_popcount_masked_optimized = pg_popcount_masked_portable;
 	}
@@ -187,20 +94,6 @@ choose_popcount_functions(void)
 		pg_popcount_masked_optimized = pg_popcount_masked_avx512;
 	}
 #endif
-}
-
-static int
-pg_popcount32_choose(uint32 word)
-{
-	choose_popcount_functions();
-	return pg_popcount32(word);
-}
-
-static int
-pg_popcount64_choose(uint64 word)
-{
-	choose_popcount_functions();
-	return pg_popcount64(word);
 }
 
 static uint64
@@ -339,23 +232,6 @@ pg_popcount_masked_avx512(const char *buf, int bytes, bits8 mask)
 #endif							/* USE_AVX512_POPCNT_WITH_RUNTIME_CHECK */
 
 /*
- * pg_popcount32_sse42
- *		Return the number of 1 bits set in word
- */
-static inline int
-pg_popcount32_sse42(uint32 word)
-{
-#ifdef _MSC_VER
-	return __popcnt(word);
-#else
-	uint32		res;
-
-__asm__ __volatile__(" popcntl %1,%0\n":"=q"(res):"rm"(word):"cc");
-	return (int) res;
-#endif
-}
-
-/*
  * pg_popcount64_sse42
  *		Return the number of 1 bits set in word
  */
@@ -376,40 +252,20 @@ __asm__ __volatile__(" popcntq %1,%0\n":"=q"(res):"rm"(word):"cc");
  * pg_popcount_sse42
  *		Returns the number of 1-bits in buf
  */
+pg_attribute_no_sanitize_alignment()
 static uint64
 pg_popcount_sse42(const char *buf, int bytes)
 {
 	uint64		popcnt = 0;
+	const uint64 *words = (const uint64 *) buf;
 
-#if SIZEOF_VOID_P >= 8
-	/* Process in 64-bit chunks if the buffer is aligned. */
-	if (buf == (const char *) TYPEALIGN(8, buf))
+	while (bytes >= 8)
 	{
-		const uint64 *words = (const uint64 *) buf;
-
-		while (bytes >= 8)
-		{
-			popcnt += pg_popcount64_sse42(*words++);
-			bytes -= 8;
-		}
-
-		buf = (const char *) words;
+		popcnt += pg_popcount64_sse42(*words++);
+		bytes -= 8;
 	}
-#else
-	/* Process in 32-bit chunks if the buffer is aligned. */
-	if (buf == (const char *) TYPEALIGN(4, buf))
-	{
-		const uint32 *words = (const uint32 *) buf;
 
-		while (bytes >= 4)
-		{
-			popcnt += pg_popcount32_sse42(*words++);
-			bytes -= 4;
-		}
-
-		buf = (const char *) words;
-	}
-#endif
+	buf = (const char *) words;
 
 	/* Process any remaining bytes */
 	while (bytes--)
@@ -422,44 +278,21 @@ pg_popcount_sse42(const char *buf, int bytes)
  * pg_popcount_masked_sse42
  *		Returns the number of 1-bits in buf after applying the mask to each byte
  */
+pg_attribute_no_sanitize_alignment()
 static uint64
 pg_popcount_masked_sse42(const char *buf, int bytes, bits8 mask)
 {
 	uint64		popcnt = 0;
-
-#if SIZEOF_VOID_P >= 8
-	/* Process in 64-bit chunks if the buffer is aligned */
 	uint64		maskv = ~UINT64CONST(0) / 0xFF * mask;
+	const uint64 *words = (const uint64 *) buf;
 
-	if (buf == (const char *) TYPEALIGN(8, buf))
+	while (bytes >= 8)
 	{
-		const uint64 *words = (const uint64 *) buf;
-
-		while (bytes >= 8)
-		{
-			popcnt += pg_popcount64_sse42(*words++ & maskv);
-			bytes -= 8;
-		}
-
-		buf = (const char *) words;
+		popcnt += pg_popcount64_sse42(*words++ & maskv);
+		bytes -= 8;
 	}
-#else
-	/* Process in 32-bit chunks if the buffer is aligned. */
-	uint32		maskv = ~((uint32) 0) / 0xFF * mask;
 
-	if (buf == (const char *) TYPEALIGN(4, buf))
-	{
-		const uint32 *words = (const uint32 *) buf;
-
-		while (bytes >= 4)
-		{
-			popcnt += pg_popcount32_sse42(*words++ & maskv);
-			bytes -= 4;
-		}
-
-		buf = (const char *) words;
-	}
-#endif
+	buf = (const char *) words;
 
 	/* Process any remaining bytes */
 	while (bytes--)

@@ -85,6 +85,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/guc_hooks.h"
 #include "utils/ps_status.h"
+#include "utils/wait_event.h"
 
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
@@ -355,7 +356,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 	pg_read_barrier();
 	Assert(dlist_node_is_detached(&MyProc->syncRepLinks));
 	MyProc->syncRepState = SYNC_REP_NOT_WAITING;
-	MyProc->waitLSN = 0;
+	MyProc->waitLSN = InvalidXLogRecPtr;
 
 	/* reset ps display to remove the suffix */
 	if (update_process_title)
@@ -1027,7 +1028,7 @@ SyncRepQueueIsOrderedByLSN(int mode)
 
 	Assert(mode >= 0 && mode < NUM_SYNC_REP_WAIT_MODE);
 
-	lastLSN = 0;
+	lastLSN = InvalidXLogRecPtr;
 
 	dlist_foreach(iter, &WalSndCtl->SyncRepQueue[mode])
 	{
@@ -1077,6 +1078,7 @@ check_synchronous_standby_names(char **newval, void **extra, GucSource source)
 			if (syncrep_parse_error_msg)
 				GUC_check_errdetail("%s", syncrep_parse_error_msg);
 			else
+				/* translator: %s is a GUC name */
 				GUC_check_errdetail("\"%s\" parser failed.",
 									"synchronous_standby_names");
 			return false;

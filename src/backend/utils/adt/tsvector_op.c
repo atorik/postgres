@@ -651,6 +651,7 @@ tsvector_unnest(PG_FUNCTION_ARGS)
 						   TEXTARRAYOID, -1, 0);
 		if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
 			elog(ERROR, "return type must be a row type");
+		TupleDescFinalize(tupdesc);
 		funcctx->tuple_desc = tupdesc;
 
 		funcctx->user_fctx = PG_GETARG_TSVECTOR_COPY(0);
@@ -2604,11 +2605,15 @@ ts_stat_sql(MemoryContext persistentContext, text *txt, text *ws)
 	if (ws)
 	{
 		char	   *buf;
+		const char *end;
 
 		buf = VARDATA_ANY(ws);
-		while (buf - VARDATA_ANY(ws) < VARSIZE_ANY_EXHDR(ws))
+		end = buf + VARSIZE_ANY_EXHDR(ws);
+		while (buf < end)
 		{
-			if (pg_mblen(buf) == 1)
+			int			len = pg_mblen_range(buf, end);
+
+			if (len == 1)
 			{
 				switch (*buf)
 				{
@@ -2632,7 +2637,7 @@ ts_stat_sql(MemoryContext persistentContext, text *txt, text *ws)
 						stat->weight |= 0;
 				}
 			}
-			buf += pg_mblen(buf);
+			buf += len;
 		}
 	}
 

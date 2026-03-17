@@ -45,6 +45,7 @@
 #include "jit/jit.h"
 #include "nodes/nodeFuncs.h"
 #include "pgstat.h"
+#include "storage/proc.h"
 #include "tcop/tcopprot.h"
 #include "utils/datum.h"
 #include "utils/dsa.h"
@@ -107,7 +108,7 @@ struct SharedExecutorInstrumentation
 	/* array of num_plan_nodes * num_workers Instrumentation objects follows */
 };
 #define GetInstrumentationArray(sei) \
-	(AssertVariableIsOfTypeMacro(sei, SharedExecutorInstrumentation *), \
+	(StaticAssertVariableIsOfTypeMacro(sei, SharedExecutorInstrumentation *), \
 	 (Instrumentation *) (((char *) sei) + sei->instrument_offset))
 
 /* Context object for ExecParallelEstimate. */

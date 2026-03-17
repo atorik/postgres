@@ -825,6 +825,8 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 		if (PG_PROTOCOL_MINOR(proto) > PG_PROTOCOL_MINOR(PG_PROTOCOL_LATEST) ||
 			unrecognized_protocol_options != NIL)
 			SendNegotiateProtocolVersion(unrecognized_protocol_options);
+
+		list_free_deep(unrecognized_protocol_options);
 	}
 
 	/* Check a user name was given. */
@@ -846,10 +848,9 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 	if (strlen(port->user_name) >= NAMEDATALEN)
 		port->user_name[NAMEDATALEN - 1] = '\0';
 
+	Assert(MyBackendType == B_BACKEND || MyBackendType == B_DEAD_END_BACKEND);
 	if (am_walsender)
 		MyBackendType = B_WAL_SENDER;
-	else
-		MyBackendType = B_BACKEND;
 
 	/*
 	 * Normal walsender backends, e.g. for streaming replication, are not

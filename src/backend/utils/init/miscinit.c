@@ -55,6 +55,7 @@
 #include "utils/pidfile.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
+#include "utils/wait_event.h"
 
 
 #define DIRECTORY_LOCK_FILE		"postmaster.pid"
@@ -266,7 +267,7 @@ GetBackendTypeDesc(BackendType backendType)
 
 	switch (backendType)
 	{
-#define PG_PROCTYPE(bktype, description, main_func, shmem_attach)	\
+#define PG_PROCTYPE(bktype, bkcategory, description, main_func, shmem_attach)	\
 		case bktype: backendDesc = description; break;
 #include "postmaster/proctypelist.h"
 #undef PG_PROCTYPE

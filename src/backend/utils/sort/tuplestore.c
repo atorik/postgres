@@ -63,6 +63,7 @@
 #include "storage/buffile.h"
 #include "utils/memutils.h"
 #include "utils/resowner.h"
+#include "utils/tuplestore.h"
 
 
 /*
@@ -1024,7 +1025,7 @@ tuplestore_gettuple(Tuplestorestate *state, bool forward,
 							(errcode_for_file_access(),
 							 errmsg("could not seek in tuplestore temporary file")));
 			state->status = TSS_READFILE;
-			/* FALLTHROUGH */
+			pg_fallthrough;
 
 		case TSS_READFILE:
 			*should_free = true;

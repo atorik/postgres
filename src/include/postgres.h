@@ -135,16 +135,6 @@ CharGetDatum(char X)
 }
 
 /*
- * Int8GetDatum
- *		Returns datum representation for an 8-bit integer.
- */
-static inline Datum
-Int8GetDatum(int8 X)
-{
-	return (Datum) X;
-}
-
-/*
  * DatumGetUInt8
  *		Returns 8-bit unsigned integer value of a datum.
  */
@@ -533,9 +523,9 @@ Float8GetDatum(float8 X)
  */
 
 #define Int64GetDatumFast(X) \
-	(AssertVariableIsOfTypeMacro(X, int64), Int64GetDatum(X))
+	(StaticAssertVariableIsOfTypeMacro(X, int64), Int64GetDatum(X))
 #define Float8GetDatumFast(X) \
-	(AssertVariableIsOfTypeMacro(X, double), Float8GetDatum(X))
+	(StaticAssertVariableIsOfTypeMacro(X, double), Float8GetDatum(X))
 
 
 /* ----------------------------------------------------------------

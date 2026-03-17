@@ -20,6 +20,7 @@
 #include "access/attnum.h"
 #include "access/cmptype.h"
 #include "nodes/bitmapset.h"
+#include "nodes/lockoptions.h"
 #include "nodes/pg_list.h"
 
 
@@ -2177,6 +2178,30 @@ typedef struct ReturningExpr
 	Expr	   *retexpr;		/* expression to be returned */
 } ReturningExpr;
 
+/*
+ * GraphLabelRef - label reference in label expression inside GRAPH_TABLE clause
+ */
+typedef struct GraphLabelRef
+{
+	NodeTag		type;
+	Oid			labelid;
+	ParseLoc	location;
+} GraphLabelRef;
+
+/*
+ * GraphPropertyRef - property reference inside GRAPH_TABLE clause
+ */
+typedef struct GraphPropertyRef
+{
+	Expr		xpr;
+	const char *elvarname;
+	Oid			propid;
+	Oid			typeId;
+	int32		typmod;
+	Oid			collation;
+	ParseLoc	location;
+} GraphPropertyRef;
+
 /*--------------------
  * TargetEntry -
  *	   a target entry (used in query target lists)
@@ -2370,7 +2395,7 @@ typedef struct FromExpr
 typedef struct OnConflictExpr
 {
 	NodeTag		type;
-	OnConflictAction action;	/* DO NOTHING or UPDATE? */
+	OnConflictAction action;	/* DO NOTHING, SELECT, or UPDATE */
 
 	/* Arbiter */
 	List	   *arbiterElems;	/* unique index arbiter list (of
@@ -2378,9 +2403,14 @@ typedef struct OnConflictExpr
 	Node	   *arbiterWhere;	/* unique index arbiter WHERE clause */
 	Oid			constraint;		/* pg_constraint OID for arbiter */
 
-	/* ON CONFLICT UPDATE */
+	/* ON CONFLICT DO SELECT */
+	LockClauseStrength lockStrength;	/* strength of lock for DO SELECT */
+
+	/* ON CONFLICT DO UPDATE */
 	List	   *onConflictSet;	/* List of ON CONFLICT SET TargetEntrys */
-	Node	   *onConflictWhere;	/* qualifiers to restrict UPDATE to */
+
+	/* both ON CONFLICT DO SELECT and UPDATE */
+	Node	   *onConflictWhere;	/* qualifiers to restrict SELECT/UPDATE */
 	int			exclRelIndex;	/* RT index of 'excluded' relation */
 	List	   *exclRelTlist;	/* tlist of the EXCLUDED pseudo relation */
 } OnConflictExpr;

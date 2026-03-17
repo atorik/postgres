@@ -565,6 +565,24 @@ INSERT INTO atest5(two) VALUES (6) ON CONFLICT (two) DO UPDATE set three = EXCLU
 INSERT INTO atest5(two) VALUES (6) ON CONFLICT (two) DO UPDATE set three = EXCLUDED.three;
 INSERT INTO atest5(two) VALUES (6) ON CONFLICT (two) DO UPDATE set one = 8; -- fails (due to UPDATE)
 INSERT INTO atest5(three) VALUES (4) ON CONFLICT (two) DO UPDATE set three = 10; -- fails (due to INSERT)
+-- Check that column level privileges are enforced for ON CONFLICT ... WHERE
+-- Ok. we may select one
+INSERT INTO atest5(two) VALUES (2) ON CONFLICT (two) DO SELECT WHERE atest5.one = 1 RETURNING atest5.two;
+-- Error. No select rights on three
+INSERT INTO atest5(two) VALUES (2) ON CONFLICT (two) DO SELECT WHERE atest5.three = 1 RETURNING atest5.two;
+
+-- Check that ON CONFLICT ... SELECT FOR UPDATE/SHARE requires an updatable column
+SET SESSION AUTHORIZATION regress_priv_user1;
+REVOKE UPDATE (three) ON atest5 FROM regress_priv_user4;
+SET SESSION AUTHORIZATION regress_priv_user4;
+
+INSERT INTO atest5(two) VALUES (2) ON CONFLICT (two) DO SELECT FOR UPDATE RETURNING atest5.two; -- fails
+
+SET SESSION AUTHORIZATION regress_priv_user1;
+GRANT UPDATE (three) ON atest5 TO regress_priv_user4;
+SET SESSION AUTHORIZATION regress_priv_user4;
+
+INSERT INTO atest5(two) VALUES (2) ON CONFLICT (two) DO SELECT FOR UPDATE RETURNING atest5.two; -- ok
 
 -- Check that the columns in the inference require select privileges
 INSERT INTO atest5(four) VALUES (4); -- fail
@@ -1366,6 +1384,27 @@ SELECT loread(lo_open(1005, x'40000'::int), 32);
 SELECT lo_truncate(lo_open(1005, x'20000'::int), 10);	-- to be denied
 SELECT lo_truncate(lo_open(2001, x'20000'::int), 10);
 
+\c -
+-- confirm role with privileges of pg_read_all_data can read large objects
+SET SESSION AUTHORIZATION regress_priv_user6;
+
+SELECT loread(lo_open(1002, x'40000'::int), 32);
+SELECT lo_get(1002);
+SELECT lowrite(lo_open(1002, x'20000'::int), 'abcd');	-- to be denied
+SELECT lo_put(1002, 1, 'abcd');							-- to be denied
+SELECT lo_truncate(lo_open(1002, x'20000'::int), 0);	-- to be denied
+SELECT lo_unlink(1002);									-- to be denied
+
+\c -
+-- confirm role with privileges of pg_write_all_data can write large objects
+GRANT SELECT ON LARGE OBJECT 1002 TO regress_priv_user7;
+SET SESSION AUTHORIZATION regress_priv_user7;
+
+SELECT lowrite(lo_open(1002, x'20000'::int), 'abcd');
+SELECT lo_put(1002, 1, 'abcd');
+SELECT lo_truncate(lo_open(1002, x'20000'::int), 0);
+SELECT lo_unlink(1002);									-- to be denied
+
 -- has_largeobject_privilege function
 
 -- superuser
@@ -1601,7 +1640,7 @@ ALTER DEFAULT PRIVILEGES GRANT SELECT ON LARGE OBJECTS TO regress_priv_user2;
 
 SELECT lo_create(1008);
 SELECT has_largeobject_privilege('regress_priv_user2', 1008, 'SELECT'); -- yes
-SELECT has_largeobject_privilege('regress_priv_user6', 1008, 'SELECT'); -- no
+SELECT has_largeobject_privilege('regress_priv_user3', 1008, 'SELECT'); -- no
 SELECT has_largeobject_privilege('regress_priv_user2', 1008, 'UPDATE'); -- no
 
 ALTER DEFAULT PRIVILEGES GRANT ALL ON LARGE OBJECTS TO regress_priv_user2;
@@ -1799,12 +1838,70 @@ revoke select on dep_priv_test from regress_priv_user4 cascade;
 set session role regress_priv_user1;
 drop table dep_priv_test;
 
+--
+-- Property graphs
+--
+set session role regress_priv_user1;
+create property graph ptg1
+	vertex tables (
+		atest5 key (four)
+			default label properties (four)
+			label lttc properties (three as lttck),
+		atest1 key (a)
+			default label
+			label lttc properties (a as lttck),
+		atest2 key (col1)
+			default label
+			label ltv properties (col1 as ltvk));
+-- select privileges on property graph as well as table
+select * from graph_table (ptg1 match (is atest5) COLUMNS (1 as value)) limit 0; -- ok
+grant select on ptg1 to regress_priv_user2;
+set session role regress_priv_user2;
+select * from graph_table (ptg1 match (is atest1) COLUMNS (1 as value)) limit 0; -- ok
+-- select privileges on property graph but not table
+select * from graph_table (ptg1 match (is atest5) COLUMNS (1 as value)) limit 0; -- fails
+select * from graph_table (ptg1 match (is lttc) COLUMNS (1 as value)) limit 0; -- fails
+set session role regress_priv_user3;
+-- select privileges on table but not property graph
+select * from graph_table (ptg1 match (is atest1) COLUMNS (1 as value)) limit 0; -- fails
+-- select privileges on neither
+select * from graph_table (ptg1 match (is atest5) COLUMNS (1 as value)) limit 0; -- fails
+-- column privileges
+set session role regress_priv_user1;
+select * from graph_table (ptg1 match (v is lttc) COLUMNS (v.lttck)) limit 0; -- ok
+grant select on ptg1 to regress_priv_user4;
+set session role regress_priv_user4;
+select * from graph_table (ptg1 match (a is atest5) COLUMNS (a.four)) limit 0; -- ok
+select * from graph_table (ptg1 match (v is lttc) COLUMNS (v.lttck)) limit 0; -- fail
+-- access property graph through security definer view
+set session role regress_priv_user4;
+create view atpgv1 as select * from graph_table (ptg1 match (is atest1) COLUMNS (1 as value)) limit 0;
+grant select on atpgv1 to regress_priv_user3;
+select * from atpgv1; -- ok
+set session role regress_priv_user3;
+select * from atpgv1; -- ok
+set session role regress_priv_user4;
+create view atpgv2 as select * from graph_table (ptg1 match (v is ltv) COLUMNS (v.ltvk)) limit 0;
+-- though the session user is the owner of the view and also has access to the
+-- property graph, it does not have access to a table referenced in the graph
+-- pattern
+select * from atpgv2; -- fail
+grant select on atpgv2 to regress_priv_user2;
+-- The user who otherwise does not have access to the property graph, gets
+-- access to it through a security definer view and uses it successfully since
+-- it has access to the tables referenced in the graph pattern.
+set session role regress_priv_user2;
+select * from atpgv2; -- ok
 
 -- clean up
 
 \c
 
 drop sequence x_seq;
+
+drop view atpgv1;
+drop view atpgv2;
+drop property graph ptg1;
 
 DROP AGGREGATE priv_testagg1(int);
 DROP FUNCTION priv_testfunc2(int);

@@ -337,9 +337,12 @@ static bool multirange_element_has_hashing(TypeCacheEntry *typentry);
 static bool multirange_element_has_extended_hashing(TypeCacheEntry *typentry);
 static void cache_multirange_element_properties(TypeCacheEntry *typentry);
 static void TypeCacheRelCallback(Datum arg, Oid relid);
-static void TypeCacheTypCallback(Datum arg, int cacheid, uint32 hashvalue);
-static void TypeCacheOpcCallback(Datum arg, int cacheid, uint32 hashvalue);
-static void TypeCacheConstrCallback(Datum arg, int cacheid, uint32 hashvalue);
+static void TypeCacheTypCallback(Datum arg, SysCacheIdentifier cacheid,
+								 uint32 hashvalue);
+static void TypeCacheOpcCallback(Datum arg, SysCacheIdentifier cacheid,
+								 uint32 hashvalue);
+static void TypeCacheConstrCallback(Datum arg, SysCacheIdentifier cacheid,
+									uint32 hashvalue);
 static void load_enum_cache_data(TypeCacheEntry *tcache);
 static EnumItem *find_enumitem(TypeCacheEnumData *enumdata, Oid arg);
 static int	enum_oid_cmp(const void *left, const void *right);
@@ -1482,10 +1485,14 @@ UpdateDomainConstraintRef(DomainConstraintRef *ref)
 /*
  * DomainHasConstraints --- utility routine to check if a domain has constraints
  *
+ * Returns true if the domain has any constraints at all.  If has_volatile
+ * is not NULL, also checks whether any CHECK constraint contains a volatile
+ * expression and sets *has_volatile accordingly.
+ *
  * This is defined to return false, not fail, if type is not a domain.
  */
 bool
-DomainHasConstraints(Oid type_id)
+DomainHasConstraints(Oid type_id, bool *has_volatile)
 {
 	TypeCacheEntry *typentry;
 
@@ -1495,7 +1502,26 @@ DomainHasConstraints(Oid type_id)
 	 */
 	typentry = lookup_type_cache(type_id, TYPECACHE_DOMAIN_CONSTR_INFO);
 
-	return (typentry->domainData != NULL);
+	if (typentry->domainData == NULL)
+		return false;
+
+	if (has_volatile)
+	{
+		*has_volatile = false;
+
+		foreach_node(DomainConstraintState, constrstate,
+					 typentry->domainData->constraints)
+		{
+			if (constrstate->constrainttype == DOM_CONSTRAINT_CHECK &&
+				contain_volatile_functions((Node *) constrstate->check_expr))
+			{
+				*has_volatile = true;
+				break;
+			}
+		}
+	}
+
+	return true;
 }
 
 
@@ -2512,7 +2538,7 @@ TypeCacheRelCallback(Datum arg, Oid relid)
  * it as needing to be reloaded.
  */
 static void
-TypeCacheTypCallback(Datum arg, int cacheid, uint32 hashvalue)
+TypeCacheTypCallback(Datum arg, SysCacheIdentifier cacheid, uint32 hashvalue)
 {
 	HASH_SEQ_STATUS status;
 	TypeCacheEntry *typentry;
@@ -2569,7 +2595,7 @@ TypeCacheTypCallback(Datum arg, int cacheid, uint32 hashvalue)
  * of members are not going to get cached here.
  */
 static void
-TypeCacheOpcCallback(Datum arg, int cacheid, uint32 hashvalue)
+TypeCacheOpcCallback(Datum arg, SysCacheIdentifier cacheid, uint32 hashvalue)
 {
 	HASH_SEQ_STATUS status;
 	TypeCacheEntry *typentry;
@@ -2607,7 +2633,7 @@ TypeCacheOpcCallback(Datum arg, int cacheid, uint32 hashvalue)
  * approach to domain constraints.
  */
 static void
-TypeCacheConstrCallback(Datum arg, int cacheid, uint32 hashvalue)
+TypeCacheConstrCallback(Datum arg, SysCacheIdentifier cacheid, uint32 hashvalue)
 {
 	TypeCacheEntry *typentry;
 

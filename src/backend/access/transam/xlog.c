@@ -105,6 +105,7 @@
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 #include "utils/varlena.h"
+#include "utils/wait_event.h"
 
 #ifdef WAL_DEBUG
 #include "utils/memutils.h"
@@ -1990,7 +1991,6 @@ XLogRecPtrToBytePos(XLogRecPtr ptr)
 static void
 AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 {
-	XLogCtlInsert *Insert = &XLogCtl->Insert;
 	int			nextidx;
 	XLogRecPtr	OldPageRqstPtr;
 	XLogwrtRqst WriteRqst;
@@ -2060,7 +2060,7 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 					/* Have to write it ourselves */
 					TRACE_POSTGRESQL_WAL_BUFFER_WRITE_DIRTY_START();
 					WriteRqst.Write = OldPageRqstPtr;
-					WriteRqst.Flush = 0;
+					WriteRqst.Flush = InvalidXLogRecPtr;
 					XLogWrite(WriteRqst, tli, false);
 					LWLockRelease(WALWriteLock);
 					pgWalUsage.wal_buffers_full++;
@@ -2113,22 +2113,6 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 		NewPage->xlp_pageaddr = NewPageBeginPtr;
 
 		/* NewPage->xlp_rem_len = 0; */	/* done by memset */
-
-		/*
-		 * If online backup is not in progress, mark the header to indicate
-		 * that WAL records beginning in this page have removable backup
-		 * blocks.  This allows the WAL archiver to know whether it is safe to
-		 * compress archived WAL data by transforming full-block records into
-		 * the non-full-block format.  It is sufficient to record this at the
-		 * page level because we force a page switch (in fact a segment
-		 * switch) when starting a backup, so the flag will be off before any
-		 * records can be written during the backup.  At the end of a backup,
-		 * the last page will be marked as all unsafe when perhaps only part
-		 * is unsafe, but at worst the archiver would miss the opportunity to
-		 * compress a few records.
-		 */
-		if (Insert->runningBackups == 0)
-			NewPage->xlp_info |= XLP_BKP_REMOVABLE;
 
 		/*
 		 * If first page of an XLOG segment file, make it a long header.
@@ -3077,7 +3061,7 @@ XLogBackgroundFlush(void)
 	else
 	{
 		/* no flushing, this time round */
-		WriteRqst.Flush = 0;
+		WriteRqst.Flush = InvalidXLogRecPtr;
 	}
 
 #ifdef WAL_DEBUG
@@ -5207,7 +5191,7 @@ BootStrapXLOG(uint32 data_checksum_version)
 	/* Insert the initial checkpoint record */
 	recptr = ((char *) page + SizeOfXLogLongPHD);
 	record = (XLogRecord *) recptr;
-	record->xl_prev = 0;
+	record->xl_prev = InvalidXLogRecPtr;
 	record->xl_xid = InvalidTransactionId;
 	record->xl_tot_len = SizeOfXLogRecord + SizeOfXLogRecordDataHeaderShort + sizeof(checkPoint);
 	record->xl_info = XLOG_CHECKPOINT_SHUTDOWN;
@@ -6769,6 +6753,28 @@ ShutdownXLOG(int code, Datum arg)
 }
 
 /*
+ * Format checkpoint request flags as a space-separated string for
+ * log messages.
+ */
+static const char *
+CheckpointFlagsString(int flags)
+{
+	static char buf[128];
+
+	snprintf(buf, sizeof(buf), "%s%s%s%s%s%s%s%s",
+			 (flags & CHECKPOINT_IS_SHUTDOWN) ? " shutdown" : "",
+			 (flags & CHECKPOINT_END_OF_RECOVERY) ? " end-of-recovery" : "",
+			 (flags & CHECKPOINT_FAST) ? " fast" : "",
+			 (flags & CHECKPOINT_FORCE) ? " force" : "",
+			 (flags & CHECKPOINT_WAIT) ? " wait" : "",
+			 (flags & CHECKPOINT_CAUSE_XLOG) ? " wal" : "",
+			 (flags & CHECKPOINT_CAUSE_TIME) ? " time" : "",
+			 (flags & CHECKPOINT_FLUSH_UNLOGGED) ? " flush-unlogged" : "");
+
+	return buf;
+}
+
+/*
  * Log start of a checkpoint.
  */
 static void
@@ -6776,35 +6782,21 @@ LogCheckpointStart(int flags, bool restartpoint)
 {
 	if (restartpoint)
 		ereport(LOG,
-		/* translator: the placeholders show checkpoint options */
-				(errmsg("restartpoint starting:%s%s%s%s%s%s%s%s",
-						(flags & CHECKPOINT_IS_SHUTDOWN) ? " shutdown" : "",
-						(flags & CHECKPOINT_END_OF_RECOVERY) ? " end-of-recovery" : "",
-						(flags & CHECKPOINT_FAST) ? " fast" : "",
-						(flags & CHECKPOINT_FORCE) ? " force" : "",
-						(flags & CHECKPOINT_WAIT) ? " wait" : "",
-						(flags & CHECKPOINT_CAUSE_XLOG) ? " wal" : "",
-						(flags & CHECKPOINT_CAUSE_TIME) ? " time" : "",
-						(flags & CHECKPOINT_FLUSH_UNLOGGED) ? " flush-unlogged" : "")));
+		/* translator: the placeholder shows checkpoint options */
+				(errmsg("restartpoint starting:%s",
+						CheckpointFlagsString(flags))));
 	else
 		ereport(LOG,
-		/* translator: the placeholders show checkpoint options */
-				(errmsg("checkpoint starting:%s%s%s%s%s%s%s%s",
-						(flags & CHECKPOINT_IS_SHUTDOWN) ? " shutdown" : "",
-						(flags & CHECKPOINT_END_OF_RECOVERY) ? " end-of-recovery" : "",
-						(flags & CHECKPOINT_FAST) ? " fast" : "",
-						(flags & CHECKPOINT_FORCE) ? " force" : "",
-						(flags & CHECKPOINT_WAIT) ? " wait" : "",
-						(flags & CHECKPOINT_CAUSE_XLOG) ? " wal" : "",
-						(flags & CHECKPOINT_CAUSE_TIME) ? " time" : "",
-						(flags & CHECKPOINT_FLUSH_UNLOGGED) ? " flush-unlogged" : "")));
+		/* translator: the placeholder shows checkpoint options */
+				(errmsg("checkpoint starting:%s",
+						CheckpointFlagsString(flags))));
 }
 
 /*
  * Log end of a checkpoint.
  */
 static void
-LogCheckpointEnd(bool restartpoint)
+LogCheckpointEnd(bool restartpoint, int flags)
 {
 	long		write_msecs,
 				sync_msecs,
@@ -6854,12 +6846,13 @@ LogCheckpointEnd(bool restartpoint)
 	 */
 	if (restartpoint)
 		ereport(LOG,
-				(errmsg("restartpoint complete: wrote %d buffers (%.1f%%), "
+				(errmsg("restartpoint complete:%s: wrote %d buffers (%.1f%%), "
 						"wrote %d SLRU buffers; %d WAL file(s) added, "
 						"%d removed, %d recycled; write=%ld.%03d s, "
 						"sync=%ld.%03d s, total=%ld.%03d s; sync files=%d, "
 						"longest=%ld.%03d s, average=%ld.%03d s; distance=%d kB, "
 						"estimate=%d kB; lsn=%X/%08X, redo lsn=%X/%08X",
+						CheckpointFlagsString(flags),
 						CheckpointStats.ckpt_bufs_written,
 						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
 						CheckpointStats.ckpt_slru_written,
@@ -6878,12 +6871,13 @@ LogCheckpointEnd(bool restartpoint)
 						LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo))));
 	else
 		ereport(LOG,
-				(errmsg("checkpoint complete: wrote %d buffers (%.1f%%), "
+				(errmsg("checkpoint complete:%s: wrote %d buffers (%.1f%%), "
 						"wrote %d SLRU buffers; %d WAL file(s) added, "
 						"%d removed, %d recycled; write=%ld.%03d s, "
 						"sync=%ld.%03d s, total=%ld.%03d s; sync files=%d, "
 						"longest=%ld.%03d s, average=%ld.%03d s; distance=%d kB, "
 						"estimate=%d kB; lsn=%X/%08X, redo lsn=%X/%08X",
+						CheckpointFlagsString(flags),
 						CheckpointStats.ckpt_bufs_written,
 						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
 						CheckpointStats.ckpt_slru_written,
@@ -7480,7 +7474,7 @@ CreateCheckPoint(int flags)
 		TruncateSUBTRANS(GetOldestTransactionIdConsideredRunning());
 
 	/* Real work is done; log and update stats. */
-	LogCheckpointEnd(false);
+	LogCheckpointEnd(false, flags);
 
 	/* Reset the process title */
 	update_checkpoint_display(flags, false, true);
@@ -7951,7 +7945,7 @@ CreateRestartPoint(int flags)
 		TruncateSUBTRANS(GetOldestTransactionIdConsideredRunning());
 
 	/* Real work is done; log and update stats. */
-	LogCheckpointEnd(true);
+	LogCheckpointEnd(true, flags);
 
 	/* Reset the process title */
 	update_checkpoint_display(flags, true, true);
@@ -8228,6 +8222,30 @@ XLogRestorePoint(const char *rpName)
 				   rpName, LSN_FORMAT_ARGS(RecPtr)));
 
 	return RecPtr;
+}
+
+/*
+ * Write an empty XLOG record to assign a distinct LSN.
+ *
+ * This is used by some index AMs when building indexes on permanent relations
+ * with wal_level=minimal.  In that scenario, WAL-logging will start after
+ * commit, but the index AM needs distinct LSNs to detect concurrent page
+ * modifications.  When the current WAL insert position hasn't advanced since
+ * the last call, we emit a dummy record to ensure we get a new, distinct LSN.
+ */
+XLogRecPtr
+XLogAssignLSN(void)
+{
+	int			dummy = 0;
+
+	/*
+	 * Records other than XLOG_SWITCH must have content.  We use an integer 0
+	 * to satisfy this restriction.
+	 */
+	XLogBeginInsert();
+	XLogSetRecordFlags(XLOG_MARK_UNIMPORTANT);
+	XLogRegisterData(&dummy, sizeof(dummy));
+	return XLogInsert(RM_XLOG_ID, XLOG_ASSIGN_LSN);
 }
 
 /*
@@ -8596,6 +8614,10 @@ xlog_redo(XLogReaderState *record)
 	else if (info == XLOG_RESTORE_POINT)
 	{
 		/* nothing to do here, handled in xlogrecovery.c */
+	}
+	else if (info == XLOG_ASSIGN_LSN)
+	{
+		/* nothing to do here, see XLogGetFakeLSN() */
 	}
 	else if (info == XLOG_FPI || info == XLOG_FPI_FOR_HINT)
 	{
@@ -9026,12 +9048,6 @@ do_pg_backup_start(const char *backupidstr, bool fast, List **tablespaces,
 		 * recovery: we won't have a history file covering the old timeline if
 		 * pg_wal directory was not included in the base backup and the WAL
 		 * archive was cleared too before starting the backup.
-		 *
-		 * This also ensures that we have emitted a WAL page header that has
-		 * XLP_BKP_REMOVABLE off before we emit the checkpoint record.
-		 * Therefore, if a WAL archiver (such as pglesslog) is trying to
-		 * compress out removable backup blocks, it won't remove any that
-		 * occur after this point.
 		 *
 		 * During recovery, we skip forcing XLOG file switch, which means that
 		 * the backup taken during recovery is not available for the special
@@ -9605,6 +9621,22 @@ GetXLogInsertRecPtr(void)
 	SpinLockRelease(&Insert->insertpos_lck);
 
 	return XLogBytePosToRecPtr(current_bytepos);
+}
+
+/*
+ * Get latest WAL record end pointer
+ */
+XLogRecPtr
+GetXLogInsertEndRecPtr(void)
+{
+	XLogCtlInsert *Insert = &XLogCtl->Insert;
+	uint64		current_bytepos;
+
+	SpinLockAcquire(&Insert->insertpos_lck);
+	current_bytepos = Insert->CurrBytePos;
+	SpinLockRelease(&Insert->insertpos_lck);
+
+	return XLogBytePosToEndRecPtr(current_bytepos);
 }
 
 /*

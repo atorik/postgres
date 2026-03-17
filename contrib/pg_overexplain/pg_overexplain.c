@@ -54,6 +54,8 @@ static void overexplain_alias(const char *qlabel, Alias *alias,
 							  ExplainState *es);
 static void overexplain_bitmapset(const char *qlabel, Bitmapset *bms,
 								  ExplainState *es);
+static void overexplain_bitmapset_list(const char *qlabel, List *bms_list,
+									   ExplainState *es);
 static void overexplain_intlist(const char *qlabel, List *list,
 								ExplainState *es);
 
@@ -191,6 +193,8 @@ overexplain_per_node_hook(PlanState *planstate, List *ancestors,
 	 */
 	if (options->range_table)
 	{
+		bool		opened_elided_nodes = false;
+
 		switch (nodeTag(plan))
 		{
 			case T_SeqScan:
@@ -230,11 +234,17 @@ overexplain_per_node_hook(PlanState *planstate, List *ancestors,
 				overexplain_bitmapset("Append RTIs",
 									  ((Append *) plan)->apprelids,
 									  es);
+				overexplain_bitmapset_list("Child Append RTIs",
+										   ((Append *) plan)->child_append_relid_sets,
+										   es);
 				break;
 			case T_MergeAppend:
 				overexplain_bitmapset("Append RTIs",
 									  ((MergeAppend *) plan)->apprelids,
 									  es);
+				overexplain_bitmapset_list("Child Append RTIs",
+										   ((MergeAppend *) plan)->child_append_relid_sets,
+										   es);
 				break;
 			case T_Result:
 
@@ -248,9 +258,47 @@ overexplain_per_node_hook(PlanState *planstate, List *ancestors,
 					overexplain_bitmapset("RTIs",
 										  ((Result *) plan)->relids,
 										  es);
+				break;
 			default:
 				break;
 		}
+
+		foreach_node(ElidedNode, n, es->pstmt->elidedNodes)
+		{
+			char	   *elidednodetag;
+
+			if (n->plan_node_id != plan->plan_node_id)
+				continue;
+
+			if (!opened_elided_nodes)
+			{
+				ExplainOpenGroup("Elided Nodes", "Elided Nodes", false, es);
+				opened_elided_nodes = true;
+			}
+
+			switch (n->elided_type)
+			{
+				case T_Append:
+					elidednodetag = "Append";
+					break;
+				case T_MergeAppend:
+					elidednodetag = "MergeAppend";
+					break;
+				case T_SubqueryScan:
+					elidednodetag = "SubqueryScan";
+					break;
+				default:
+					elidednodetag = psprintf("%d", n->elided_type);
+					break;
+			}
+
+			ExplainOpenGroup("Elided Node", NULL, true, es);
+			ExplainPropertyText("Elided Node Type", elidednodetag, es);
+			overexplain_bitmapset("Elided Node RTIs", n->relids, es);
+			ExplainCloseGroup("Elided Node", NULL, true, es);
+		}
+		if (opened_elided_nodes)
+			ExplainCloseGroup("Elided Nodes", "Elided Nodes", false, es);
 	}
 }
 
@@ -395,6 +443,8 @@ static void
 overexplain_range_table(PlannedStmt *plannedstmt, ExplainState *es)
 {
 	Index		rti;
+	ListCell   *lc_subrtinfo = list_head(plannedstmt->subrtinfos);
+	SubPlanRTInfo *rtinfo = NULL;
 
 	/* Open group, one entry per RangeTblEntry */
 	ExplainOpenGroup("Range Table", "Range Table", false, es);
@@ -405,6 +455,18 @@ overexplain_range_table(PlannedStmt *plannedstmt, ExplainState *es)
 		RangeTblEntry *rte = rt_fetch(rti, plannedstmt->rtable);
 		char	   *kind = NULL;
 		char	   *relkind;
+		SubPlanRTInfo *next_rtinfo;
+
+		/* Advance to next SubRTInfo, if it's time. */
+		if (lc_subrtinfo != NULL)
+		{
+			next_rtinfo = lfirst(lc_subrtinfo);
+			if (rti > next_rtinfo->rtoffset)
+			{
+				rtinfo = next_rtinfo;
+				lc_subrtinfo = lnext(plannedstmt->subrtinfos, lc_subrtinfo);
+			}
+		}
 
 		/* NULL entries are possible; skip them */
 		if (rte == NULL)
@@ -443,6 +505,17 @@ overexplain_range_table(PlannedStmt *plannedstmt, ExplainState *es)
 			case RTE_GROUP:
 				kind = "group";
 				break;
+			case RTE_GRAPH_TABLE:
+
+				/*
+				 * We should not see RTE of this kind here since property
+				 * graph RTE gets converted to subquery RTE in
+				 * RewriteGraphTable(). In case we decide not to do the
+				 * conversion and leave RTEkind unchanged in future, print
+				 * correct name of RTE kind.
+				 */
+				kind = "graph_table";
+				break;
 		}
 
 		/* Begin group for this specific RTE */
@@ -467,6 +540,28 @@ overexplain_range_table(PlannedStmt *plannedstmt, ExplainState *es)
 			ExplainPropertyText("Kind", kind, es);
 			ExplainPropertyBool("Inherited", rte->inh, es);
 			ExplainPropertyBool("In From Clause", rte->inFromCl, es);
+		}
+
+		/*
+		 * Indicate which subplan is the origin of which RTE. Note dummy
+		 * subplans. Here again, we crunch more onto one line in text format.
+		 */
+		if (rtinfo != NULL)
+		{
+			if (es->format == EXPLAIN_FORMAT_TEXT)
+			{
+				if (!rtinfo->dummy)
+					ExplainPropertyText("Subplan", rtinfo->plan_name, es);
+				else
+					ExplainPropertyText("Subplan",
+										psprintf("%s (dummy)",
+												 rtinfo->plan_name), es);
+			}
+			else
+			{
+				ExplainPropertyText("Subplan", rtinfo->plan_name, es);
+				ExplainPropertyBool("Subplan Is Dummy", rtinfo->dummy, es);
+			}
 		}
 
 		/* rte->alias is optional; rte->eref is requested */
@@ -533,6 +628,9 @@ overexplain_range_table(PlannedStmt *plannedstmt, ExplainState *es)
 				break;
 			case RELKIND_PARTITIONED_INDEX:
 				relkind = "partitioned_index";
+				break;
+			case RELKIND_PROPGRAPH:
+				relkind = "property_graph";
 				break;
 			case '\0':
 				relkind = NULL;
@@ -657,6 +755,12 @@ overexplain_range_table(PlannedStmt *plannedstmt, ExplainState *es)
 		}
 
 		/*
+		 * rewriteGraphTable() clears graph_pattern and graph_table_columns
+		 * fields, so skip them. No graph table specific fields are required
+		 * to be printed.
+		 */
+
+		/*
 		 * add_rte_to_flat_rtable will clear groupexprs and securityQuals, so
 		 * skip that field. We have handled inFromCl above, so the only thing
 		 * left to handle here is rte->lateral.
@@ -735,6 +839,54 @@ overexplain_bitmapset(const char *qlabel, Bitmapset *bms, ExplainState *es)
 	initStringInfo(&buf);
 	while ((x = bms_next_member(bms, x)) >= 0)
 		appendStringInfo(&buf, " %d", x);
+	Assert(buf.data[0] == ' ');
+	ExplainPropertyText(qlabel, buf.data + 1, es);
+	pfree(buf.data);
+}
+
+/*
+ * Emit a text property describing the contents of a list of bitmapsets.
+ * If a bitmapset contains exactly 1 member, we just print an integer;
+ * otherwise, we surround the list of members by parentheses.
+ *
+ * If there are no bitmapsets in the list, we print the word "none".
+ */
+static void
+overexplain_bitmapset_list(const char *qlabel, List *bms_list,
+						   ExplainState *es)
+{
+	StringInfoData buf;
+
+	initStringInfo(&buf);
+
+	foreach_node(Bitmapset, bms, bms_list)
+	{
+		if (bms_membership(bms) == BMS_SINGLETON)
+			appendStringInfo(&buf, " %d", bms_singleton_member(bms));
+		else
+		{
+			int			x = -1;
+			bool		first = true;
+
+			appendStringInfoString(&buf, " (");
+			while ((x = bms_next_member(bms, x)) >= 0)
+			{
+				if (first)
+					first = false;
+				else
+					appendStringInfoChar(&buf, ' ');
+				appendStringInfo(&buf, "%d", x);
+			}
+			appendStringInfoChar(&buf, ')');
+		}
+	}
+
+	if (buf.len == 0)
+	{
+		ExplainPropertyText(qlabel, "none", es);
+		return;
+	}
+
 	Assert(buf.data[0] == ' ');
 	ExplainPropertyText(qlabel, buf.data + 1, es);
 	pfree(buf.data);

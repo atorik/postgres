@@ -24,6 +24,7 @@
 #include <unistd.h>
 
 #include "access/amapi.h"
+#include "access/attmap.h"
 #include "access/heapam.h"
 #include "access/multixact.h"
 #include "access/relscan.h"
@@ -480,6 +481,8 @@ ConstructTupleDescriptor(Relation heapRelation,
 
 		populate_compact_attribute(indexTupDesc, i);
 	}
+
+	TupleDescFinalize(indexTupDesc);
 
 	return indexTupDesc;
 }
@@ -4077,7 +4080,7 @@ reindex_relation(const ReindexStmt *stmt, Oid relid, int flags,
 		Assert(!ReindexIsProcessingIndex(indexOid));
 
 		/* Set index rebuild count */
-		pgstat_progress_update_param(PROGRESS_CLUSTER_INDEX_REBUILD_COUNT,
+		pgstat_progress_update_param(PROGRESS_REPACK_INDEX_REBUILD_COUNT,
 									 i);
 		i++;
 	}

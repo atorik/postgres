@@ -10,8 +10,8 @@
 #define CONFLICT_H
 
 #include "access/xlogdefs.h"
+#include "datatype/timestamp.h"
 #include "nodes/pg_list.h"
-#include "utils/timestamp.h"
 
 /* Avoid including execnodes.h here */
 typedef struct EState EState;
@@ -74,14 +74,14 @@ typedef struct ConflictTupleInfo
 								 * occurred */
 	TransactionId xmin;			/* transaction ID of the modification causing
 								 * the conflict */
-	RepOriginId origin;			/* origin identifier of the modification */
+	ReplOriginId origin;		/* origin identifier of the modification */
 	TimestampTz ts;				/* timestamp of when the modification on the
 								 * conflicting local row occurred */
 } ConflictTupleInfo;
 
 extern bool GetTupleTransactionInfo(TupleTableSlot *localslot,
 									TransactionId *xmin,
-									RepOriginId *localorigin,
+									ReplOriginId *localorigin,
 									TimestampTz *localts);
 extern void ReportApplyConflict(EState *estate, ResultRelInfo *relinfo,
 								int elevel, ConflictType type,

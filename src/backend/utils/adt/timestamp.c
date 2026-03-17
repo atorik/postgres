@@ -40,15 +40,6 @@
 #include "utils/skipsupport.h"
 #include "utils/sortsupport.h"
 
-/*
- * gcc's -ffast-math switch breaks routines that expect exact results from
- * expressions like timeval / SECS_PER_HOUR, where timeval is double.
- */
-#ifdef __FAST_MATH__
-#error -ffast-math is known to break this code
-#endif
-
-#define SAMESIGN(a,b)	(((a) < 0) == ((b) < 0))
 
 /* Set at postmaster start */
 TimestampTz PgStartTime;
@@ -4744,14 +4735,14 @@ timestamp_trunc(PG_FUNCTION_ARGS)
 					tm->tm_year = ((tm->tm_year + 999) / 1000) * 1000 - 999;
 				else
 					tm->tm_year = -((999 - (tm->tm_year - 1)) / 1000) * 1000 + 1;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_CENTURY:
 				/* see comments in timestamptz_trunc */
 				if (tm->tm_year > 0)
 					tm->tm_year = ((tm->tm_year + 99) / 100) * 100 - 99;
 				else
 					tm->tm_year = -((99 - (tm->tm_year - 1)) / 100) * 100 + 1;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_DECADE:
 				/* see comments in timestamptz_trunc */
 				if (val != DTK_MILLENNIUM && val != DTK_CENTURY)
@@ -4761,25 +4752,25 @@ timestamp_trunc(PG_FUNCTION_ARGS)
 					else
 						tm->tm_year = -((8 - (tm->tm_year - 1)) / 10) * 10;
 				}
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_YEAR:
 				tm->tm_mon = 1;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_QUARTER:
 				tm->tm_mon = (3 * ((tm->tm_mon - 1) / 3)) + 1;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_MONTH:
 				tm->tm_mday = 1;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_DAY:
 				tm->tm_hour = 0;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_HOUR:
 				tm->tm_min = 0;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_MINUTE:
 				tm->tm_sec = 0;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_SECOND:
 				fsec = 0;
 				break;
@@ -4990,14 +4981,14 @@ timestamptz_trunc_internal(text *units, TimestampTz timestamp, pg_tz *tzp)
 					tm->tm_year = ((tm->tm_year + 999) / 1000) * 1000 - 999;
 				else
 					tm->tm_year = -((999 - (tm->tm_year - 1)) / 1000) * 1000 + 1;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_CENTURY:
 				/* truncating to the century? as above: -100, 1, 101... */
 				if (tm->tm_year > 0)
 					tm->tm_year = ((tm->tm_year + 99) / 100) * 100 - 99;
 				else
 					tm->tm_year = -((99 - (tm->tm_year - 1)) / 100) * 100 + 1;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_DECADE:
 
 				/*
@@ -5011,26 +5002,26 @@ timestamptz_trunc_internal(text *units, TimestampTz timestamp, pg_tz *tzp)
 					else
 						tm->tm_year = -((8 - (tm->tm_year - 1)) / 10) * 10;
 				}
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_YEAR:
 				tm->tm_mon = 1;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_QUARTER:
 				tm->tm_mon = (3 * ((tm->tm_mon - 1) / 3)) + 1;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_MONTH:
 				tm->tm_mday = 1;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_DAY:
 				tm->tm_hour = 0;
 				redotz = true;	/* for all cases >= DAY */
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_HOUR:
 				tm->tm_min = 0;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_MINUTE:
 				tm->tm_sec = 0;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_SECOND:
 				fsec = 0;
 				break;
@@ -5171,33 +5162,33 @@ interval_trunc(PG_FUNCTION_ARGS)
 			case DTK_MILLENNIUM:
 				/* caution: C division may have negative remainder */
 				tm->tm_year = (tm->tm_year / 1000) * 1000;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_CENTURY:
 				/* caution: C division may have negative remainder */
 				tm->tm_year = (tm->tm_year / 100) * 100;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_DECADE:
 				/* caution: C division may have negative remainder */
 				tm->tm_year = (tm->tm_year / 10) * 10;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_YEAR:
 				tm->tm_mon = 0;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_QUARTER:
 				tm->tm_mon = 3 * (tm->tm_mon / 3);
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_MONTH:
 				tm->tm_mday = 0;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_DAY:
 				tm->tm_hour = 0;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_HOUR:
 				tm->tm_min = 0;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_MINUTE:
 				tm->tm_sec = 0;
-				/* FALL THRU */
+				pg_fallthrough;
 			case DTK_SECOND:
 				tm->tm_usec = 0;
 				break;

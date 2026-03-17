@@ -84,6 +84,7 @@ brtuple_disk_tupdesc(BrinDesc *brdesc)
 
 		MemoryContextSwitchTo(oldcxt);
 
+		TupleDescFinalize(tupdesc);
 		brdesc->bd_disktdesc = tupdesc;
 	}
 
@@ -206,7 +207,7 @@ brin_form_tuple(BrinDesc *brdesc, BlockNumber blkno, BrinMemTuple *tuple,
 			 */
 			if (VARATT_IS_EXTERNAL(DatumGetPointer(value)))
 			{
-				value = PointerGetDatum(detoast_external_attr((struct varlena *)
+				value = PointerGetDatum(detoast_external_attr((varlena *)
 															  DatumGetPointer(value)));
 				free_value = true;
 			}

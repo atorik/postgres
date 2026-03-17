@@ -166,6 +166,7 @@
 #include "access/parallel.h"
 #include "executor/executor.h"
 #include "executor/hashjoin.h"
+#include "executor/instrument.h"
 #include "executor/nodeHash.h"
 #include "executor/nodeHashjoin.h"
 #include "miscadmin.h"
@@ -416,7 +417,7 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				else
 					node->hj_JoinState = HJ_NEED_NEW_OUTER;
 
-				/* FALL THRU */
+				pg_fallthrough;
 
 			case HJ_NEED_NEW_OUTER:
 
@@ -505,7 +506,7 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				/* OK, let's scan the bucket for matches */
 				node->hj_JoinState = HJ_SCAN_BUCKET;
 
-				/* FALL THRU */
+				pg_fallthrough;
 
 			case HJ_SCAN_BUCKET:
 
@@ -1313,13 +1314,13 @@ ExecParallelHashJoinNewBatch(HashJoinState *hjstate)
 					if (BarrierArriveAndWait(batch_barrier,
 											 WAIT_EVENT_HASH_BATCH_ELECT))
 						ExecParallelHashTableAlloc(hashtable, batchno);
-					/* Fall through. */
+					pg_fallthrough;
 
 				case PHJ_BATCH_ALLOCATE:
 					/* Wait for allocation to complete. */
 					BarrierArriveAndWait(batch_barrier,
 										 WAIT_EVENT_HASH_BATCH_ALLOCATE);
-					/* Fall through. */
+					pg_fallthrough;
 
 				case PHJ_BATCH_LOAD:
 					/* Start (or join in) loading tuples. */
@@ -1339,7 +1340,7 @@ ExecParallelHashJoinNewBatch(HashJoinState *hjstate)
 					sts_end_parallel_scan(inner_tuples);
 					BarrierArriveAndWait(batch_barrier,
 										 WAIT_EVENT_HASH_BATCH_LOAD);
-					/* Fall through. */
+					pg_fallthrough;
 
 				case PHJ_BATCH_PROBE:
 

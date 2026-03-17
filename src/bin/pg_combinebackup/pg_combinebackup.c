@@ -455,7 +455,7 @@ main(int argc, char *argv[])
 static void
 add_tablespace_mapping(cb_options *opt, char *arg)
 {
-	cb_tablespace_mapping *tsmap = pg_malloc0(sizeof(cb_tablespace_mapping));
+	cb_tablespace_mapping *tsmap = pg_malloc0_object(cb_tablespace_mapping);
 	char	   *dst;
 	char	   *dst_ptr;
 	char	   *arg_ptr;
@@ -501,7 +501,7 @@ add_tablespace_mapping(cb_options *opt, char *arg)
 				 tsmap->old_dir);
 
 	if (!is_absolute_path(tsmap->new_dir))
-		pg_fatal("old directory is not an absolute path in tablespace mapping: %s",
+		pg_fatal("new directory is not an absolute path in tablespace mapping: %s",
 				 tsmap->new_dir);
 
 	/* Canonicalize paths to avoid spurious failures when comparing. */
@@ -1171,7 +1171,7 @@ process_directory_recursively(Oid tsoid,
 static void
 remember_to_cleanup_directory(char *target_path, bool rmtopdir)
 {
-	cb_cleanup_dir *dir = pg_malloc(sizeof(cb_cleanup_dir));
+	cb_cleanup_dir *dir = pg_malloc_object(cb_cleanup_dir);
 
 	dir->target_path = target_path;
 	dir->rmtopdir = rmtopdir;
@@ -1259,7 +1259,7 @@ scan_for_existing_tablespaces(char *pathname, cb_options *opt)
 		}
 
 		/* Create a new tablespace object. */
-		ts = pg_malloc0(sizeof(cb_tablespace));
+		ts = pg_malloc0_object(cb_tablespace);
 		ts->oid = oid;
 
 		/*

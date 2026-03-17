@@ -250,6 +250,7 @@
 #include "access/commit_ts.h"
 #include "access/table.h"
 #include "access/tableam.h"
+#include "access/tupconvert.h"
 #include "access/twophase.h"
 #include "access/xact.h"
 #include "catalog/indexing.h"
@@ -266,6 +267,7 @@
 #include "optimizer/optimizer.h"
 #include "parser/parse_relation.h"
 #include "pgstat.h"
+#include "port/pg_bitutils.h"
 #include "postmaster/bgworker.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/walwriter.h"
@@ -281,6 +283,7 @@
 #include "rewrite/rewriteHandler.h"
 #include "storage/buffile.h"
 #include "storage/ipc.h"
+#include "storage/latch.h"
 #include "storage/lmgr.h"
 #include "storage/procarray.h"
 #include "tcop/tcopprot.h"
@@ -295,6 +298,7 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/usercontext.h"
+#include "utils/wait_event.h"
 
 #define NAPTIME_PER_CYCLE 1000	/* max sleep time between cycles (1s) */
 
@@ -608,7 +612,7 @@ static bool FindDeletedTupleInLocalRel(Relation localrel,
 									   Oid localidxoid,
 									   TupleTableSlot *remoteslot,
 									   TransactionId *delete_xid,
-									   RepOriginId *delete_origin,
+									   ReplOriginId *delete_origin,
 									   TimestampTz *delete_time);
 static void apply_handle_tuple_routing(ApplyExecutionData *edata,
 									   TupleTableSlot *remoteslot,
@@ -627,7 +631,9 @@ static inline void reset_apply_error_context_info(void);
 static TransApplyAction get_transaction_apply_action(TransactionId xid,
 													 ParallelApplyWorkerInfo **winfo);
 
-static void replorigin_reset(int code, Datum arg);
+static void set_wal_receiver_timeout(void);
+
+static void on_exit_clear_xact_state(int code, Datum arg);
 
 /*
  * Form the origin name for the subscription.
@@ -839,7 +845,7 @@ handle_streamed_transaction(LogicalRepMsgType action, StringInfo s)
 			 */
 			pa_switch_to_partial_serialize(winfo, false);
 
-			/* fall through */
+			pg_fallthrough;
 		case TRANS_LEADER_PARTIAL_SERIALIZE:
 			stream_write_change(action, &original_msg);
 
@@ -974,8 +980,8 @@ slot_fill_defaults(LogicalRepRelMapEntry *rel, EState *estate,
 	if (num_phys_attrs == rel->remoterel.natts)
 		return;
 
-	defmap = (int *) palloc(num_phys_attrs * sizeof(int));
-	defexprs = (ExprState **) palloc(num_phys_attrs * sizeof(ExprState *));
+	defmap = palloc_array(int, num_phys_attrs);
+	defexprs = palloc_array(ExprState *, num_phys_attrs);
 
 	Assert(rel->attrmap->maplen == num_phys_attrs);
 	for (attnum = 0; attnum < num_phys_attrs; attnum++)
@@ -1318,8 +1324,8 @@ apply_handle_prepare_internal(LogicalRepPreparedTxnData *prepare_data)
 	 * Update origin state so we can restart streaming from correct position
 	 * in case of crash.
 	 */
-	replorigin_session_origin_lsn = prepare_data->end_lsn;
-	replorigin_session_origin_timestamp = prepare_data->prepare_time;
+	replorigin_xact_state.origin_lsn = prepare_data->end_lsn;
+	replorigin_xact_state.origin_timestamp = prepare_data->prepare_time;
 
 	PrepareTransactionBlock(gid);
 }
@@ -1421,8 +1427,8 @@ apply_handle_commit_prepared(StringInfo s)
 	 * Update origin state so we can restart streaming from correct position
 	 * in case of crash.
 	 */
-	replorigin_session_origin_lsn = prepare_data.end_lsn;
-	replorigin_session_origin_timestamp = prepare_data.commit_time;
+	replorigin_xact_state.origin_lsn = prepare_data.end_lsn;
+	replorigin_xact_state.origin_timestamp = prepare_data.commit_time;
 
 	FinishPreparedTransaction(gid, true);
 	end_replication_step();
@@ -1479,8 +1485,8 @@ apply_handle_rollback_prepared(StringInfo s)
 		 * Update origin state so we can restart streaming from correct
 		 * position in case of crash.
 		 */
-		replorigin_session_origin_lsn = rollback_data.rollback_end_lsn;
-		replorigin_session_origin_timestamp = rollback_data.rollback_time;
+		replorigin_xact_state.origin_lsn = rollback_data.rollback_end_lsn;
+		replorigin_xact_state.origin_timestamp = rollback_data.rollback_time;
 
 		/* There is no transaction when ABORT/ROLLBACK PREPARED is called */
 		begin_replication_step();
@@ -1586,7 +1592,7 @@ apply_handle_stream_prepare(StringInfo s)
 			 */
 			pa_switch_to_partial_serialize(winfo, true);
 
-			/* fall through */
+			pg_fallthrough;
 		case TRANS_LEADER_PARTIAL_SERIALIZE:
 			Assert(winfo);
 
@@ -1808,7 +1814,7 @@ apply_handle_stream_start(StringInfo s)
 			 */
 			pa_switch_to_partial_serialize(winfo, !first_segment);
 
-			/* fall through */
+			pg_fallthrough;
 		case TRANS_LEADER_PARTIAL_SERIALIZE:
 			Assert(winfo);
 
@@ -1923,7 +1929,7 @@ apply_handle_stream_stop(StringInfo s)
 			 */
 			pa_switch_to_partial_serialize(winfo, true);
 
-			/* fall through */
+			pg_fallthrough;
 		case TRANS_LEADER_PARTIAL_SERIALIZE:
 			stream_write_change(LOGICAL_REP_MSG_STREAM_STOP, s);
 			stream_stop_internal(stream_xid);
@@ -2169,7 +2175,7 @@ apply_handle_stream_abort(StringInfo s)
 			 */
 			pa_switch_to_partial_serialize(winfo, true);
 
-			/* fall through */
+			pg_fallthrough;
 		case TRANS_LEADER_PARTIAL_SERIALIZE:
 			Assert(winfo);
 
@@ -2442,7 +2448,7 @@ apply_handle_stream_commit(StringInfo s)
 			 */
 			pa_switch_to_partial_serialize(winfo, true);
 
-			/* fall through */
+			pg_fallthrough;
 		case TRANS_LEADER_PARTIAL_SERIALIZE:
 			Assert(winfo);
 
@@ -2526,8 +2532,8 @@ apply_handle_commit_internal(LogicalRepCommitData *commit_data)
 		 * Update origin state so we can restart streaming from correct
 		 * position in case of crash.
 		 */
-		replorigin_session_origin_lsn = commit_data->end_lsn;
-		replorigin_session_origin_timestamp = commit_data->committime;
+		replorigin_xact_state.origin_lsn = commit_data->end_lsn;
+		replorigin_xact_state.origin_timestamp = commit_data->committime;
 
 		CommitTransactionCommand();
 
@@ -2940,7 +2946,7 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 		 */
 		if (GetTupleTransactionInfo(localslot, &conflicttuple.xmin,
 									&conflicttuple.origin, &conflicttuple.ts) &&
-			conflicttuple.origin != replorigin_session_origin)
+			conflicttuple.origin != replorigin_xact_state.origin)
 		{
 			TupleTableSlot *newslot;
 
@@ -2982,7 +2988,7 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 									   &conflicttuple.xmin,
 									   &conflicttuple.origin,
 									   &conflicttuple.ts) &&
-			conflicttuple.origin != replorigin_session_origin)
+			conflicttuple.origin != replorigin_xact_state.origin)
 			type = CT_UPDATE_DELETED;
 		else
 			type = CT_UPDATE_MISSING;
@@ -3135,7 +3141,7 @@ apply_handle_delete_internal(ApplyExecutionData *edata,
 		 */
 		if (GetTupleTransactionInfo(localslot, &conflicttuple.xmin,
 									&conflicttuple.origin, &conflicttuple.ts) &&
-			conflicttuple.origin != replorigin_session_origin)
+			conflicttuple.origin != replorigin_xact_state.origin)
 		{
 			conflicttuple.slot = localslot;
 			ReportApplyConflict(estate, relinfo, LOG, CT_DELETE_ORIGIN_DIFFERS,
@@ -3268,7 +3274,7 @@ IsIndexUsableForFindingDeletedTuple(Oid localindexoid,
 static bool
 FindDeletedTupleInLocalRel(Relation localrel, Oid localidxoid,
 						   TupleTableSlot *remoteslot,
-						   TransactionId *delete_xid, RepOriginId *delete_origin,
+						   TransactionId *delete_xid, ReplOriginId *delete_origin,
 						   TimestampTz *delete_time)
 {
 	TransactionId oldestxmin;
@@ -3477,7 +3483,7 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 												   &conflicttuple.xmin,
 												   &conflicttuple.origin,
 												   &conflicttuple.ts) &&
-						conflicttuple.origin != replorigin_session_origin)
+						conflicttuple.origin != replorigin_xact_state.origin)
 						type = CT_UPDATE_DELETED;
 					else
 						type = CT_UPDATE_MISSING;
@@ -3503,7 +3509,7 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 				if (GetTupleTransactionInfo(localslot, &conflicttuple.xmin,
 											&conflicttuple.origin,
 											&conflicttuple.ts) &&
-					conflicttuple.origin != replorigin_session_origin)
+					conflicttuple.origin != replorigin_xact_state.origin)
 				{
 					TupleTableSlot *newslot;
 
@@ -5055,7 +5061,7 @@ maybe_reread_subscription(void)
 	/* Ensure allocations in permanent context. */
 	oldctx = MemoryContextSwitchTo(ApplyContext);
 
-	newsub = GetSubscription(MyLogicalRepWorker->subid, true);
+	newsub = GetSubscription(MyLogicalRepWorker->subid, true, true);
 
 	/*
 	 * Exit if the subscription was removed. This normally should not happen
@@ -5154,6 +5160,9 @@ maybe_reread_subscription(void)
 	SetConfigOption("synchronous_commit", MySubscription->synccommit,
 					PGC_BACKEND, PGC_S_OVERRIDE);
 
+	/* Change wal_receiver_timeout according to the user's wishes */
+	set_wal_receiver_timeout();
+
 	if (started_tx)
 		CommitTransactionCommand();
 
@@ -5161,10 +5170,45 @@ maybe_reread_subscription(void)
 }
 
 /*
- * Callback from subscription syscache invalidation.
+ * Change wal_receiver_timeout to MySubscription->walrcvtimeout.
  */
 static void
-subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
+set_wal_receiver_timeout(void)
+{
+	bool		parsed;
+	int			val;
+	int			prev_timeout = wal_receiver_timeout;
+
+	/*
+	 * Set the wal_receiver_timeout GUC to MySubscription->walrcvtimeout,
+	 * which comes from the subscription's wal_receiver_timeout option. If the
+	 * value is -1, reset the GUC to its default, meaning it will inherit from
+	 * the server config, command line, or role/database settings.
+	 */
+	parsed = parse_int(MySubscription->walrcvtimeout, &val, 0, NULL);
+	if (parsed && val == -1)
+		SetConfigOption("wal_receiver_timeout", NULL,
+						PGC_BACKEND, PGC_S_SESSION);
+	else
+		SetConfigOption("wal_receiver_timeout", MySubscription->walrcvtimeout,
+						PGC_BACKEND, PGC_S_SESSION);
+
+	/*
+	 * Log the wal_receiver_timeout setting (in milliseconds) as a debug
+	 * message when it changes, to verify it was set correctly.
+	 */
+	if (prev_timeout != wal_receiver_timeout)
+		elog(DEBUG1, "logical replication worker for subscription \"%s\" wal_receiver_timeout: %d ms",
+			 MySubscription->name, wal_receiver_timeout);
+}
+
+/*
+ * Callback from subscription syscache invalidation. Also needed for server or
+ * user mapping invalidation, which can change the connection information for
+ * subscriptions that connect using a server object.
+ */
+static void
+subscription_change_cb(Datum arg, SysCacheIdentifier cacheid, uint32 hashvalue)
 {
 	MySubscriptionValid = false;
 }
@@ -5264,8 +5308,8 @@ subxact_info_read(Oid subid, TransactionId xid)
 	 * to the subxact file and reset the logical streaming context.
 	 */
 	oldctx = MemoryContextSwitchTo(LogicalStreamingContext);
-	subxact_data.subxacts = palloc(subxact_data.nsubxacts_max *
-								   sizeof(SubXactInfo));
+	subxact_data.subxacts = palloc_array(SubXactInfo,
+										 subxact_data.nsubxacts_max);
 	MemoryContextSwitchTo(oldctx);
 
 	if (len > 0)
@@ -5331,14 +5375,14 @@ subxact_info_add(TransactionId xid)
 		 * subxact_info_read.
 		 */
 		oldctx = MemoryContextSwitchTo(LogicalStreamingContext);
-		subxacts = palloc(subxact_data.nsubxacts_max * sizeof(SubXactInfo));
+		subxacts = palloc_array(SubXactInfo, subxact_data.nsubxacts_max);
 		MemoryContextSwitchTo(oldctx);
 	}
 	else if (subxact_data.nsubxacts == subxact_data.nsubxacts_max)
 	{
 		subxact_data.nsubxacts_max *= 2;
-		subxacts = repalloc(subxacts,
-							subxact_data.nsubxacts_max * sizeof(SubXactInfo));
+		subxacts = repalloc_array(subxacts, SubXactInfo,
+								  subxact_data.nsubxacts_max);
 	}
 
 	subxacts[subxact_data.nsubxacts].xid = xid;
@@ -5594,7 +5638,7 @@ start_apply(XLogRecPtr origin_startpos)
 		 * transaction loss as that transaction won't be sent again by the
 		 * server.
 		 */
-		replorigin_reset(0, (Datum) 0);
+		replorigin_xact_clear(true);
 
 		if (MySubscription->disableonerr)
 			DisableSubscriptionAndExit();
@@ -5606,8 +5650,7 @@ start_apply(XLogRecPtr origin_startpos)
 			 * idle state.
 			 */
 			AbortOutOfAnyTransaction();
-			pgstat_report_subscription_error(MySubscription->oid,
-											 MyLogicalRepWorker->type);
+			pgstat_report_subscription_error(MySubscription->oid);
 
 			PG_RE_THROW();
 		}
@@ -5627,7 +5670,7 @@ run_apply_worker(void)
 	XLogRecPtr	origin_startpos = InvalidXLogRecPtr;
 	char	   *slotname = NULL;
 	WalRcvStreamOptions options;
-	RepOriginId originid;
+	ReplOriginId originid;
 	TimeLineID	startpointTLI;
 	char	   *err;
 	bool		must_use_password;
@@ -5652,7 +5695,7 @@ run_apply_worker(void)
 	if (!OidIsValid(originid))
 		originid = replorigin_create(originname);
 	replorigin_session_setup(originid, 0);
-	replorigin_session_origin = originid;
+	replorigin_xact_state.origin = originid;
 	origin_startpos = replorigin_session_get_progress(false);
 	CommitTransactionCommand();
 
@@ -5767,7 +5810,7 @@ InitializeLogRepWorker(void)
 	 */
 	LockSharedObject(SubscriptionRelationId, MyLogicalRepWorker->subid, 0,
 					 AccessShareLock);
-	MySubscription = GetSubscription(MyLogicalRepWorker->subid, true);
+	MySubscription = GetSubscription(MyLogicalRepWorker->subid, true, true);
 	if (!MySubscription)
 	{
 		ereport(LOG,
@@ -5822,11 +5865,30 @@ InitializeLogRepWorker(void)
 	SetConfigOption("synchronous_commit", MySubscription->synccommit,
 					PGC_BACKEND, PGC_S_OVERRIDE);
 
+	/* Change wal_receiver_timeout according to the user's wishes */
+	set_wal_receiver_timeout();
+
 	/*
 	 * Keep us informed about subscription or role changes. Note that the
 	 * role's superuser privilege can be revoked.
 	 */
 	CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
+								  subscription_change_cb,
+								  (Datum) 0);
+	/* Changes to foreign servers may affect subscriptions using SERVER. */
+	CacheRegisterSyscacheCallback(FOREIGNSERVEROID,
+								  subscription_change_cb,
+								  (Datum) 0);
+	/* Changes to user mappings may affect subscriptions using SERVER. */
+	CacheRegisterSyscacheCallback(USERMAPPINGOID,
+								  subscription_change_cb,
+								  (Datum) 0);
+
+	/*
+	 * Changes to FDW connection_function may affect subscriptions using
+	 * SERVER.
+	 */
+	CacheRegisterSyscacheCallback(FOREIGNDATAWRAPPEROID,
 								  subscription_change_cb,
 								  (Datum) 0);
 
@@ -5865,18 +5927,16 @@ InitializeLogRepWorker(void)
 	 * replication workers that set up origins and apply remote transactions
 	 * are protected.
 	 */
-	before_shmem_exit(replorigin_reset, (Datum) 0);
+	before_shmem_exit(on_exit_clear_xact_state, (Datum) 0);
 }
 
 /*
- * Reset the origin state.
+ * Callback on exit to clear transaction-level replication origin state.
  */
 static void
-replorigin_reset(int code, Datum arg)
+on_exit_clear_xact_state(int code, Datum arg)
 {
-	replorigin_session_origin = InvalidRepOriginId;
-	replorigin_session_origin_lsn = InvalidXLogRecPtr;
-	replorigin_session_origin_timestamp = 0;
+	replorigin_xact_clear(true);
 }
 
 /*
@@ -5892,7 +5952,6 @@ SetupApplyOrSyncWorker(int worker_slot)
 
 	/* Setup signal handling */
 	pqsignal(SIGHUP, SignalHandlerForConfigReload);
-	pqsignal(SIGTERM, die);
 	BackgroundWorkerUnblockSignals();
 
 	/*
@@ -5962,8 +6021,7 @@ DisableSubscriptionAndExit(void)
 	 * Report the worker failed during sequence synchronization, table
 	 * synchronization, or apply.
 	 */
-	pgstat_report_subscription_error(MyLogicalRepWorker->subid,
-									 MyLogicalRepWorker->type);
+	pgstat_report_subscription_error(MyLogicalRepWorker->subid);
 
 	/* Disable the subscription */
 	StartTransactionCommand();

@@ -17,6 +17,7 @@
 #include <ctype.h>
 
 #include "access/htup_details.h"
+#include "bootstrap/bootstrap.h"
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_auth_members.h"
@@ -39,6 +40,7 @@
 #include "lib/bloomfilter.h"
 #include "lib/qunique.h"
 #include "miscadmin.h"
+#include "port/pg_bitutils.h"
 #include "storage/large_object.h"
 #include "utils/acl.h"
 #include "utils/array.h"
@@ -130,7 +132,8 @@ static AclMode convert_largeobject_priv_string(text *priv_type_text);
 static AclMode convert_role_priv_string(text *priv_type_text);
 static AclResult pg_role_aclcheck(Oid role_oid, Oid roleid, AclMode mode);
 
-static void RoleMembershipCacheCallback(Datum arg, int cacheid, uint32 hashvalue);
+static void RoleMembershipCacheCallback(Datum arg, SysCacheIdentifier cacheid,
+										uint32 hashvalue);
 
 
 /*
@@ -260,6 +263,9 @@ putid(char *p, const char *s)
  *		This routine is called by the parser as well as aclitemin(), hence
  *		the added generality.
  *
+ *		In bootstrap mode, we consult a hard-wired list of role names
+ *		(see bootstrap.c) rather than trying to access the catalogs.
+ *
  * RETURNS:
  *		the string position in 's' immediately following the ACL
  *		specification.  Also:
@@ -375,7 +381,10 @@ aclparse(const char *s, AclItem *aip, Node *escontext)
 		aip->ai_grantee = ACL_ID_PUBLIC;
 	else
 	{
-		aip->ai_grantee = get_role_oid(name, true);
+		if (IsBootstrapProcessingMode())
+			aip->ai_grantee = boot_get_role_oid(name);
+		else
+			aip->ai_grantee = get_role_oid(name, true);
 		if (!OidIsValid(aip->ai_grantee))
 			ereturn(escontext, NULL,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -384,7 +393,8 @@ aclparse(const char *s, AclItem *aip, Node *escontext)
 
 	/*
 	 * XXX Allow a degree of backward compatibility by defaulting the grantor
-	 * to the superuser.
+	 * to the superuser.  We condone that practice in the catalog .dat files
+	 * (i.e., in bootstrap mode) for brevity; otherwise, issue a warning.
 	 */
 	if (*s == '/')
 	{
@@ -395,7 +405,10 @@ aclparse(const char *s, AclItem *aip, Node *escontext)
 			ereturn(escontext, NULL,
 					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 					 errmsg("a name must follow the \"/\" sign")));
-		aip->ai_grantor = get_role_oid(name2, true);
+		if (IsBootstrapProcessingMode())
+			aip->ai_grantor = boot_get_role_oid(name2);
+		else
+			aip->ai_grantor = get_role_oid(name2, true);
 		if (!OidIsValid(aip->ai_grantor))
 			ereturn(escontext, NULL,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -404,10 +417,11 @@ aclparse(const char *s, AclItem *aip, Node *escontext)
 	else
 	{
 		aip->ai_grantor = BOOTSTRAP_SUPERUSERID;
-		ereport(WARNING,
-				(errcode(ERRCODE_INVALID_GRANTOR),
-				 errmsg("defaulting grantor to user ID %u",
-						BOOTSTRAP_SUPERUSERID)));
+		if (!IsBootstrapProcessingMode())
+			ereport(WARNING,
+					(errcode(ERRCODE_INVALID_GRANTOR),
+					 errmsg("defaulting grantor to user ID %u",
+							BOOTSTRAP_SUPERUSERID)));
 	}
 
 	ACLITEM_SET_PRIVS_GOPTIONS(*aip, privs, goption);
@@ -639,6 +653,10 @@ aclitemin(PG_FUNCTION_ARGS)
  *		Allocates storage for, and fills in, a new null-delimited string
  *		containing a formatted ACL specification.  See aclparse for details.
  *
+ *		In bootstrap mode, this is called for debug printouts (initdb -d).
+ *		We could ask bootstrap.c to provide an inverse of boot_get_role_oid(),
+ *		but it seems at least as useful to just print numeric role OIDs.
+ *
  * RETURNS:
  *		the new string
  */
@@ -661,7 +679,10 @@ aclitemout(PG_FUNCTION_ARGS)
 
 	if (aip->ai_grantee != ACL_ID_PUBLIC)
 	{
-		htup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(aip->ai_grantee));
+		if (!IsBootstrapProcessingMode())
+			htup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(aip->ai_grantee));
+		else
+			htup = NULL;
 		if (HeapTupleIsValid(htup))
 		{
 			putid(p, NameStr(((Form_pg_authid) GETSTRUCT(htup))->rolname));
@@ -669,7 +690,7 @@ aclitemout(PG_FUNCTION_ARGS)
 		}
 		else
 		{
-			/* Generate numeric OID if we don't find an entry */
+			/* No such entry, or bootstrap mode: print numeric OID */
 			sprintf(p, "%u", aip->ai_grantee);
 		}
 	}
@@ -689,7 +710,10 @@ aclitemout(PG_FUNCTION_ARGS)
 	*p++ = '/';
 	*p = '\0';
 
-	htup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(aip->ai_grantor));
+	if (!IsBootstrapProcessingMode())
+		htup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(aip->ai_grantor));
+	else
+		htup = NULL;
 	if (HeapTupleIsValid(htup))
 	{
 		putid(p, NameStr(((Form_pg_authid) GETSTRUCT(htup))->rolname));
@@ -697,7 +721,7 @@ aclitemout(PG_FUNCTION_ARGS)
 	}
 	else
 	{
-		/* Generate numeric OID if we don't find an entry */
+		/* No such entry, or bootstrap mode: print numeric OID */
 		sprintf(p, "%u", aip->ai_grantor);
 	}
 
@@ -866,6 +890,10 @@ acldefault(ObjectType objtype, Oid ownerId)
 		case OBJECT_PARAMETER_ACL:
 			world_default = ACL_NO_RIGHTS;
 			owner_default = ACL_ALL_RIGHTS_PARAMETER_ACL;
+			break;
+		case OBJECT_PROPGRAPH:
+			world_default = ACL_NO_RIGHTS;
+			owner_default = ACL_ALL_RIGHTS_PROPGRAPH;
 			break;
 		default:
 			elog(ERROR, "unrecognized object type: %d", (int) objtype);
@@ -1818,6 +1846,7 @@ aclexplode(PG_FUNCTION_ARGS)
 		TupleDescInitEntry(tupdesc, (AttrNumber) 4, "is_grantable",
 						   BOOLOID, -1, 0);
 
+		TupleDescFinalize(tupdesc);
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 
 		/* allocate memory for user context */
@@ -5067,7 +5096,8 @@ initialize_acl(void)
  *		Syscache inval callback function
  */
 static void
-RoleMembershipCacheCallback(Datum arg, int cacheid, uint32 hashvalue)
+RoleMembershipCacheCallback(Datum arg, SysCacheIdentifier cacheid,
+							uint32 hashvalue)
 {
 	if (cacheid == DATABASEOID &&
 		hashvalue != cached_db_hash &&

@@ -53,6 +53,7 @@
 #include "utils/ps_status.h"
 #include "utils/resowner.h"
 #include "utils/timeout.h"
+#include "utils/wait_event.h"
 
 
 /* ----------
@@ -222,7 +223,6 @@ PgArchiverMain(const void *startup_data, size_t startup_data_len)
 {
 	Assert(startup_data_len == 0);
 
-	MyBackendType = B_ARCHIVER;
 	AuxiliaryProcessMainCommon();
 
 	/*

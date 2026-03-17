@@ -84,6 +84,14 @@
 #include <libintl.h>
 #endif
 
+#ifdef __cplusplus
+extern "C++"
+{
+/* This header is used in the definition of various C++ things below. */
+#include <type_traits>
+}
+#endif
+
  /* Pull in fundamental symbols that we also expose to applications */
 #include "postgres_ext.h"
 
@@ -130,6 +138,18 @@
 #define pg_attribute_unused() __attribute__((unused))
 #else
 #define pg_attribute_unused()
+#endif
+
+/*
+ * pg_fallthrough indicates that the fall through from the previous case is
+ * intentional.
+ */
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L) || (defined(__cplusplus) && __cplusplus >= 201703L)
+#define pg_fallthrough [[fallthrough]]
+#elif __has_attribute(fallthrough)
+#define pg_fallthrough __attribute__((fallthrough))
+#else
+#define pg_fallthrough
 #endif
 
 /*
@@ -413,6 +433,55 @@
 #endif
 
 /*
+ * When we call clang to generate bitcode, we might be using configure results
+ * from a different compiler, which might not be fully compatible with the
+ * clang we are using.  The fully correct solution would be to run a separate
+ * set of configure tests for that clang-for-bitcode, but that could be very
+ * difficult to implement, and in practice clang supports most things other
+ * compilers support.  So this section just contains some hardcoded ugliness
+ * to override some configure results where it is necessary.
+ */
+#if defined(__clang__)
+#if __clang_major__ < 19
+#undef HAVE_TYPEOF_UNQUAL
+#endif
+#endif							/* __clang__ */
+
+/*
+ * Provide typeof in C++ for C++ compilers that don't support typeof natively.
+ * It might be spelled __typeof__ instead of typeof, in which case
+ * pg_cxx_typeof provides that mapping. If neither is supported, we can use
+ * decltype, but to make it equivalent to C's typeof, we need to remove
+ * references from the result [1]. Also ensure HAVE_TYPEOF is set so that
+ * typeof-dependent code is always enabled in C++ mode.
+ *
+ * [1]: https://www.open-std.org/jtc1/sc22/wg14/www/docs/n2927.htm#existing-decltype
+ */
+#if defined(__cplusplus)
+#undef typeof
+#ifdef pg_cxx_typeof
+#define typeof(x) pg_cxx_typeof(x)
+#elif !defined(HAVE_CXX_TYPEOF)
+#define typeof(x) std::remove_reference<decltype(x)>::type
+#endif
+#ifndef HAVE_TYPEOF
+#define HAVE_TYPEOF 1
+#endif
+/*
+ * and analogously for typeof_unqual
+ */
+#undef typeof_unqual
+#ifdef pg_cxx_typeof_unqual
+#define typeof_unqual(x) pg_cxx_typeof_unqual(x)
+#elif !defined(HAVE_CXX_TYPEOF_UNQUAL)
+#define typeof_unqual(x) std::remove_cv<std::remove_reference<decltype(x)>::type>::type
+#endif
+#ifndef HAVE_TYPEOF_UNQUAL
+#define HAVE_TYPEOF_UNQUAL 1
+#endif
+#endif							/* __cplusplus */
+
+/*
  * CppAsString
  *		Convert the argument to a string, using the C preprocessor.
  * CppAsString2
@@ -689,7 +758,7 @@ typedef uint64 Oid8;
 #define OID8_MAX	UINT64_MAX
 
 /* ----------------
- *		Variable-length datatypes all share the 'struct varlena' header.
+ *		Variable-length datatypes all share the 'varlena' header.
  *
  * NOTE: for TOASTable types, this is an oversimplification, since the value
  * may be compressed or moved out-of-line.  However datatype-specific routines
@@ -702,11 +771,11 @@ typedef uint64 Oid8;
  * See varatt.h for details of the TOASTed form.
  * ----------------
  */
-struct varlena
+typedef struct varlena
 {
 	char		vl_len_[4];		/* Do not touch this field directly! */
 	char		vl_dat[FLEXIBLE_ARRAY_MEMBER];	/* Data content is here */
-};
+} varlena;
 
 #define VARHDRSZ		((int32) sizeof(int32))
 
@@ -715,10 +784,10 @@ struct varlena
  * There is no terminating null or anything like that --- the data length is
  * always VARSIZE_ANY_EXHDR(ptr).
  */
-typedef struct varlena bytea;
-typedef struct varlena text;
-typedef struct varlena BpChar;	/* blank-padded char, ie SQL char(n) */
-typedef struct varlena VarChar; /* var-length char, ie SQL varchar(n) */
+typedef varlena bytea;
+typedef varlena text;
+typedef varlena BpChar;			/* blank-padded char, ie SQL char(n) */
+typedef varlena VarChar;		/* var-length char, ie SQL varchar(n) */
 
 /*
  * Specialized array types.  These are physically laid out just the same
@@ -821,7 +890,7 @@ typedef NameData *Name;
 
 #define SHORTALIGN(LEN)			TYPEALIGN(ALIGNOF_SHORT, (LEN))
 #define INTALIGN(LEN)			TYPEALIGN(ALIGNOF_INT, (LEN))
-#define LONGALIGN(LEN)			TYPEALIGN(ALIGNOF_LONG, (LEN))
+#define INT64ALIGN(LEN)			TYPEALIGN(ALIGNOF_INT64_T, (LEN))
 #define DOUBLEALIGN(LEN)		TYPEALIGN(ALIGNOF_DOUBLE, (LEN))
 #define MAXALIGN(LEN)			TYPEALIGN(MAXIMUM_ALIGNOF, (LEN))
 /* MAXALIGN covers only built-in types, not buffers */
@@ -833,7 +902,7 @@ typedef NameData *Name;
 
 #define SHORTALIGN_DOWN(LEN)	TYPEALIGN_DOWN(ALIGNOF_SHORT, (LEN))
 #define INTALIGN_DOWN(LEN)		TYPEALIGN_DOWN(ALIGNOF_INT, (LEN))
-#define LONGALIGN_DOWN(LEN)		TYPEALIGN_DOWN(ALIGNOF_LONG, (LEN))
+#define INT64ALIGN_DOWN(LEN)	TYPEALIGN_DOWN(ALIGNOF_INT64_T, (LEN))
 #define DOUBLEALIGN_DOWN(LEN)	TYPEALIGN_DOWN(ALIGNOF_DOUBLE, (LEN))
 #define MAXALIGN_DOWN(LEN)		TYPEALIGN_DOWN(MAXIMUM_ALIGNOF, (LEN))
 #define BUFFERALIGN_DOWN(LEN)	TYPEALIGN_DOWN(ALIGNOF_BUFFER, (LEN))
@@ -924,57 +993,81 @@ pg_noreturn extern void ExceptionalCondition(const char *conditionName,
  *
  * If the "condition" (a compile-time-constant expression) evaluates to false,
  * throw a compile error using the "errmessage" (a string literal).
- *
+ */
+
+/*
  * We require C11 and C++11, so static_assert() is expected to be there.
  * StaticAssertDecl() was previously used for portability, but it's now just a
  * plain wrapper and doesn't need to be used in new code.  static_assert() is
  * a "declaration", and so it must be placed where for example a variable
  * declaration would be valid.  As long as we compile with
  * -Wno-declaration-after-statement, that also means it cannot be placed after
- * statements in a function.  Macros StaticAssertStmt() and StaticAssertExpr()
- * make it safe to use as a statement or in an expression, respectively.
- *
- * For compilers without GCC statement expressions, we fall back on a kluge
- * that assumes the compiler will complain about a negative width for a struct
- * bit-field.  This will not include a helpful error message, but it beats not
- * getting an error at all.
+ * statements in a function.
  */
 #define StaticAssertDecl(condition, errmessage) \
 	static_assert(condition, errmessage)
+
+/*
+ * StaticAssertStmt() was previously used to make static assertions work as a
+ * statement, but its use is now deprecated.
+ */
 #define StaticAssertStmt(condition, errmessage) \
 	do { static_assert(condition, errmessage); } while(0)
-#ifdef HAVE_STATEMENT_EXPRESSIONS
+
+/*
+ * StaticAssertExpr() is for use in an expression.
+ *
+ * See <https://www.open-std.org/jtc1/sc22/wg14/www/docs/n3715.pdf> for some
+ * rationale for the precise behavior of this implementation.  See
+ * <https://stackoverflow.com/questions/31311748> about the C++
+ * implementation.
+ *
+ * For compilers that don't support this, we fall back on a kluge that assumes
+ * the compiler will complain about a negative width for a struct bit-field.
+ * This will not include a helpful error message, but it beats not getting an
+ * error at all.
+ */
+#ifndef __cplusplus
+#if !defined(_MSC_VER) || _MSC_VER >= 1933
 #define StaticAssertExpr(condition, errmessage) \
-	((void) ({ static_assert(condition, errmessage); true; }))
-#else
+	((void) sizeof(struct {static_assert(condition, errmessage); char a;}))
+#else							/* _MSC_VER < 1933 */
+/*
+ * This compiler is buggy and fails to compile the previous variant; use a
+ * fallback implementation.
+ */
 #define StaticAssertExpr(condition, errmessage) \
 	((void) sizeof(struct { int static_assert_failure : (condition) ? 1 : -1; }))
-#endif							/* HAVE_STATEMENT_EXPRESSIONS */
+#endif							/* _MSC_VER < 1933 */
+#else							/* __cplusplus */
+#define StaticAssertExpr(condition, errmessage) \
+	([]{static_assert(condition, errmessage);})
+#endif
 
 
 /*
  * Compile-time checks that a variable (or expression) has the specified type.
  *
- * AssertVariableIsOfType() can be used as a statement.
- * AssertVariableIsOfTypeMacro() is intended for use in macros, eg
- *		#define foo(x) (AssertVariableIsOfTypeMacro(x, int), bar(x))
+ * StaticAssertVariableIsOfType() can be used as a declaration.
+ * StaticAssertVariableIsOfTypeMacro() is intended for use in macros, eg
+ *		#define foo(x) (StaticAssertVariableIsOfTypeMacro(x, int), bar(x))
  *
  * If we don't have __builtin_types_compatible_p, we can still assert that
  * the types have the same size.  This is far from ideal (especially on 32-bit
  * platforms) but it provides at least some coverage.
  */
 #ifdef HAVE__BUILTIN_TYPES_COMPATIBLE_P
-#define AssertVariableIsOfType(varname, typename) \
-	StaticAssertStmt(__builtin_types_compatible_p(__typeof__(varname), typename), \
+#define StaticAssertVariableIsOfType(varname, typename) \
+	StaticAssertDecl(__builtin_types_compatible_p(typeof(varname), typename), \
 	CppAsString(varname) " does not have type " CppAsString(typename))
-#define AssertVariableIsOfTypeMacro(varname, typename) \
-	(StaticAssertExpr(__builtin_types_compatible_p(__typeof__(varname), typename), \
+#define StaticAssertVariableIsOfTypeMacro(varname, typename) \
+	(StaticAssertExpr(__builtin_types_compatible_p(typeof(varname), typename), \
 	 CppAsString(varname) " does not have type " CppAsString(typename)))
 #else							/* !HAVE__BUILTIN_TYPES_COMPATIBLE_P */
-#define AssertVariableIsOfType(varname, typename) \
-	StaticAssertStmt(sizeof(varname) == sizeof(typename), \
+#define StaticAssertVariableIsOfType(varname, typename) \
+	StaticAssertDecl(sizeof(varname) == sizeof(typename), \
 	CppAsString(varname) " does not have type " CppAsString(typename))
-#define AssertVariableIsOfTypeMacro(varname, typename) \
+#define StaticAssertVariableIsOfTypeMacro(varname, typename) \
 	(StaticAssertExpr(sizeof(varname) == sizeof(typename), \
 	 CppAsString(varname) " does not have type " CppAsString(typename)))
 #endif							/* HAVE__BUILTIN_TYPES_COMPATIBLE_P */
@@ -1140,6 +1233,12 @@ typedef struct PGAlignedXLogBlock
 	alignas(PG_IO_ALIGN_SIZE) char data[XLOG_BLCKSZ];
 } PGAlignedXLogBlock;
 
+#else							/* (g++ < 9) */
+
+/* Allow these types to be used as abstract types when using old g++ */
+typedef struct PGIOAlignedBlock PGIOAlignedBlock;
+typedef struct PGAlignedXLogBlock PGAlignedXLogBlock;
+
 #endif							/* !(g++ < 9) */
 
 /* msb for char */
@@ -1224,20 +1323,13 @@ typedef struct PGAlignedXLogBlock
 #if defined(__cplusplus)
 #define unconstify(underlying_type, expr) const_cast<underlying_type>(expr)
 #define unvolatize(underlying_type, expr) const_cast<underlying_type>(expr)
-#elif defined(HAVE__BUILTIN_TYPES_COMPATIBLE_P)
-#define unconstify(underlying_type, expr) \
-	(StaticAssertExpr(__builtin_types_compatible_p(__typeof(expr), const underlying_type), \
-					  "wrong cast"), \
-	 (underlying_type) (expr))
-#define unvolatize(underlying_type, expr) \
-	(StaticAssertExpr(__builtin_types_compatible_p(__typeof(expr), volatile underlying_type), \
-					  "wrong cast"), \
-	 (underlying_type) (expr))
 #else
 #define unconstify(underlying_type, expr) \
-	((underlying_type) (expr))
+	(StaticAssertVariableIsOfTypeMacro(expr, const underlying_type), \
+	 (underlying_type) (expr))
 #define unvolatize(underlying_type, expr) \
-	((underlying_type) (expr))
+	(StaticAssertVariableIsOfTypeMacro(expr, volatile underlying_type), \
+	 (underlying_type) (expr))
 #endif
 
 /*
