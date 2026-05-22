@@ -231,8 +231,18 @@ XLogRecordPageWithFreeSpace(RelFileLocator rlocator, BlockNumber heapBlk,
 	if (PageIsNew(page))
 		PageInit(page, BLCKSZ, 0);
 
+	/*
+	 * Changes to FSM are usually marked as changed using MarkBufferDirtyHint;
+	 * however, during recovery, it does nothing if checksums are enabled. It
+	 * is assumed that the page should not be dirtied during recovery while
+	 * modifying hints to prevent torn pages, since no new WAL data can be
+	 * generated at this point to store FPI. This is not relevant to the FSM
+	 * case, as its blocks are zeroed when a checksum mismatch occurs. So, we
+	 * need to use regular MarkBufferDirty here to mark the FSM block as
+	 * modified during recovery, otherwise changes to the FSM may be lost.
+	 */
 	if (fsm_set_avail(page, slot, new_cat))
-		MarkBufferDirtyHint(buf, false);
+		MarkBufferDirty(buf);
 	UnlockReleaseBuffer(buf);
 }
 
@@ -915,9 +925,8 @@ fsm_vacuum_page(Relation rel, FSMAddress addr,
 		((FSMPage) PageGetContents(page))->fp_next_slot = 0;
 		BufferFinishSetHintBits(buf, false, false);
 	}
-	LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 
-	ReleaseBuffer(buf);
+	UnlockReleaseBuffer(buf);
 
 	return max_avail;
 }

@@ -86,6 +86,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/guc_hooks.h"
 #include "utils/memutils.h"
+#include "utils/pg_locale.h"
 #include "utils/ps_status.h"
 #include "utils/varlena.h"
 
@@ -217,7 +218,7 @@ is_log_level_output(int elevel, int log_min_level)
 		if (log_min_level == LOG || log_min_level <= ERROR)
 			return true;
 	}
-	else if (elevel == WARNING_CLIENT_ONLY)
+	else if (elevel == WARNING_CLIENT_ONLY || elevel == FATAL_CLIENT_ONLY)
 	{
 		/* never sent to log, regardless of log_min_level */
 		return false;
@@ -573,7 +574,7 @@ errfinish(const char *filename, int lineno, const char *funcname)
 	/*
 	 * Perform error recovery action as specified by elevel.
 	 */
-	if (elevel == FATAL)
+	if (elevel == FATAL || elevel == FATAL_CLIENT_ONLY)
 	{
 		/*
 		 * For a FATAL error, we let proc_exit clean up and exit.
@@ -1090,7 +1091,7 @@ errcode_for_socket_access(void)
  * ereport will provide one for the output methods that need it.
  */
 int
-errmsg(const char *fmt,...)
+errmsg(const char *fmt, ...)
 {
 	ErrorData  *edata = &errordata[errordata_stack_depth];
 	MemoryContext oldcontext;
@@ -1345,7 +1346,7 @@ backtrace_cleanup(int code, Datum arg)
  * error recursion.
  */
 int
-errmsg_internal(const char *fmt,...)
+errmsg_internal(const char *fmt, ...)
 {
 	ErrorData  *edata = &errordata[errordata_stack_depth];
 	MemoryContext oldcontext;
@@ -1369,7 +1370,7 @@ errmsg_internal(const char *fmt,...)
  */
 int
 errmsg_plural(const char *fmt_singular, const char *fmt_plural,
-			  unsigned long n,...)
+			  unsigned long n, ...)
 {
 	ErrorData  *edata = &errordata[errordata_stack_depth];
 	MemoryContext oldcontext;
@@ -1391,7 +1392,7 @@ errmsg_plural(const char *fmt_singular, const char *fmt_plural,
  * errdetail --- add a detail error message text to the current error
  */
 int
-errdetail(const char *fmt,...)
+errdetail(const char *fmt, ...)
 {
 	ErrorData  *edata = &errordata[errordata_stack_depth];
 	MemoryContext oldcontext;
@@ -1418,7 +1419,7 @@ errdetail(const char *fmt,...)
  * (typically, that they don't seem to be useful to average users).
  */
 int
-errdetail_internal(const char *fmt,...)
+errdetail_internal(const char *fmt, ...)
 {
 	ErrorData  *edata = &errordata[errordata_stack_depth];
 	MemoryContext oldcontext;
@@ -1439,7 +1440,7 @@ errdetail_internal(const char *fmt,...)
  * errdetail_log --- add a detail_log error message text to the current error
  */
 int
-errdetail_log(const char *fmt,...)
+errdetail_log(const char *fmt, ...)
 {
 	ErrorData  *edata = &errordata[errordata_stack_depth];
 	MemoryContext oldcontext;
@@ -1461,7 +1462,7 @@ errdetail_log(const char *fmt,...)
  */
 int
 errdetail_log_plural(const char *fmt_singular, const char *fmt_plural,
-					 unsigned long n,...)
+					 unsigned long n, ...)
 {
 	ErrorData  *edata = &errordata[errordata_stack_depth];
 	MemoryContext oldcontext;
@@ -1484,7 +1485,7 @@ errdetail_log_plural(const char *fmt_singular, const char *fmt_plural,
  */
 int
 errdetail_plural(const char *fmt_singular, const char *fmt_plural,
-				 unsigned long n,...)
+				 unsigned long n, ...)
 {
 	ErrorData  *edata = &errordata[errordata_stack_depth];
 	MemoryContext oldcontext;
@@ -1505,7 +1506,7 @@ errdetail_plural(const char *fmt_singular, const char *fmt_plural,
  * errhint --- add a hint error message text to the current error
  */
 int
-errhint(const char *fmt,...)
+errhint(const char *fmt, ...)
 {
 	ErrorData  *edata = &errordata[errordata_stack_depth];
 	MemoryContext oldcontext;
@@ -1527,7 +1528,7 @@ errhint(const char *fmt,...)
  * Non-translated version of errhint(), see also errmsg_internal().
  */
 int
-errhint_internal(const char *fmt,...)
+errhint_internal(const char *fmt, ...)
 {
 	ErrorData  *edata = &errordata[errordata_stack_depth];
 	MemoryContext oldcontext;
@@ -1549,7 +1550,7 @@ errhint_internal(const char *fmt,...)
  */
 int
 errhint_plural(const char *fmt_singular, const char *fmt_plural,
-			   unsigned long n,...)
+			   unsigned long n, ...)
 {
 	ErrorData  *edata = &errordata[errordata_stack_depth];
 	MemoryContext oldcontext;
@@ -1574,7 +1575,7 @@ errhint_plural(const char *fmt_singular, const char *fmt_plural,
  * states.
  */
 int
-errcontext_msg(const char *fmt,...)
+errcontext_msg(const char *fmt, ...)
 {
 	ErrorData  *edata = &errordata[errordata_stack_depth];
 	MemoryContext oldcontext;
@@ -1846,7 +1847,7 @@ pre_format_elog_string(int errnumber, const char *domain)
 }
 
 char *
-format_elog_string(const char *fmt,...)
+format_elog_string(const char *fmt, ...)
 {
 	ErrorData	errdata;
 	ErrorData  *edata;
@@ -2352,7 +2353,7 @@ DebugFileOpen(void)
  * GUC check_hook for log_min_messages
  *
  * This value is parsed as a comma-separated list of zero or more TYPE:LEVEL
- * elements.  For each element, TYPE corresponds to a bk_category value (see
+ * elements.  For each element, TYPE corresponds to a bkcategory value (see
  * postmaster/proctypelist.h); LEVEL is one of server_message_level_options.
  *
  * In addition, there must be a single LEVEL element (with no TYPE part)
@@ -2627,7 +2628,7 @@ check_backtrace_functions(char **newval, void **extra, GucSource source)
 		return false;
 	}
 
-	if (*newval[0] == '\0')
+	if ((*newval)[0] == '\0')
 	{
 		*extra = NULL;
 		return true;
@@ -2965,6 +2966,7 @@ write_eventlog(int level, const char *line, int len)
 			break;
 		case ERROR:
 		case FATAL:
+		case FATAL_CLIENT_ONLY:
 		case PANIC:
 		default:
 			eventlevel = EVENTLOG_ERROR_TYPE;
@@ -3800,6 +3802,7 @@ send_message_to_server_log(ErrorData *edata)
 				syslog_level = LOG_WARNING;
 				break;
 			case FATAL:
+			case FATAL_CLIENT_ONLY:
 				syslog_level = LOG_ERR;
 				break;
 			case PANIC:
@@ -4182,6 +4185,7 @@ error_severity(int elevel)
 			prefix = gettext_noop("ERROR");
 			break;
 		case FATAL:
+		case FATAL_CLIENT_ONLY:
 			prefix = gettext_noop("FATAL");
 			break;
 		case PANIC:
@@ -4222,7 +4226,7 @@ append_with_tabs(StringInfo buf, const char *str)
  * safely (memory context, GUC load etc)
  */
 void
-write_stderr(const char *fmt,...)
+write_stderr(const char *fmt, ...)
 {
 	va_list		ap;
 

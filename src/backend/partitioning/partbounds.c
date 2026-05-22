@@ -3362,7 +3362,8 @@ check_default_partition_contents(Relation parent, Relation default_rel,
 		econtext = GetPerTupleExprContext(estate);
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
 		tupslot = table_slot_create(part_rel, &estate->es_tupleTable);
-		scan = table_beginscan(part_rel, snapshot, 0, NULL);
+		scan = table_beginscan(part_rel, snapshot, 0, NULL,
+							   SO_NONE);
 
 		/*
 		 * Switch to per-tuple memory context and reset it for each tuple
@@ -5029,18 +5030,18 @@ check_two_partitions_bounds_range(Relation parent,
 		if (is_merge)
 			ereport(ERROR,
 					errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-					errmsg("can not merge partition \"%s\" together with partition \"%s\"",
+					errmsg("cannot merge partition \"%s\" together with partition \"%s\"",
 						   second_name->relname, first_name->relname),
-					errdetail("lower bound of partition \"%s\" is not equal to the upper bound of partition \"%s\"",
+					errdetail("The lower bound of partition \"%s\" is not equal to the upper bound of partition \"%s\".",
 							  second_name->relname, first_name->relname),
 					errhint("ALTER TABLE ... MERGE PARTITIONS requires the partition bounds to be adjacent."),
 					parser_errposition(pstate, datum->location));
 		else
 			ereport(ERROR,
 					errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-					errmsg("can not split to partition \"%s\" together with partition \"%s\"",
+					errmsg("cannot split to partition \"%s\" together with partition \"%s\"",
 						   second_name->relname, first_name->relname),
-					errdetail("lower bound of partition \"%s\" is not equal to the upper bound of partition \"%s\"",
+					errdetail("The lower bound of partition \"%s\" is not equal to the upper bound of partition \"%s\".",
 							  second_name->relname, first_name->relname),
 					errhint("ALTER TABLE ... SPLIT PARTITION requires the partition bounds to be adjacent."),
 					parser_errposition(pstate, datum->location));
@@ -5061,7 +5062,7 @@ get_partition_bound_spec(Oid partOid)
 	PartitionBoundSpec *boundspec = NULL;
 
 	/* Try fetching the tuple from the catcache, for speed. */
-	tuple = SearchSysCache1(RELOID, partOid);
+	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(partOid));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for relation %u", partOid);
 
@@ -5404,7 +5405,7 @@ check_partition_bounds_for_split_range(Relation parent,
 							errmsg("lower bound of partition \"%s\" is not equal to lower bound of split partition \"%s\"",
 								   relname,
 								   get_rel_name(splitPartOid)),
-							errhint("%s require combined bounds of new partitions must exactly match the bound of the split partition",
+							errhint("%s requires the combined bounds of the new partitions to exactly match the bound of the split partition.",
 									"ALTER TABLE ... SPLIT PARTITION"),
 							parser_errposition(pstate, exprLocation((Node *) datum)));
 			}
@@ -5414,11 +5415,11 @@ check_partition_bounds_for_split_range(Relation parent,
 						errmsg("lower bound of partition \"%s\" is less than lower bound of split partition \"%s\"",
 							   relname,
 							   get_rel_name(splitPartOid)),
-						errhint("%s require combined bounds of new partitions must exactly match the bound of the split partition",
-								"ALTER TABLE ... SPLIT PARTITION"),
+						errhint("Explicit partition bounds must be contained within the bounds of the split partition when a DEFAULT partition is specified."),
 						parser_errposition(pstate, exprLocation((Node *) datum)));
 		}
-		else
+
+		if (last)
 		{
 			PartitionRangeBound *split_upper;
 
@@ -5446,7 +5447,7 @@ check_partition_bounds_for_split_range(Relation parent,
 							errmsg("upper bound of partition \"%s\" is not equal to upper bound of split partition \"%s\"",
 								   relname,
 								   get_rel_name(splitPartOid)),
-							errhint("%s require combined bounds of new partitions must exactly match the bound of the split partition",
+							errhint("%s requires the combined bounds of the new partitions to exactly match the bound of the split partition.",
 									"ALTER TABLE ... SPLIT PARTITION"),
 							parser_errposition(pstate, exprLocation((Node *) datum)));
 			}
@@ -5456,8 +5457,7 @@ check_partition_bounds_for_split_range(Relation parent,
 						errmsg("upper bound of partition \"%s\" is greater than upper bound of split partition \"%s\"",
 							   relname,
 							   get_rel_name(splitPartOid)),
-						errhint("%s require combined bounds of new partitions must exactly match the bound of the split partition",
-								"ALTER TABLE ... SPLIT PARTITION"),
+						errhint("Explicit partition bounds must be contained within the bounds of the split partition when a DEFAULT partition is specified."),
 						parser_errposition(pstate, exprLocation((Node *) datum)));
 		}
 	}
@@ -5524,7 +5524,7 @@ check_partition_bounds_for_split_list(Relation parent, char *relname,
 			else
 				ereport(ERROR,
 						errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-						errmsg("new partition \"%s\" cannot have this value because split partition \"%s\" does not have",
+						errmsg("new partition \"%s\" cannot have this value because split partition \"%s\" does not have it",
 							   relname,
 							   get_rel_name(splitPartOid)),
 						parser_errposition(pstate, overlap_location));
@@ -5541,7 +5541,7 @@ check_partition_bounds_for_split_list(Relation parent, char *relname,
 		else
 			ereport(ERROR,
 					errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-					errmsg("new partition \"%s\" cannot have NULL value because split partition \"%s\" does not have",
+					errmsg("new partition \"%s\" cannot have NULL value because split partition \"%s\" does not have it",
 						   relname,
 						   get_rel_name(splitPartOid)),
 					parser_errposition(pstate, overlap_location));
@@ -5649,10 +5649,10 @@ check_parent_values_in_new_partitions(Relation parent,
 	if (!found)
 		ereport(ERROR,
 				errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-				errmsg("new partitions combined partition bounds do not contain value (%s) but split partition \"%s\" does",
+				errmsg("new partitions' combined partition bounds do not contain value (%s) but split partition \"%s\" does",
 					   "NULL",
 					   get_rel_name(partOid)),
-				errhint("%s require combined bounds of new partitions must exactly match the bound of the split partition",
+				errhint("%s requires the combined bounds of the new partitions to exactly match the bound of the split partition.",
 						"ALTER TABLE ... SPLIT PARTITION"));
 
 	/*
@@ -5692,10 +5692,10 @@ check_parent_values_in_new_partitions(Relation parent,
 
 		ereport(ERROR,
 				errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-				errmsg("new partitions combined partition bounds do not contain value (%s) but split partition \"%s\" does",
+				errmsg("new partitions' combined partition bounds do not contain value (%s) but split partition \"%s\" does",
 					   deparse_expression((Node *) notFoundVal, NIL, false, false),
 					   get_rel_name(partOid)),
-				errhint("%s require combined bounds of new partitions must exactly match the bound of the split partition",
+				errhint("%s requires the combined bounds of the new partitions to exactly match the bound of the split partition.",
 						"ALTER TABLE ... SPLIT PARTITION"));
 	}
 }
@@ -5712,7 +5712,7 @@ check_parent_values_in_new_partitions(Relation parent,
  * 3. In case new partitions don't contain the DEFAULT partition and the
  *	  partitioned table does not have the DEFAULT partition, the following
  *	  should be true: the sum of the bounds of new partitions should be equal
- &	  to the bound of the split partition.
+ *	  to the bound of the split partition.
  *
  * parent:			partitioned table
  * splitPartOid:	split partition Oid

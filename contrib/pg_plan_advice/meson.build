@@ -44,7 +44,7 @@ contrib_targets += pg_plan_advice
 
 install_headers(
   'pg_plan_advice.h',
-  install_dir: dir_include_extension / 'pg_plan_advice',
+  install_dir: dir_include_server / 'contrib' / 'pg_plan_advice',
 )
 
 tests += {
@@ -53,6 +53,7 @@ tests += {
   'bd': meson.current_build_dir(),
   'regress': {
     'sql': [
+      'alternatives',
       'gather',
       'join_order',
       'join_strategy',

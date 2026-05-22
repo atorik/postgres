@@ -150,7 +150,7 @@ static void replace_vars_in_jointree(Node *jtnode,
 									 pullup_replace_vars_context *context);
 static Node *pullup_replace_vars(Node *expr,
 								 pullup_replace_vars_context *context);
-static Node *pullup_replace_vars_callback(Var *var,
+static Node *pullup_replace_vars_callback(const Var *var,
 										  replace_rte_variables_context *context);
 static Query *pullup_replace_vars_subquery(Query *query,
 										   pullup_replace_vars_context *context);
@@ -501,6 +501,7 @@ expand_virtual_generated_columns(PlannerInfo *root, Query *parse,
 	{
 		List	   *tlist = NIL;
 		pullup_replace_vars_context rvcontext;
+		List	   *save_exclRelTlist = NIL;
 
 		for (int i = 0; i < tupdesc->natts; i++)
 		{
@@ -568,8 +569,26 @@ expand_virtual_generated_columns(PlannerInfo *root, Query *parse,
 
 		/*
 		 * Apply pullup variable replacement throughout the query tree.
+		 *
+		 * We intentionally do not touch the EXCLUDED pseudo-relation's
+		 * targetlist here.  Various places in the planner assume that it
+		 * contains only Vars, and we want that to remain the case.  More
+		 * importantly, we don't want setrefs.c to turn any expanded
+		 * EXCLUDED.virtual_column expressions in other parts of the query
+		 * back into Vars referencing the original virtual column, which
+		 * set_plan_refs() would do if exclRelTlist contained matching
+		 * expressions.
 		 */
+		if (parse->onConflict)
+		{
+			save_exclRelTlist = parse->onConflict->exclRelTlist;
+			parse->onConflict->exclRelTlist = NIL;
+		}
+
 		parse = (Query *) pullup_replace_vars((Node *) parse, &rvcontext);
+
+		if (parse->onConflict)
+			parse->onConflict->exclRelTlist = save_exclRelTlist;
 	}
 
 	return parse;
@@ -1418,6 +1437,7 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	subroot->glob = root->glob;
 	subroot->query_level = root->query_level;
 	subroot->plan_name = root->plan_name;
+	subroot->alternative_plan_name = root->alternative_plan_name;
 	subroot->parent_root = root->parent_root;
 	subroot->plan_params = NIL;
 	subroot->outer_params = NULL;
@@ -2761,7 +2781,7 @@ pullup_replace_vars(Node *expr, pullup_replace_vars_context *context)
 }
 
 static Node *
-pullup_replace_vars_callback(Var *var,
+pullup_replace_vars_callback(const Var *var,
 							 replace_rte_variables_context *context)
 {
 	pullup_replace_vars_context *rcon = (pullup_replace_vars_context *) context->callback_arg;

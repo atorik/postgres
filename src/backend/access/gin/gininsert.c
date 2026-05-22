@@ -2068,7 +2068,8 @@ _gin_parallel_scan_and_build(GinBuildState *state,
 	indexInfo->ii_Concurrent = ginshared->isconcurrent;
 
 	scan = table_beginscan_parallel(heap,
-									ParallelTableScanFromGinBuildShared(ginshared));
+									ParallelTableScanFromGinBuildShared(ginshared),
+									SO_NONE);
 
 	reltuples = table_index_build_scan(heap, index, indexInfo, true, progress,
 									   ginBuildCallbackParallel, state, scan);
@@ -2404,7 +2405,7 @@ _gin_parse_tuple_key(GinTuple *a)
 }
 
 /*
-* _gin_parse_tuple_items
+ * _gin_parse_tuple_items
  *		Return a pointer to a palloc'd array of decompressed TID array.
  */
 static ItemPointer

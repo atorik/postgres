@@ -192,7 +192,7 @@ SetHintBitsExt(HeapTupleHeader tuple, Buffer buffer,
 }
 
 /*
- * Simple wrapper around SetHintBitExt(), use when operating on a single
+ * Simple wrapper around SetHintBitsExt(), use when operating on a single
  * tuple.
  */
 static inline void
@@ -1354,7 +1354,7 @@ HeapTupleSatisfiesNonVacuumable(HeapTuple htup, Snapshot snapshot,
 	{
 		Assert(TransactionIdIsValid(dead_after));
 
-		if (GlobalVisTestIsRemovableXid(snapshot->vistest, dead_after))
+		if (GlobalVisTestIsRemovableXid(snapshot->vistest, dead_after, true))
 			res = HEAPTUPLE_DEAD;
 	}
 	else
@@ -1420,7 +1420,8 @@ HeapTupleIsSurelyDead(HeapTuple htup, GlobalVisState *vistest)
 
 	/* Deleter committed, so tuple is dead if the XID is old enough. */
 	return GlobalVisTestIsRemovableXid(vistest,
-									   HeapTupleHeaderGetRawXmax(tuple));
+									   HeapTupleHeaderGetRawXmax(tuple),
+									   true);
 }
 
 /*
@@ -1670,7 +1671,7 @@ HeapTupleSatisfiesHistoricMVCC(HeapTuple htup, Snapshot snapshot,
 }
 
 /*
- * Perform HeaptupleSatisfiesMVCC() on each passed in tuple. This is more
+ * Perform HeapTupleSatisfiesMVCC() on each passed in tuple. This is more
  * efficient than doing HeapTupleSatisfiesMVCC() one-by-one.
  *
  * To be checked tuples are passed via BatchMVCCState->tuples. Each tuple's

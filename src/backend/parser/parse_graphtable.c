@@ -109,10 +109,25 @@ transformGraphTablePropertyRef(ParseState *pstate, ColumnRef *cref)
 
 		if (list_member(gpstate->variables, field1))
 		{
-			GraphPropertyRef *gpr = makeNode(GraphPropertyRef);
+			GraphPropertyRef *gpr;
 			HeapTuple	pgptup;
 			Form_pg_propgraph_property pgpform;
 
+			/*
+			 * If we are transforming expression in an element pattern,
+			 * property references containing only that variable are allowed.
+			 */
+			if (gpstate->cur_gep)
+			{
+				if (!gpstate->cur_gep->variable ||
+					strcmp(elvarname, gpstate->cur_gep->variable) != 0)
+					ereport(ERROR,
+							errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							errmsg("non-local element variable reference is not supported"),
+							parser_errposition(pstate, cref->location));
+			}
+
+			gpr = makeNode(GraphPropertyRef);
 			pgptup = SearchSysCache2(PROPGRAPHPROPNAME, ObjectIdGetDatum(gpstate->graphid), CStringGetDatum(propname));
 			if (!HeapTupleIsValid(pgptup))
 				ereport(ERROR,
@@ -142,7 +157,7 @@ transformGraphTablePropertyRef(ParseState *pstate, ColumnRef *cref)
  * A label expression is parsed as either a ColumnRef with a single field or a
  * label expression like label disjunction. The single field in the ColumnRef is
  * treated as a label name and transformed to a GraphLabelRef node. The label
- * expression is recursively transformed into an expression tree containg
+ * expression is recursively transformed into an expression tree containing
  * GraphLabelRef nodes corresponding to the names of the labels appearing in the
  * expression. If any label name cannot be resolved to a label in the property
  * graph, an error is raised.
@@ -225,23 +240,26 @@ transformGraphElementPattern(ParseState *pstate, GraphElementPattern *gep)
 {
 	GraphTableParseState *gpstate = pstate->p_graph_table_pstate;
 
-	if (gep->kind != VERTEX_PATTERN && !IS_EDGE_PATTERN(gep->kind))
-		ereport(ERROR,
-				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				errmsg("unsupported element pattern kind: \"%s\"", get_gep_kind_name(gep->kind)));
-
 	if (gep->quantifier)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("element pattern quantifier is not supported")));
 
-	if (gep->variable)
-		gpstate->variables = lappend(gpstate->variables, makeString(pstrdup(gep->variable)));
+	Assert(!gpstate->cur_gep);
+
+	gpstate->cur_gep = gep;
 
 	gep->labelexpr = transformLabelExpr(gpstate, gep->labelexpr);
 
 	gep->whereClause = transformExpr(pstate, gep->whereClause, EXPR_KIND_WHERE);
+
+	/*
+	 * Assign collations here for the reason mentioned in the prologue of
+	 * transformGraphPattern().
+	 */
 	assign_expr_collations(pstate, gep->whereClause);
+
+	gpstate->cur_gep = NULL;
 
 	return (Node *) gep;
 }
@@ -253,10 +271,53 @@ static Node *
 transformPathTerm(ParseState *pstate, List *path_term)
 {
 	List	   *result = NIL;
+	GraphElementPattern *prev_gep = NULL;
 
 	foreach_node(GraphElementPattern, gep, path_term)
+	{
+		if (gep->kind != VERTEX_PATTERN && !IS_EDGE_PATTERN(gep->kind))
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("unsupported element pattern kind: \"%s\"", get_gep_kind_name(gep->kind)),
+					 parser_errposition(pstate, gep->location)));
+
+		if (IS_EDGE_PATTERN(gep->kind))
+		{
+			if (!prev_gep)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("path pattern cannot start with an edge pattern"),
+						 parser_errposition(pstate, gep->location)));
+			else if (prev_gep->kind != VERTEX_PATTERN)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("edge pattern must be preceded by a vertex pattern"),
+						 parser_errposition(pstate, gep->location)));
+		}
+		else
+		{
+			if (prev_gep && !IS_EDGE_PATTERN(prev_gep->kind))
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("adjacent vertex patterns are not supported"),
+						 parser_errposition(pstate, gep->location)));
+		}
+
 		result = lappend(result,
 						 transformGraphElementPattern(pstate, gep));
+		prev_gep = gep;
+	}
+
+	/* Path pattern should have at least one element pattern. */
+	Assert(prev_gep);
+
+	if (IS_EDGE_PATTERN(prev_gep->kind))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("path pattern cannot end with an edge pattern"),
+				 parser_errposition(pstate, prev_gep->location)));
+	}
 
 	return (Node *) result;
 }
@@ -268,6 +329,9 @@ static Node *
 transformPathPatternList(ParseState *pstate, List *path_pattern)
 {
 	List	   *result = NIL;
+	GraphTableParseState *gpstate = pstate->p_graph_table_pstate;
+
+	Assert(gpstate);
 
 	/* Grammar doesn't allow empty path pattern list */
 	Assert(list_length(path_pattern) > 0);
@@ -281,6 +345,22 @@ transformPathPatternList(ParseState *pstate, List *path_pattern)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("multiple path patterns in one GRAPH_TABLE clause not supported")));
 
+	/*
+	 * Collect all the variables in the path pattern into the
+	 * GraphTableParseState so that we can detect any non-local element
+	 * variable references. We need to do this before transforming the path
+	 * pattern so as to detect forward references to element variables in the
+	 * WHERE clause of an element pattern.
+	 */
+	foreach_node(List, path_term, path_pattern)
+	{
+		foreach_node(GraphElementPattern, gep, path_term)
+		{
+			if (gep->variable)
+				gpstate->variables = list_append_unique(gpstate->variables, makeString(pstrdup(gep->variable)));
+		}
+	}
+
 	foreach_node(List, path_term, path_pattern)
 		result = lappend(result, transformPathTerm(pstate, path_term));
 
@@ -291,9 +371,14 @@ transformPathPatternList(ParseState *pstate, List *path_pattern)
  * Transform a GraphPattern.
  *
  * A GraphPattern consists of a list of one or more path patterns and an
- * optional where clause. Transform them. We use the previously constructure
+ * optional where clause. Transform them. We use the previously constructed
  * list of variables in the GraphTableParseState to resolve property references
  * in the WHERE clause.
+ *
+ * Since most parts of the GraphPattern do not require collation assignment, we
+ * assign collations to the required expressions as they are transformed.  This
+ * avoids the need to traverse the whole GraphPattern again and avoids exposing
+ * it to assign_expr_collations().
  */
 Node *
 transformGraphPattern(ParseState *pstate, GraphPattern *graph_pattern)

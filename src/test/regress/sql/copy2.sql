@@ -168,6 +168,8 @@ COPY x from stdin WHERE a IN (generate_series(1,5));
 
 COPY x from stdin WHERE a = row_number() over(b);
 
+COPY x from stdin WHERE tableoid = 'x'::regclass;
+
 
 -- check results of copy in
 SELECT * FROM x;
@@ -551,6 +553,10 @@ CREATE TABLE t_on_error_null (a d_int_not_null, b d_int_positive_maybe_null, c i
 \pset null NULL
 COPY t_on_error_null FROM STDIN WITH (on_error set_null); -- fail
 \N	11	13
+\.
+
+COPY t_on_error_null(c, a) FROM STDIN WITH (on_error set_null); -- fail
+11	\N
 \.
 
 COPY t_on_error_null FROM STDIN WITH (on_error set_null); -- fail

@@ -89,7 +89,7 @@
  */
 typedef struct SubOpts
 {
-	bits32		specified_opts;
+	uint32		specified_opts;
 	char	   *slot_name;
 	char	   *synchronous_commit;
 	bool		connect;
@@ -150,7 +150,7 @@ static void CheckAlterSubOption(Subscription *sub, const char *option,
  */
 static void
 parse_subscription_options(ParseState *pstate, List *stmt_options,
-						   bits32 supported_opts, SubOpts *opts)
+						   uint32 supported_opts, SubOpts *opts)
 {
 	ListCell   *lc;
 
@@ -626,7 +626,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	char	   *conninfo;
 	char		originname[NAMEDATALEN];
 	List	   *publications;
-	bits32		supported_opts;
+	uint32		supported_opts;
 	SubOpts		opts = {0};
 	AclResult	aclresult;
 
@@ -753,7 +753,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 		GetUserMapping(owner, server->serverid);
 
 		serverid = server->serverid;
-		conninfo = ForeignServerConnectionString(owner, serverid);
+		conninfo = ForeignServerConnectionString(owner, server);
 	}
 	else
 	{
@@ -796,8 +796,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	values[Anum_pg_subscription_submaxretention - 1] =
 		Int32GetDatum(opts.maxretention);
 	values[Anum_pg_subscription_subretentionactive - 1] =
-		Int32GetDatum(opts.retaindeadtuples);
-	values[Anum_pg_subscription_subserver - 1] = serverid;
+		BoolGetDatum(opts.retaindeadtuples);
+	values[Anum_pg_subscription_subserver - 1] = ObjectIdGetDatum(serverid);
 	if (!OidIsValid(serverid))
 		values[Anum_pg_subscription_subconninfo - 1] =
 			CStringGetTextDatum(conninfo);
@@ -1427,10 +1427,11 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 	bool		retain_dead_tuples;
 	int			max_retention;
 	bool		retention_active;
+	char	   *new_conninfo = NULL;
 	char	   *origin;
 	Subscription *sub;
 	Form_pg_subscription form;
-	bits32		supported_opts;
+	uint32		supported_opts;
 	SubOpts		opts = {0};
 
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
@@ -1810,7 +1811,6 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 				ForeignServer *new_server;
 				ObjectAddress referenced;
 				AclResult	aclresult;
-				char	   *conninfo;
 
 				/*
 				 * Remove what was there before, either another foreign server
@@ -1841,21 +1841,21 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 							errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 							errmsg("subscription owner \"%s\" does not have permission on foreign server \"%s\"",
 								   GetUserNameFromId(form->subowner, false),
-								   ForeignServerName(new_server->serverid)));
+								   new_server->servername));
 
 				/* make sure a user mapping exists */
 				GetUserMapping(form->subowner, new_server->serverid);
 
-				conninfo = ForeignServerConnectionString(form->subowner,
-														 new_server->serverid);
+				new_conninfo = ForeignServerConnectionString(form->subowner,
+															 new_server);
 
 				/* Load the library providing us libpq calls. */
 				load_file("libpqwalreceiver", false);
 				/* Check the connection info string. */
-				walrcv_check_conninfo(conninfo,
+				walrcv_check_conninfo(new_conninfo,
 									  sub->passwordrequired && !sub->ownersuperuser);
 
-				values[Anum_pg_subscription_subserver - 1] = new_server->serverid;
+				values[Anum_pg_subscription_subserver - 1] = ObjectIdGetDatum(new_server->serverid);
 				replaces[Anum_pg_subscription_subserver - 1] = true;
 
 				ObjectAddressSet(referenced, ForeignServerRelationId, new_server->serverid);
@@ -1863,6 +1863,13 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 
 				update_tuple = true;
 			}
+
+			/*
+			 * Since the remote server configuration might have changed,
+			 * perform a check to ensure it permits enabling
+			 * retain_dead_tuples.
+			 */
+			check_pub_rdt = sub->retaindeadtuples;
 			break;
 
 		case ALTER_SUBSCRIPTION_CONNECTION:
@@ -1873,14 +1880,16 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 												   DEPENDENCY_NORMAL,
 												   ForeignServerRelationId, form->subserver);
 
-				values[Anum_pg_subscription_subserver - 1] = InvalidOid;
+				values[Anum_pg_subscription_subserver - 1] = ObjectIdGetDatum(InvalidOid);
 				replaces[Anum_pg_subscription_subserver - 1] = true;
 			}
+
+			new_conninfo = stmt->conninfo;
 
 			/* Load the library providing us libpq calls. */
 			load_file("libpqwalreceiver", false);
 			/* Check the connection info string. */
-			walrcv_check_conninfo(stmt->conninfo,
+			walrcv_check_conninfo(new_conninfo,
 								  sub->passwordrequired && !sub->ownersuperuser);
 
 			values[Anum_pg_subscription_subconninfo - 1] =
@@ -2129,7 +2138,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 		 * available.
 		 */
 		must_use_password = sub->passwordrequired && !sub->ownersuperuser;
-		wrconn = walrcv_connect(stmt->conninfo ? stmt->conninfo : sub->conninfo,
+		wrconn = walrcv_connect(new_conninfo ? new_conninfo : sub->conninfo,
 								true, true, must_use_password, sub->name,
 								&err);
 		if (!wrconn)
@@ -2250,7 +2259,9 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	if (OidIsValid(form->subserver))
 	{
 		AclResult	aclresult;
+		ForeignServer *server;
 
+		server = GetForeignServer(form->subserver);
 		aclresult = object_aclcheck(ForeignServerRelationId, form->subserver,
 									form->subowner, ACL_USAGE);
 		if (aclresult != ACLCHECK_OK)
@@ -2263,12 +2274,12 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 			 */
 			err = psprintf(_("subscription owner \"%s\" does not have permission on foreign server \"%s\""),
 						   GetUserNameFromId(form->subowner, false),
-						   ForeignServerName(form->subserver));
+						   server->servername);
 			conninfo = NULL;
 		}
 		else
 			conninfo = ForeignServerConnectionString(form->subowner,
-													 form->subserver);
+													 server);
 	}
 	else
 	{
@@ -2593,18 +2604,18 @@ AlterSubscriptionOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 	 */
 	if (OidIsValid(form->subserver))
 	{
-		Oid			serverid = form->subserver;
+		ForeignServer *server = GetForeignServer(form->subserver);
 
-		aclresult = object_aclcheck(ForeignServerRelationId, serverid, newOwnerId, ACL_USAGE);
+		aclresult = object_aclcheck(ForeignServerRelationId, server->serverid, newOwnerId, ACL_USAGE);
 		if (aclresult != ACLCHECK_OK)
 			ereport(ERROR,
 					errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					errmsg("new subscription owner \"%s\" does not have permission on foreign server \"%s\"",
 						   GetUserNameFromId(newOwnerId, false),
-						   ForeignServerName(serverid)));
+						   server->servername));
 
 		/* make sure a user mapping exists */
-		GetUserMapping(newOwnerId, serverid);
+		GetUserMapping(newOwnerId, server->serverid);
 	}
 
 	form->subowner = newOwnerId;
@@ -2773,9 +2784,14 @@ check_publications_origin_tables(WalReceiverConn *wrconn, List *publications,
 			Oid			relid = subrel_local_oids[i];
 			char	   *schemaname = get_namespace_name(get_rel_namespace(relid));
 			char	   *tablename = get_rel_name(relid);
+			char	   *schemaname_lit = quote_literal_cstr(schemaname);
+			char	   *tablename_lit = quote_literal_cstr(tablename);
 
-			appendStringInfo(&cmd, "AND NOT (N.nspname = '%s' AND C.relname = '%s')\n",
-							 schemaname, tablename);
+			appendStringInfo(&cmd, "AND NOT (N.nspname = %s AND C.relname = %s)\n",
+							 schemaname_lit, tablename_lit);
+
+			pfree(schemaname_lit);
+			pfree(tablename_lit);
 		}
 	}
 
@@ -2895,10 +2911,15 @@ check_publications_origin_sequences(WalReceiverConn *wrconn, List *publications,
 		Oid			relid = subrel_local_oids[i];
 		char	   *schemaname = get_namespace_name(get_rel_namespace(relid));
 		char	   *seqname = get_rel_name(relid);
+		char	   *schemaname_lit = quote_literal_cstr(schemaname);
+		char	   *seqname_lit = quote_literal_cstr(seqname);
 
 		appendStringInfo(&cmd,
-						 "AND NOT (N.nspname = '%s' AND C.relname = '%s')\n",
-						 schemaname, seqname);
+						 "AND NOT (N.nspname = %s AND C.relname = %s)\n",
+						 schemaname_lit, seqname_lit);
+
+		pfree(schemaname_lit);
+		pfree(seqname_lit);
 	}
 
 	res = walrcv_exec(wrconn, cmd.data, 1, tableRow);

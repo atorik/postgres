@@ -1494,6 +1494,13 @@ DefineRange(ParseState *pstate, CreateRangeStmt *stmt)
 			/* we can look up the subtype name immediately */
 			multirangeNamespace = QualifiedNameGetCreationNamespace(defGetQualifiedName(defel),
 																	&multirangeTypeName);
+
+			/* Check we have creation rights in target namespace */
+			aclresult = object_aclcheck(NamespaceRelationId, multirangeNamespace,
+										GetUserId(), ACL_CREATE);
+			if (aclresult != ACLCHECK_OK)
+				aclcheck_error(aclresult, OBJECT_SCHEMA,
+							   get_namespace_name(multirangeNamespace));
 		}
 		else
 			ereport(ERROR,
@@ -3185,7 +3192,8 @@ validateDomainNotNullConstraint(Oid domainoid)
 
 		/* Scan all tuples in this relation */
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
-		scan = table_beginscan(testrel, snapshot, 0, NULL);
+		scan = table_beginscan(testrel, snapshot, 0, NULL,
+							   SO_NONE);
 		slot = table_slot_create(testrel, NULL);
 		while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
 		{
@@ -3266,7 +3274,8 @@ validateDomainCheckConstraint(Oid domainoid, const char *ccbin, LOCKMODE lockmod
 
 		/* Scan all tuples in this relation */
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
-		scan = table_beginscan(testrel, snapshot, 0, NULL);
+		scan = table_beginscan(testrel, snapshot, 0, NULL,
+							   SO_NONE);
 		slot = table_slot_create(testrel, NULL);
 		while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
 		{

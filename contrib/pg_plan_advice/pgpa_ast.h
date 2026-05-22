@@ -80,6 +80,7 @@ typedef struct pgpa_advice_target
 typedef enum pgpa_advice_tag_type
 {
 	PGPA_TAG_BITMAP_HEAP_SCAN,
+	PGPA_TAG_DO_NOT_SCAN,
 	PGPA_TAG_FOREIGN_JOIN,
 	PGPA_TAG_GATHER,
 	PGPA_TAG_GATHER_MERGE,
@@ -115,7 +116,7 @@ typedef struct pgpa_advice_item
 } pgpa_advice_item;
 
 /*
- * Result of comparing an array of pgpa_relation_identifier objects to a
+ * Result of comparing an array of pgpa_identifier objects to a
  * pgpa_advice_target.
  *
  * PGPA_ITM_EQUAL means all targets are matched by some identifier, and

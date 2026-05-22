@@ -26,7 +26,6 @@
 #include "catalog/toasting.h"
 #include "commands/alter.h"
 #include "commands/async.h"
-#include "commands/cluster.h"
 #include "commands/collationcmds.h"
 #include "commands/comment.h"
 #include "commands/conversioncmds.h"
@@ -46,6 +45,7 @@
 #include "commands/proclang.h"
 #include "commands/propgraphcmds.h"
 #include "commands/publicationcmds.h"
+#include "commands/repack.h"
 #include "commands/schemacmds.h"
 #include "commands/seclabel.h"
 #include "commands/sequence.h"
@@ -1062,7 +1062,8 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 
 		case T_WaitStmt:
 			{
-				ExecWaitStmt(pstate, (WaitStmt *) parsetree, dest);
+				ExecWaitStmt(pstate, (WaitStmt *) parsetree, isTopLevel,
+							 dest);
 			}
 			break;
 
@@ -1122,8 +1123,8 @@ ProcessUtilitySlow(ParseState *pstate,
 				 * relation and attribute manipulation
 				 */
 			case T_CreateSchemaStmt:
-				CreateSchemaCommand((CreateSchemaStmt *) parsetree,
-									queryString,
+				CreateSchemaCommand(pstate,
+									(CreateSchemaStmt *) parsetree,
 									pstmt->stmt_location,
 									pstmt->stmt_len);
 

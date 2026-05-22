@@ -190,6 +190,11 @@ PostgreSQL documentation
         <command>CREATE DATABASE</command> commands.  All data is restored into the
         database name that appears in the archive.
        </para>
+
+       <para>
+        This option cannot be used together
+        with <option>--single-transaction</option>.
+       </para>
       </listitem>
      </varlistentry>
 
@@ -291,26 +296,11 @@ PostgreSQL documentation
         <option>--schema-only</option>,
         <option>--statistics-only</option>,
         <option>--statistics</option>,
+        <option>--no-globals</option>,
         <option>--exit-on-error</option>,
         <option>--single-transaction</option>,
         <option>--clean</option>, or
-        <option>--transaction-size</option>,
-        <option>--no-globals</option>.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry>
-      <term><option>--no-globals</option></term>
-      <listitem>
-       <para>
-        Do not restore global objects (roles and tablespaces).  When
-        <option>-C</option>/<option>--create</option> is not specified,
-        databases that do not already exist on the target server are skipped.
-       </para>
-       <para>
-        This option is only relevant when restoring from a non-plain-text
-        archive made using <application>pg_dumpall</application>.
+        <option>--transaction-size</option>.
        </para>
       </listitem>
      </varlistentry>
@@ -600,6 +590,8 @@ PostgreSQL documentation
         ensures that either all the commands complete successfully, or no
         changes are applied. This option implies
         <option>--exit-on-error</option>.
+        It cannot be used together with <option>--create</option>, nor with
+        multiple jobs (<option>--jobs</option>).
        </para>
       </listitem>
      </varlistentry>
@@ -804,6 +796,21 @@ PostgreSQL documentation
        <para>
         This option is effective only when restoring directly into a
         database, not when producing SQL script output.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--no-globals</option></term>
+      <listitem>
+       <para>
+        Do not restore global objects (roles and tablespaces).  When
+        <option>-C</option>/<option>--create</option> is not specified,
+        databases that do not already exist on the target server are skipped.
+       </para>
+       <para>
+        This option is only relevant when restoring from a non-plain-text
+        archive made using <application>pg_dumpall</application>.
        </para>
       </listitem>
      </varlistentry>
@@ -1209,19 +1216,27 @@ CREATE DATABASE foo WITH TEMPLATE template0;
     </listitem>
 
     <listitem>
+     <para>
+      Parallel restore (<option>--jobs</option> greater than 1) requires
+      applying dependency information from the archive file to ensure
+      that an object is not restored before other objects it depends on.
+      This information will be incomplete, leading to unexpected restore
+      failures, if the archive does not include object definitions
+      (the <option>pre-data</option> section).  Therefore, avoid
+      using <application>pg_dump</application> options such
+      as <option>--no-schema</option>, <option>-a/--data-only</option>,
+      or <option>--section</option> without <option>pre-data</option> when
+      creating an archive you wish to restore in parallel.  Instead, you
+      may provide such options to <application>pg_restore</application>.
+     </para>
+    </listitem>
+
+    <listitem>
      <para><application>pg_restore</application> cannot restore large objects
       selectively;  for instance, only those for a specific table.  If
       an archive contains large objects, then all large objects will be
       restored, or none of them if they are excluded via <option>-L</option>,
       <option>-t</option>, or other options.
-     </para>
-    </listitem>
-
-    <listitem>
-     <para>
-      When restoring from a non-plain-text archive made using
-      <application>pg_dumpall</application>, the <option>--section</option>
-      option may be used, but must include <option>pre-data</option>.
      </para>
     </listitem>
 
@@ -1235,6 +1250,8 @@ CREATE DATABASE foo WITH TEMPLATE template0;
       <option>--no-schema</option>,
       <option>--statistics-only</option>, and
       <option>--strict-names</option>.
+      Also, if the <option>--section</option> option is used, it must
+      include <option>pre-data</option>.
      </para>
     </listitem>
 

@@ -225,16 +225,14 @@ main(int argc, char **argv)
 				opts->filename = pg_strdup(optarg);
 				break;
 			case 'F':
-				if (strlen(optarg) != 0)
-					opts->formatName = pg_strdup(optarg);
+				opts->formatName = pg_strdup(optarg);
 				break;
 			case 'g':
 				/* restore only global sql commands. */
 				globals_only = true;
 				break;
 			case 'h':
-				if (strlen(optarg) != 0)
-					opts->cparams.pghost = pg_strdup(optarg);
+				opts->cparams.pghost = pg_strdup(optarg);
 				break;
 			case 'j':			/* number of restore jobs */
 				if (!option_parse_int(optarg, "-j/--jobs", 1,
@@ -264,8 +262,7 @@ main(int argc, char **argv)
 				break;
 
 			case 'p':
-				if (strlen(optarg) != 0)
-					opts->cparams.pgport = pg_strdup(optarg);
+				opts->cparams.pgport = pg_strdup(optarg);
 				break;
 			case 'R':
 				/* no-op, still accepted for backwards compatibility */
@@ -707,7 +704,7 @@ restore_one_database(const char *inputFileSpec, RestoreOptions *opts,
 	 * We don't have a connection yet but that doesn't matter. The connection
 	 * is initialized to NULL and if we terminate through exit_nicely() while
 	 * it's still NULL, the cleanup function will just be a no-op. If we are
-	 * restoring multiple databases, then only update AX handle for cleanup as
+	 * restoring multiple databases, then only update AH handle for cleanup as
 	 * the previous entry was already in the array and we had closed previous
 	 * connection, so we can use the same array slot.
 	 */
@@ -791,13 +788,13 @@ usage(const char *progname)
 	printf(_("  --no-data                    do not restore data\n"));
 	printf(_("  --no-data-for-failed-tables  do not restore data of tables that could not be\n"
 			 "                               created\n"));
+	printf(_("  --no-globals                 do not restore global objects (roles and tablespaces)\n"));
 	printf(_("  --no-policies                do not restore row security policies\n"));
 	printf(_("  --no-publications            do not restore publications\n"));
 	printf(_("  --no-schema                  do not restore schema\n"));
 	printf(_("  --no-security-labels         do not restore security labels\n"));
 	printf(_("  --no-statistics              do not restore statistics\n"));
 	printf(_("  --no-subscriptions           do not restore subscriptions\n"));
-	printf(_("  --no-globals                 do not restore global objects (roles and tablespaces)\n"));
 	printf(_("  --no-table-access-method     do not restore table access methods\n"));
 	printf(_("  --no-tablespaces             do not restore tablespace assignments\n"));
 	printf(_("  --restrict-key=RESTRICT_KEY  use provided string as psql \\restrict key\n"));

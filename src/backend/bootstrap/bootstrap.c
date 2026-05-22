@@ -32,12 +32,14 @@
 #include "common/link-canary.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
-#include "pg_getopt.h"
+#include "port/pg_getopt_ctx.h"
 #include "postmaster/postmaster.h"
 #include "storage/bufpage.h"
+#include "storage/checksum.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
+#include "storage/shmem_internal.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
@@ -236,9 +238,10 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 {
 	int			i;
 	char	   *progname = argv[0];
+	pg_getopt_ctx optctx;
 	int			flag;
 	char	   *userDoption = NULL;
-	uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
+	uint32		bootstrap_data_checksum_version = PG_DATA_CHECKSUM_OFF;
 	yyscan_t	scanner;
 
 	Assert(!IsUnderPostmaster);
@@ -255,12 +258,13 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	argv++;
 	argc--;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:")) != -1)
+	pg_getopt_start(&optctx, argc, argv, "B:c:d:D:Fkr:X:-:");
+	while ((flag = pg_getopt_next(&optctx)) != -1)
 	{
 		switch (flag)
 		{
 			case 'B':
-				SetConfigOption("shared_buffers", optarg, PGC_POSTMASTER, PGC_S_ARGV);
+				SetConfigOption("shared_buffers", optctx.optarg, PGC_POSTMASTER, PGC_S_ARGV);
 				break;
 			case '-':
 
@@ -270,10 +274,10 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 				 * returns DISPATCH_POSTMASTER if it doesn't find a match, so
 				 * error for anything else.
 				 */
-				if (parse_dispatch_option(optarg) != DISPATCH_POSTMASTER)
+				if (parse_dispatch_option(optctx.optarg) != DISPATCH_POSTMASTER)
 					ereport(ERROR,
 							(errcode(ERRCODE_SYNTAX_ERROR),
-							 errmsg("--%s must be first argument", optarg)));
+							 errmsg("--%s must be first argument", optctx.optarg)));
 
 				pg_fallthrough;
 			case 'c':
@@ -281,19 +285,19 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 					char	   *name,
 							   *value;
 
-					ParseLongOption(optarg, &name, &value);
+					ParseLongOption(optctx.optarg, &name, &value);
 					if (!value)
 					{
 						if (flag == '-')
 							ereport(ERROR,
 									(errcode(ERRCODE_SYNTAX_ERROR),
 									 errmsg("--%s requires a value",
-											optarg)));
+											optctx.optarg)));
 						else
 							ereport(ERROR,
 									(errcode(ERRCODE_SYNTAX_ERROR),
 									 errmsg("-c %s requires a value",
-											optarg)));
+											optctx.optarg)));
 					}
 
 					SetConfigOption(name, value, PGC_POSTMASTER, PGC_S_ARGV);
@@ -302,14 +306,14 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 					break;
 				}
 			case 'D':
-				userDoption = pstrdup(optarg);
+				userDoption = pstrdup(optctx.optarg);
 				break;
 			case 'd':
 				{
 					/* Turn on debugging for the bootstrap process. */
 					char	   *debugstr;
 
-					debugstr = psprintf("debug%s", optarg);
+					debugstr = psprintf("debug%s", optctx.optarg);
 					SetConfigOption("log_min_messages", debugstr,
 									PGC_POSTMASTER, PGC_S_ARGV);
 					SetConfigOption("client_min_messages", debugstr,
@@ -324,10 +328,10 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 				bootstrap_data_checksum_version = PG_DATA_CHECKSUM_VERSION;
 				break;
 			case 'r':
-				strlcpy(OutputFileName, optarg, MAXPGPATH);
+				strlcpy(OutputFileName, optctx.optarg, MAXPGPATH);
 				break;
 			case 'X':
-				SetConfigOption("wal_segment_size", optarg, PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
+				SetConfigOption("wal_segment_size", optctx.optarg, PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
 				break;
 			default:
 				write_stderr("Try \"%s --help\" for more information.\n",
@@ -337,7 +341,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 		}
 	}
 
-	if (argc != optind)
+	if (argc != optctx.optind)
 	{
 		write_stderr("%s: invalid command-line arguments\n", progname);
 		proc_exit(1);
@@ -359,6 +363,8 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	SetProcessingMode(BootstrapProcessing);
 	IgnoreSystemIndexes = true;
 
+	RegisterBuiltinShmemCallbacks();
+
 	InitializeMaxBackends();
 
 	/*
@@ -370,6 +376,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 
 	InitializeFastPathLocks();
 
+	ShmemCallRequestCallbacks();
 	CreateSharedMemoryAndSemaphores();
 
 	/*
@@ -456,10 +463,10 @@ bootstrap_signals(void)
 	 * mode; "curl up and die" is a sufficient response for all these cases.
 	 * Let's set that handling explicitly, as documentation if nothing else.
 	 */
-	pqsignal(SIGHUP, SIG_DFL);
-	pqsignal(SIGINT, SIG_DFL);
-	pqsignal(SIGTERM, SIG_DFL);
-	pqsignal(SIGQUIT, SIG_DFL);
+	pqsignal(SIGHUP, PG_SIG_DFL);
+	pqsignal(SIGINT, PG_SIG_DFL);
+	pqsignal(SIGTERM, PG_SIG_DFL);
+	pqsignal(SIGQUIT, PG_SIG_DFL);
 }
 
 /* ----------------------------------------------------------------
@@ -1181,7 +1188,7 @@ build_indices(void)
 		heap = table_open(ILHead->il_heap, NoLock);
 		ind = index_open(ILHead->il_ind, NoLock);
 
-		index_build(heap, ind, ILHead->il_info, false, false);
+		index_build(heap, ind, ILHead->il_info, false, false, false);
 
 		index_close(ind, NoLock);
 		table_close(heap, NoLock);

@@ -247,6 +247,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "access/genam.h"
 #include "access/commit_ts.h"
 #include "access/table.h"
 #include "access/tableam.h"
@@ -1037,9 +1038,15 @@ slot_store_data(TupleTableSlot *slot, LogicalRepRelMapEntry *rel,
 
 		if (!att->attisdropped && remoteattnum >= 0)
 		{
-			StringInfo	colvalue = &tupleData->colvalues[remoteattnum];
+			StringInfo	colvalue;
 
-			Assert(remoteattnum < tupleData->ncols);
+			if (remoteattnum >= tupleData->ncols)
+				ereport(ERROR,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 errmsg("logical replication column %d not found in tuple: only %d column(s) received",
+								remoteattnum + 1, tupleData->ncols)));
+
+			colvalue = &tupleData->colvalues[remoteattnum];
 
 			/* Set attnum for error callback */
 			apply_error_callback_arg.remote_attnum = remoteattnum;
@@ -1150,7 +1157,11 @@ slot_modify_data(TupleTableSlot *slot, TupleTableSlot *srcslot,
 		if (remoteattnum < 0)
 			continue;
 
-		Assert(remoteattnum < tupleData->ncols);
+		if (remoteattnum >= tupleData->ncols)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("logical replication column %d not found in tuple: only %d column(s) received",
+							remoteattnum + 1, tupleData->ncols)));
 
 		if (tupleData->colstatus[remoteattnum] != LOGICALREP_COLUMN_UNCHANGED)
 		{
@@ -2869,7 +2880,12 @@ apply_handle_update(StringInfo s)
 
 		if (!att->attisdropped && remoteattnum >= 0)
 		{
-			Assert(remoteattnum < newtup.ncols);
+			if (remoteattnum >= newtup.ncols)
+				ereport(ERROR,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 errmsg("logical replication column %d not found in tuple: only %d column(s) received",
+								remoteattnum + 1, newtup.ncols)));
+
 			if (newtup.colstatus[remoteattnum] != LOGICALREP_COLUMN_UNCHANGED)
 				target_perminfo->updatedCols =
 					bms_add_member(target_perminfo->updatedCols,
@@ -4979,7 +4995,7 @@ adjust_xid_advance_interval(RetainDeadTuplesData *rdt_data, bool new_xid_found)
 		/*
 		 * Retention has been stopped, so double the interval-capped at a
 		 * maximum of 3 minutes. The wal_receiver_status_interval is
-		 * intentionally not used as a upper bound, since the likelihood of
+		 * intentionally not used as an upper bound, since the likelihood of
 		 * retention resuming is lower than that of general activity resuming.
 		 */
 		rdt_data->xid_advance_interval = Min(rdt_data->xid_advance_interval * 2,
@@ -4996,9 +5012,10 @@ adjust_xid_advance_interval(RetainDeadTuplesData *rdt_data, bool new_xid_found)
 
 	/*
 	 * Ensure the wait time remains within the maximum retention time limit
-	 * when retention is active.
+	 * when retention is active.  Skip this cap when maxretention is zero,
+	 * which means unlimited retention (no timeout).
 	 */
-	if (MySubscription->retentionactive)
+	if (MySubscription->retentionactive && MySubscription->maxretention > 0)
 		rdt_data->xid_advance_interval = Min(rdt_data->xid_advance_interval,
 											 MySubscription->maxretention);
 }
@@ -5043,7 +5060,6 @@ apply_worker_exit(void)
 void
 maybe_reread_subscription(void)
 {
-	MemoryContext oldctx;
 	Subscription *newsub;
 	bool		started_tx = false;
 
@@ -5058,17 +5074,18 @@ maybe_reread_subscription(void)
 		started_tx = true;
 	}
 
-	/* Ensure allocations in permanent context. */
-	oldctx = MemoryContextSwitchTo(ApplyContext);
-
 	newsub = GetSubscription(MyLogicalRepWorker->subid, true, true);
 
-	/*
-	 * Exit if the subscription was removed. This normally should not happen
-	 * as the worker gets killed during DROP SUBSCRIPTION.
-	 */
-	if (!newsub)
+	if (newsub)
 	{
+		MemoryContextSetParent(newsub->cxt, ApplyContext);
+	}
+	else
+	{
+		/*
+		 * Exit if the subscription was removed. This normally should not
+		 * happen as the worker gets killed during DROP SUBSCRIPTION.
+		 */
 		ereport(LOG,
 				(errmsg("logical replication worker for subscription \"%s\" will stop because the subscription was removed",
 						MySubscription->name)));
@@ -5151,10 +5168,8 @@ maybe_reread_subscription(void)
 	}
 
 	/* Clean old subscription info and switch to new one. */
-	FreeSubscription(MySubscription);
+	MemoryContextDelete(MySubscription->cxt);
 	MySubscription = newsub;
-
-	MemoryContextSwitchTo(oldctx);
 
 	/* Change synchronous commit according to the user's wishes */
 	SetConfigOption("synchronous_commit", MySubscription->synccommit,
@@ -5779,8 +5794,6 @@ run_apply_worker(void)
 void
 InitializeLogRepWorker(void)
 {
-	MemoryContext oldctx;
-
 	/* Run as replica session replication role. */
 	SetConfigOption("session_replication_role", "replica",
 					PGC_SUSET, PGC_S_OVERRIDE);
@@ -5796,12 +5809,11 @@ InitializeLogRepWorker(void)
 	 */
 	SetConfigOption("search_path", "", PGC_SUSET, PGC_S_OVERRIDE);
 
-	/* Load the subscription into persistent memory context. */
 	ApplyContext = AllocSetContextCreate(TopMemoryContext,
 										 "ApplyContext",
 										 ALLOCSET_DEFAULT_SIZES);
+
 	StartTransactionCommand();
-	oldctx = MemoryContextSwitchTo(ApplyContext);
 
 	/*
 	 * Lock the subscription to prevent it from being concurrently dropped,
@@ -5810,8 +5822,14 @@ InitializeLogRepWorker(void)
 	 */
 	LockSharedObject(SubscriptionRelationId, MyLogicalRepWorker->subid, 0,
 					 AccessShareLock);
+
 	MySubscription = GetSubscription(MyLogicalRepWorker->subid, true, true);
-	if (!MySubscription)
+
+	if (MySubscription)
+	{
+		MemoryContextSetParent(MySubscription->cxt, ApplyContext);
+	}
+	else
 	{
 		ereport(LOG,
 				(errmsg("logical replication worker for subscription %u will not start because the subscription was removed during startup",
@@ -5825,7 +5843,6 @@ InitializeLogRepWorker(void)
 	}
 
 	MySubscriptionValid = true;
-	MemoryContextSwitchTo(oldctx);
 
 	if (!MySubscription->enabled)
 	{

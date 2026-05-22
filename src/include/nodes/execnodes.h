@@ -39,6 +39,7 @@
 #include "partitioning/partdefs.h"
 #include "storage/buf.h"
 #include "utils/reltrigger.h"
+#include "utils/typcache.h"
 
 
 /*
@@ -59,6 +60,8 @@ typedef struct ScanKeyData ScanKeyData;
 typedef struct SnapshotData *Snapshot;
 typedef struct SortSupportData *SortSupport;
 typedef struct TIDBitmap TIDBitmap;
+typedef struct NodeInstrumentation NodeInstrumentation;
+typedef struct TriggerInstrumentation TriggerInstrumentation;
 typedef struct TupleConversionMap TupleConversionMap;
 typedef struct TupleDescData *TupleDesc;
 typedef struct Tuplesortstate Tuplesortstate;
@@ -66,7 +69,7 @@ typedef struct Tuplestorestate Tuplestorestate;
 typedef struct TupleTableSlot TupleTableSlot;
 typedef struct TupleTableSlotOps TupleTableSlotOps;
 typedef struct WalUsage WalUsage;
-typedef struct WorkerInstrumentation WorkerInstrumentation;
+typedef struct WorkerNodeInstrumentation WorkerNodeInstrumentation;
 
 
 /* ----------------
@@ -465,6 +468,24 @@ typedef struct MergeActionState
 } MergeActionState;
 
 /*
+ * ForPortionOfState
+ *
+ * Executor state of a FOR PORTION OF operation.
+ */
+typedef struct ForPortionOfState
+{
+	NodeTag		type;
+
+	char	   *fp_rangeName;	/* the column named in FOR PORTION OF */
+	Oid			fp_rangeType;	/* the type of the FOR PORTION OF expression */
+	int			fp_rangeAttno;	/* the attno of the range column */
+	Datum		fp_targetRange; /* the range/multirange from FOR PORTION OF */
+	TypeCacheEntry *fp_leftoverstypcache;	/* type cache entry of the range */
+	TupleTableSlot *fp_Existing;	/* slot to store old tuple */
+	TupleTableSlot *fp_Leftover;	/* slot to store leftover */
+} ForPortionOfState;
+
+/*
  * ResultRelInfo
  *
  * Whenever we update an existing relation, we have to update indexes on the
@@ -533,7 +554,7 @@ typedef struct ResultRelInfo
 	ExprState **ri_TrigWhenExprs;
 
 	/* optional runtime measurements for triggers */
-	Instrumentation *ri_TrigInstrument;
+	TriggerInstrumentation *ri_TrigInstrument;
 
 	/* On-demand created slots for triggers / returning processing */
 	TupleTableSlot *ri_ReturningSlot;	/* for trigger output tuples */
@@ -599,6 +620,9 @@ typedef struct ResultRelInfo
 
 	/* for MERGE, expr state for checking the join condition */
 	ExprState  *ri_MergeJoinCondition;
+
+	/* FOR PORTION OF evaluation state */
+	ForPortionOfState *ri_forPortionOf;
 
 	/* partition check expression state (NULL if not set up yet) */
 	ExprState  *ri_PartitionCheckExpr;
@@ -1184,8 +1208,10 @@ typedef struct PlanState
 	ExecProcNodeMtd ExecProcNodeReal;	/* actual function, if above is a
 										 * wrapper */
 
-	Instrumentation *instrument;	/* Optional runtime stats for this node */
-	WorkerInstrumentation *worker_instrument;	/* per-worker instrumentation */
+	NodeInstrumentation *instrument;	/* Optional runtime stats for this
+										 * node */
+	WorkerNodeInstrumentation *worker_instrument;	/* per-worker
+													 * instrumentation */
 
 	/* Per-worker JIT instrumentation */
 	struct SharedJitInstrumentation *worker_jit_instrument;
@@ -1644,6 +1670,7 @@ typedef struct SeqScanState
 {
 	ScanState	ss;				/* its first field is NodeTag */
 	Size		pscan_len;		/* size of parallel heap scan descriptor */
+	struct SharedSeqScanInstrumentation *sinstrument;
 } SeqScanState;
 
 /* ----------------
@@ -1732,7 +1759,7 @@ typedef struct IndexScanState
 	ExprContext *iss_RuntimeContext;
 	Relation	iss_RelationDesc;
 	struct IndexScanDescData *iss_ScanDesc;
-	IndexScanInstrumentation iss_Instrument;
+	IndexScanInstrumentation *iss_Instrument;
 	SharedIndexScanInstrumentation *iss_SharedInfo;
 
 	/* These are needed for re-checking ORDER BY expr ordering */
@@ -1783,7 +1810,7 @@ typedef struct IndexOnlyScanState
 	ExprContext *ioss_RuntimeContext;
 	Relation	ioss_RelationDesc;
 	struct IndexScanDescData *ioss_ScanDesc;
-	IndexScanInstrumentation ioss_Instrument;
+	IndexScanInstrumentation *ioss_Instrument;
 	SharedIndexScanInstrumentation *ioss_SharedInfo;
 	TupleTableSlot *ioss_TableSlot;
 	Buffer		ioss_VMBuffer;
@@ -1824,7 +1851,7 @@ typedef struct BitmapIndexScanState
 	ExprContext *biss_RuntimeContext;
 	Relation	biss_RelationDesc;
 	struct IndexScanDescData *biss_ScanDesc;
-	IndexScanInstrumentation biss_Instrument;
+	IndexScanInstrumentation *biss_Instrument;
 	SharedIndexScanInstrumentation *biss_SharedInfo;
 } BitmapIndexScanState;
 
@@ -1895,6 +1922,7 @@ typedef struct TidRangeScanState
 	ItemPointerData trss_maxtid;
 	bool		trss_inScan;
 	Size		trss_pscanlen;
+	struct SharedTidRangeScanInstrumentation *trss_sinstrument;
 } TidRangeScanState;
 
 /* ----------------
@@ -2201,8 +2229,11 @@ typedef struct MergeJoinState
  *		hj_NullOuterTupleSlot	prepared null tuple for right/right-anti/full
  *								outer joins
  *		hj_NullInnerTupleSlot	prepared null tuple for left/full outer joins
+ *		hj_NullOuterTupleStore	tuplestore holding outer tuples that have
+ *								null join keys (but must be emitted anyway)
  *		hj_FirstOuterTupleSlot	first tuple retrieved from outer plan
  *		hj_JoinState			current state of ExecHashJoin state machine
+ *		hj_KeepNullTuples		true to keep outer tuples with null join keys
  *		hj_MatchedOuter			true if found a join match for current outer
  *		hj_OuterNotEmpty		true if outer relation known not empty
  * ----------------
@@ -2226,8 +2257,10 @@ typedef struct HashJoinState
 	TupleTableSlot *hj_HashTupleSlot;
 	TupleTableSlot *hj_NullOuterTupleSlot;
 	TupleTableSlot *hj_NullInnerTupleSlot;
+	Tuplestorestate *hj_NullOuterTupleStore;
 	TupleTableSlot *hj_FirstOuterTupleSlot;
 	int			hj_JoinState;
+	bool		hj_KeepNullTuples;
 	bool		hj_MatchedOuter;
 	bool		hj_OuterNotEmpty;
 } HashJoinState;
@@ -2663,6 +2696,9 @@ typedef struct HashState
 
 	FmgrInfo   *skew_hashfunction;	/* lookup data for skew hash function */
 	Oid			skew_collation; /* collation to call skew_hashfunction with */
+
+	Tuplestorestate *null_tuple_store;	/* where to put null-keyed tuples */
+	bool		keep_null_tuples;	/* do we need to save such tuples? */
 
 	/*
 	 * In a parallelized hash join, the leader retains a pointer to the

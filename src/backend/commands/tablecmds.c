@@ -40,6 +40,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_depend.h"
+#include "catalog/pg_extension_d.h"
 #include "catalog/pg_foreign_table.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_largeobject.h"
@@ -57,10 +58,11 @@
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
 #include "catalog/toasting.h"
-#include "commands/cluster.h"
 #include "commands/comment.h"
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
+#include "commands/extension.h"
+#include "commands/repack.h"
 #include "commands/sequence.h"
 #include "commands/tablecmds.h"
 #include "commands/tablespace.h"
@@ -364,6 +366,27 @@ typedef enum addFkConstraintSides
 	addFkReferencingSide,
 	addFkBothSides,
 } addFkConstraintSides;
+
+/*
+ * Hold extension dependencies of one partition index, during
+ * MERGE/SPLIT PARTITION processing.
+ *
+ * collectPartitionIndexExtDeps() builds a list of these entries sorted by
+ * parentIndexOid with exactly one entry per parent partitioned index; the
+ * list is then consumed by applyPartitionIndexExtDeps() to re-record the
+ * same dependencies on the newly created partition's indexes.
+ *
+ * extensionOids is kept sorted ascending so that equality checks between
+ * entries from different partitions can be done in a single pass.
+ * indexOid is carried only so that conflict errors can cite specific
+ * partition index names.
+ */
+typedef struct PartitionIndexExtDepEntry
+{
+	Oid			parentIndexOid; /* OID of the parent partitioned index */
+	Oid			indexOid;		/* OID of a representative partition index */
+	List	   *extensionOids;	/* OIDs of dependent extensions, sorted asc */
+} PartitionIndexExtDepEntry;
 
 /*
  * Partition tables are expected to be dropped when the parent partitioned
@@ -760,6 +783,9 @@ static void ATExecMergePartitions(List **wqueue, AlteredTableInfo *tab, Relation
 static void ATExecSplitPartition(List **wqueue, AlteredTableInfo *tab,
 								 Relation rel, PartitionCmd *cmd,
 								 AlterTableUtilityContext *context);
+static List *collectPartitionIndexExtDeps(List *partitionOids);
+static void applyPartitionIndexExtDeps(Oid newPartOid, List *extDepState);
+static void freePartitionIndexExtDeps(List *extDepState);
 
 /* ----------------------------------------------------------------
  *		DefineRelation
@@ -6058,6 +6084,7 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 			finish_heap_swap(tab->relid, OIDNewHeap,
 							 false, false, true,
 							 !OidIsValid(tab->newTableSpace),
+							 true,	/* reindex */
 							 RecentXmin,
 							 ReadNextMultiXactId(),
 							 persistence);
@@ -6195,7 +6222,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap)
 	EState	   *estate;
 	CommandId	mycid;
 	BulkInsertState bistate;
-	int			ti_options;
+	uint32		ti_options;
 	ExprState  *partqualstate = NULL;
 
 	/*
@@ -6411,7 +6438,8 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap)
 		 * checking all the constraints.
 		 */
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
-		scan = table_beginscan(oldrel, snapshot, 0, NULL);
+		scan = table_beginscan(oldrel, snapshot, 0, NULL,
+							   SO_NONE);
 
 		/*
 		 * Switch to per-tuple memory context and reset it for each tuple
@@ -7628,7 +7656,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 				 * Phase 3 will re-evaluate with hard errors, so the user gets
 				 * an error only if the table has rows.
 				 */
-				if (SOFT_ERROR_OCCURRED(&escontext))
+				if (escontext.error_occurred)
 				{
 					missingIsNull = true;
 					tab->rewrite |= AT_REWRITE_DEFAULT_VAL;
@@ -8137,11 +8165,11 @@ ATExecSetNotNull(List **wqueue, Relation rel, char *conName, char *colName,
 	ccon = linitial(cooked);
 	ObjectAddressSet(address, ConstraintRelationId, ccon->conoid);
 
-	InvokeObjectPostAlterHook(RelationRelationId,
-							  RelationGetRelid(rel), attnum);
-
 	/* Mark pg_attribute.attnotnull for the column and queue validation */
 	set_attnotnull(wqueue, rel, attnum, true, true);
+
+	InvokeObjectPostAlterHook(RelationRelationId,
+							  RelationGetRelid(rel), attnum);
 
 	/*
 	 * Recurse to propagate the constraint to children that don't have one.
@@ -9786,7 +9814,7 @@ ATExecAddIndexConstraint(AlteredTableInfo *tab, Relation rel,
 	char	   *constraintName;
 	char		constraintType;
 	ObjectAddress address;
-	bits16		flags;
+	uint16		flags;
 
 	Assert(IsA(stmt, IndexStmt));
 	Assert(OidIsValid(index_oid));
@@ -12558,6 +12586,8 @@ ATExecAlterFKConstrEnforceability(List **wqueue, ATAlterConstraint *cmdcon,
 		fkconstraint->fk_matchtype = currcon->confmatchtype;
 		fkconstraint->fk_upd_action = currcon->confupdtype;
 		fkconstraint->fk_del_action = currcon->confdeltype;
+		fkconstraint->deferrable = currcon->condeferrable;
+		fkconstraint->initdeferred = currcon->condeferred;
 
 		/* Create referenced triggers */
 		if (currcon->conrelid == fkrelid)
@@ -13873,7 +13903,7 @@ transformFkeyCheckAttrs(Relation pkrel,
  *
  *	Wrapper around find_coercion_pathway() for ATAddForeignKeyConstraint().
  *	Caller has equal regard for binary coercibility and for an exact match.
-*/
+ */
 static CoercionPathType
 findFkeyCast(Oid targetTypeId, Oid sourceTypeId, Oid *funcid)
 {
@@ -13980,8 +14010,8 @@ validateForeignKeyConstraint(char *conname,
 	 */
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
 	slot = table_slot_create(rel, NULL);
-	scan = table_beginscan(rel, snapshot, 0, NULL);
-
+	scan = table_beginscan(rel, snapshot, 0, NULL,
+						   SO_NONE);
 	perTupCxt = AllocSetContextCreate(CurrentMemoryContext,
 									  "validateForeignKeyConstraint",
 									  ALLOCSET_SMALL_SIZES);
@@ -20614,7 +20644,8 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd,
 							  list_length(exceptpuboids),
 							  RelationGetRelationName(attachrel),
 							  pubnames.data),
-				errdetail("The publication EXCEPT clause cannot contain tables that are partitions."));
+				errdetail("The publication EXCEPT clause cannot contain tables that are partitions."),
+				errhint("Change the publication's EXCEPT clause using ALTER PUBLICATION ... SET ALL TABLES."));
 	}
 
 	list_free(exceptpuboids);
@@ -21916,7 +21947,10 @@ ATExecAttachPartitionIdx(List **wqueue, Relation parentIdx, RangeVar *name)
 
 	ObjectAddressSet(address, RelationRelationId, RelationGetRelid(partIdx));
 
-	/* Silently do nothing if already in the right state */
+	/*
+	 * Check if the index is already attached to the correct parent,
+	 * ultimately attempting one round of validation if already the case.
+	 */
 	currParent = partIdx->rd_rel->relispartition ?
 		get_partition_parent(partIdxId, false) : InvalidOid;
 	if (currParent != RelationGetRelid(parentIdx))
@@ -22023,6 +22057,14 @@ ATExecAttachPartitionIdx(List **wqueue, Relation parentIdx, RangeVar *name)
 
 		free_attrmap(attmap);
 
+		validatePartitionedIndex(parentIdx, parentTbl);
+	}
+	else if (!parentIdx->rd_index->indisvalid)
+	{
+		/*
+		 * The index is attached, but the parent is still invalid; see if it
+		 * can be validated now.
+		 */
 		validatePartitionedIndex(parentIdx, parentTbl);
 	}
 
@@ -22594,7 +22636,7 @@ createTableConstraints(List **wqueue, AlteredTableInfo *tab,
 		bool		ccvalid = constr->check[ccnum].ccvalid;
 		Node	   *ccbin_node;
 		bool		found_whole_row;
-		Constraint *constr;
+		Constraint *con;
 
 		/*
 		 * The partitioned table can not have a NO INHERIT check constraint
@@ -22616,19 +22658,19 @@ createTableConstraints(List **wqueue, AlteredTableInfo *tab,
 				 ccname,
 				 RelationGetRelationName(parent_rel));
 
-		constr = makeNode(Constraint);
-		constr->contype = CONSTR_CHECK;
-		constr->conname = pstrdup(ccname);
-		constr->deferrable = false;
-		constr->initdeferred = false;
-		constr->is_enforced = ccenforced;
-		constr->skip_validation = !ccvalid;
-		constr->initially_valid = ccvalid;
-		constr->is_no_inherit = ccnoinherit;
-		constr->raw_expr = NULL;
-		constr->cooked_expr = nodeToString(ccbin_node);
-		constr->location = -1;
-		constraints = lappend(constraints, constr);
+		con = makeNode(Constraint);
+		con->contype = CONSTR_CHECK;
+		con->conname = pstrdup(ccname);
+		con->deferrable = false;
+		con->initdeferred = false;
+		con->is_enforced = ccenforced;
+		con->skip_validation = !ccvalid;
+		con->initially_valid = ccvalid;
+		con->is_no_inherit = ccnoinherit;
+		con->raw_expr = NULL;
+		con->cooked_expr = nodeToString(ccbin_node);
+		con->location = -1;
+		constraints = lappend(constraints, con);
 	}
 
 	/* Install all CHECK constraints. */
@@ -22831,7 +22873,7 @@ MergePartitionsMoveRows(List **wqueue, List *mergingPartitions, Relation newPart
 	ListCell   *ltab;
 
 	/* The FSM is empty, so don't bother using it. */
-	int			ti_options = TABLE_INSERT_SKIP_FSM;
+	uint32		ti_options = TABLE_INSERT_SKIP_FSM;
 	BulkInsertState bistate;	/* state of bulk inserts for partition */
 	TupleTableSlot *dstslot;
 
@@ -22881,7 +22923,8 @@ MergePartitionsMoveRows(List **wqueue, List *mergingPartitions, Relation newPart
 
 		/* Scan through the rows. */
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
-		scan = table_beginscan(mergingPartition, snapshot, 0, NULL);
+		scan = table_beginscan(mergingPartition, snapshot, 0, NULL,
+							   SO_NONE);
 
 		/*
 		 * Switch to per-tuple memory context and reset it for each tuple
@@ -22995,6 +23038,224 @@ detachPartitionTable(Relation parent_rel, Relation child_rel, Oid defaultPartOid
 }
 
 /*
+ * equal_oid_lists: return true if two OID lists, each sorted in ascending
+ * order, contain the same OIDs in the same order.
+ */
+static bool
+equal_oid_lists(const List *a, const List *b)
+{
+	ListCell   *la,
+			   *lb;
+
+	if (list_length(a) != list_length(b))
+		return false;
+
+	forboth(la, a, lb, b)
+	{
+		if (lfirst_oid(la) != lfirst_oid(lb))
+			return false;
+	}
+	return true;
+}
+
+/*
+ * Comparator for list_sort() on a list of PartitionIndexExtDepEntry *.
+ * Orders by parentIndexOid, then by indexOid as a tiebreaker so conflict
+ * reports for different parent indexes are deterministic.
+ */
+static int
+cmp_partition_index_ext_dep(const ListCell *a, const ListCell *b)
+{
+	const PartitionIndexExtDepEntry *ea = lfirst(a);
+	const PartitionIndexExtDepEntry *eb = lfirst(b);
+
+	if (ea->parentIndexOid != eb->parentIndexOid)
+		return pg_cmp_u32(ea->parentIndexOid, eb->parentIndexOid);
+	return pg_cmp_u32(ea->indexOid, eb->indexOid);
+}
+
+/*
+ * collectPartitionIndexExtDeps: collect extension dependencies from indexes
+ * on the given partitions.
+ *
+ * For each partition index that has a parent partitioned index, we collect
+ * extension dependencies. All source partition indexes sharing the same
+ * parent partitioned index must depend on exactly the same set of
+ * extensions; otherwise an error is raised so that we neither silently drop
+ * nor silently add dependencies on the merged partition's index.
+ *
+ * Indexes that don't have a parent partitioned index (i.e., indexes created
+ * directly on a partition without a corresponding parent index) are skipped.
+ *
+ * The returned list is sorted by parentIndexOid with exactly one entry per
+ * parent partitioned index, so applyPartitionIndexExtDeps() can scan it
+ * linearly.
+ */
+static List *
+collectPartitionIndexExtDeps(List *partitionOids)
+{
+	List	   *collected = NIL;
+	List	   *result = NIL;
+	PartitionIndexExtDepEntry *prev = NULL;
+
+	/*
+	 * Phase 1: collect one entry per (partition index -> parent index) pair,
+	 * with its extension dependency OIDs sorted ascending.
+	 */
+	foreach_oid(partOid, partitionOids)
+	{
+		Relation	partRel;
+		List	   *indexList;
+
+		/*
+		 * Use NoLock since the caller already holds AccessExclusiveLock on
+		 * these partitions.
+		 */
+		partRel = table_open(partOid, NoLock);
+		indexList = RelationGetIndexList(partRel);
+
+		foreach_oid(indexOid, indexList)
+		{
+			Oid			parentIndexOid;
+			PartitionIndexExtDepEntry *entry;
+
+			if (!get_rel_relispartition(indexOid))
+				continue;
+
+			parentIndexOid = get_partition_parent(indexOid, true);
+			if (!OidIsValid(parentIndexOid))
+				continue;
+
+			entry = palloc(sizeof(PartitionIndexExtDepEntry));
+			entry->parentIndexOid = parentIndexOid;
+			entry->indexOid = indexOid;
+			entry->extensionOids = getAutoExtensionsOfObject(RelationRelationId,
+															 indexOid);
+			list_sort(entry->extensionOids, list_oid_cmp);
+
+			collected = lappend(collected, entry);
+		}
+
+		list_free(indexList);
+		table_close(partRel, NoLock);
+	}
+
+	/*
+	 * Phase 2: sort by parentIndexOid so entries sharing a parent index sit
+	 * adjacent.
+	 */
+	list_sort(collected, cmp_partition_index_ext_dep);
+
+	/*
+	 * Phase 3: single linear pass verifying that adjacent entries sharing a
+	 * parent index have identical extension dependencies, and keeping one
+	 * representative entry per parent index.
+	 */
+	foreach_ptr(PartitionIndexExtDepEntry, entry, collected)
+	{
+		if (prev != NULL && prev->parentIndexOid == entry->parentIndexOid)
+		{
+			if (!equal_oid_lists(prev->extensionOids, entry->extensionOids))
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot merge partitions with conflicting extension dependencies"),
+						 errdetail("Partition indexes \"%s\" and \"%s\" depend on different extensions.",
+								   get_rel_name(prev->indexOid),
+								   get_rel_name(entry->indexOid))));
+
+			/* Duplicate entry for the same parent index; discard. */
+			list_free(entry->extensionOids);
+			pfree(entry);
+			continue;
+		}
+
+		result = lappend(result, entry);
+		prev = entry;
+	}
+
+	list_free(collected);
+
+	return result;
+}
+
+/*
+ * applyPartitionIndexExtDeps: apply collected extension dependencies to
+ * indexes on a new partition.
+ *
+ * For each index on the new partition, look up its parent index in the
+ * extDepState list. If found, record extension dependencies on the new index.
+ * extDepState is sorted by parentIndexOid, so the inner scan can bail out
+ * as soon as it passes the target OID.
+ */
+static void
+applyPartitionIndexExtDeps(Oid newPartOid, List *extDepState)
+{
+	Relation	partRel;
+	List	   *indexList;
+
+	if (extDepState == NIL)
+		return;
+
+	/*
+	 * Use NoLock since the caller already holds AccessExclusiveLock on the
+	 * new partition.
+	 */
+	partRel = table_open(newPartOid, NoLock);
+	indexList = RelationGetIndexList(partRel);
+
+	foreach_oid(indexOid, indexList)
+	{
+		Oid			parentIdxOid;
+
+		if (!get_rel_relispartition(indexOid))
+			continue;
+
+		parentIdxOid = get_partition_parent(indexOid, true);
+		if (!OidIsValid(parentIdxOid))
+			continue;
+
+		foreach_ptr(PartitionIndexExtDepEntry, entry, extDepState)
+		{
+			ObjectAddress indexAddr;
+
+			if (entry->parentIndexOid > parentIdxOid)
+				break;
+			if (entry->parentIndexOid < parentIdxOid)
+				continue;
+
+			ObjectAddressSet(indexAddr, RelationRelationId, indexOid);
+
+			foreach_oid(extOid, entry->extensionOids)
+			{
+				ObjectAddress extAddr;
+
+				ObjectAddressSet(extAddr, ExtensionRelationId, extOid);
+				recordDependencyOn(&indexAddr, &extAddr,
+								   DEPENDENCY_AUTO_EXTENSION);
+			}
+			break;
+		}
+	}
+
+	list_free(indexList);
+	table_close(partRel, NoLock);
+}
+
+/*
+ * freePartitionIndexExtDeps: free memory allocated by collectPartitionIndexExtDeps.
+ */
+static void
+freePartitionIndexExtDeps(List *extDepState)
+{
+	foreach_ptr(PartitionIndexExtDepEntry, entry, extDepState)
+	{
+		list_free(entry->extensionOids);
+		pfree(entry);
+	}
+	list_free(extDepState);
+}
+
+/*
  * ALTER TABLE <name> MERGE PARTITIONS <partition-list> INTO <partition-name>
  */
 static void
@@ -23003,6 +23264,7 @@ ATExecMergePartitions(List **wqueue, AlteredTableInfo *tab, Relation rel,
 {
 	Relation	newPartRel;
 	List	   *mergingPartitions = NIL;
+	List	   *extDepState = NIL;
 	Oid			defaultPartOid;
 	Oid			existingRelid;
 	Oid			ownerId = InvalidOid;
@@ -23092,6 +23354,13 @@ ATExecMergePartitions(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	defaultPartOid =
 		get_default_oid_from_partdesc(RelationGetPartitionDesc(rel, true));
 
+	/*
+	 * Collect extension dependencies from indexes on the merging partitions.
+	 * We must do this before detaching them, so we can restore the
+	 * dependencies on the new partition's indexes later.
+	 */
+	extDepState = collectPartitionIndexExtDeps(mergingPartitions);
+
 	/* Detach all merging partitions. */
 	foreach_oid(mergingPartitionOid, mergingPartitions)
 	{
@@ -23169,6 +23438,15 @@ ATExecMergePartitions(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	 */
 	attachPartitionTable(NULL, rel, newPartRel, cmd->bound);
 
+	/*
+	 * Apply extension dependencies to the new partition's indexes. This
+	 * preserves any "DEPENDS ON EXTENSION" settings from the merged
+	 * partitions.
+	 */
+	applyPartitionIndexExtDeps(RelationGetRelid(newPartRel), extDepState);
+
+	freePartitionIndexExtDeps(extDepState);
+
 	/* Keep the lock until commit. */
 	table_close(newPartRel, NoLock);
 
@@ -23221,7 +23499,7 @@ createSplitPartitionContext(Relation partRel)
  * deleteSplitPartitionContext: delete context for partition
  */
 static void
-deleteSplitPartitionContext(SplitPartitionContext *pc, List **wqueue, int ti_options)
+deleteSplitPartitionContext(SplitPartitionContext *pc, List **wqueue, uint32 ti_options)
 {
 	ListCell   *ltab;
 
@@ -23263,7 +23541,7 @@ SplitPartitionMoveRows(List **wqueue, Relation rel, Relation splitRel,
 					   List *partlist, List *newPartRels)
 {
 	/* The FSM is empty, so don't bother using it. */
-	int			ti_options = TABLE_INSERT_SKIP_FSM;
+	uint32		ti_options = TABLE_INSERT_SKIP_FSM;
 	CommandId	mycid;
 	EState	   *estate;
 	ListCell   *listptr,
@@ -23345,7 +23623,8 @@ SplitPartitionMoveRows(List **wqueue, Relation rel, Relation splitRel,
 
 	/* Scan through the rows. */
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
-	scan = table_beginscan(splitRel, snapshot, 0, NULL);
+	scan = table_beginscan(splitRel, snapshot, 0, NULL,
+						   SO_NONE);
 
 	/*
 	 * Switch to per-tuple memory context and reset it for each tuple
@@ -23382,7 +23661,7 @@ SplitPartitionMoveRows(List **wqueue, Relation rel, Relation splitRel,
 			else
 				ereport(ERROR,
 						errcode(ERRCODE_CHECK_VIOLATION),
-						errmsg("can not find partition for split partition row"),
+						errmsg("cannot find partition for split partition row"),
 						errtable(splitRel));
 		}
 
@@ -23462,11 +23741,13 @@ ATExecSplitPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	bool		isSameName = false;
 	char		tmpRelName[NAMEDATALEN];
 	List	   *newPartRels = NIL;
+	List	   *extDepState = NIL;
 	ObjectAddress object;
 	Oid			defaultPartOid;
 	Oid			save_userid;
 	int			save_sec_context;
 	int			save_nestlevel;
+	List	   *splitPartList;
 
 	defaultPartOid = get_default_oid_from_partdesc(RelationGetPartitionDesc(rel, true));
 
@@ -23498,6 +23779,16 @@ ATExecSplitPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 					errcode(ERRCODE_DUPLICATE_TABLE),
 					errmsg("relation \"%s\" already exists", sps->name->relname));
 	}
+
+	/*
+	 * Collect extension dependencies from indexes on the split partition. We
+	 * must do this before detaching it, so we can restore the dependencies on
+	 * the new partitions' indexes later.
+	 */
+	splitPartList = list_make1_oid(splitRelOid);
+
+	extDepState = collectPartitionIndexExtDeps(splitPartList);
+	list_free(splitPartList);
 
 	/* Detach the split partition. */
 	detachPartitionTable(rel, splitRel, defaultPartOid);
@@ -23578,9 +23869,19 @@ ATExecSplitPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		 * needed.
 		 */
 		attachPartitionTable(NULL, rel, newPartRel, sps->bound);
+
+		/*
+		 * Apply extension dependencies to the new partition's indexes. This
+		 * preserves any "DEPENDS ON EXTENSION" settings from the split
+		 * partition.
+		 */
+		applyPartitionIndexExtDeps(RelationGetRelid(newPartRel), extDepState);
+
 		/* Keep the lock until commit. */
 		table_close(newPartRel, NoLock);
 	}
+
+	freePartitionIndexExtDeps(extDepState);
 
 	/* Drop the split partition. */
 	object.classId = RelationRelationId;

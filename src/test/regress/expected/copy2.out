@@ -204,6 +204,9 @@ COPY x from stdin WHERE a = row_number() over(b);
 ERROR:  window functions are not allowed in COPY FROM WHERE conditions
 LINE 1: COPY x from stdin WHERE a = row_number() over(b);
                                     ^
+COPY x from stdin WHERE tableoid = 'x'::regclass;
+ERROR:  system columns are not supported in COPY FROM WHERE conditions
+DETAIL:  Column "tableoid" is a system column.
 -- check results of copy in
 SELECT * FROM x;
    a   | b  |     c      |   d    |          e           
@@ -799,6 +802,10 @@ CREATE DOMAIN d_int_positive_maybe_null AS integer CHECK (value > 0);
 CREATE TABLE t_on_error_null (a d_int_not_null, b d_int_positive_maybe_null, c integer);
 \pset null NULL
 COPY t_on_error_null FROM STDIN WITH (on_error set_null); -- fail
+ERROR:  domain d_int_not_null does not allow null values
+DETAIL:  ON_ERROR SET_NULL cannot be applied because column "a" (domain d_int_not_null) does not accept null values.
+CONTEXT:  COPY t_on_error_null, line 1, column a: null input
+COPY t_on_error_null(c, a) FROM STDIN WITH (on_error set_null); -- fail
 ERROR:  domain d_int_not_null does not allow null values
 DETAIL:  ON_ERROR SET_NULL cannot be applied because column "a" (domain d_int_not_null) does not accept null values.
 CONTEXT:  COPY t_on_error_null, line 1, column a: null input

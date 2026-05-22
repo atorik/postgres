@@ -273,7 +273,7 @@ heap_compute_data_size(TupleDesc tupleDesc,
  */
 static inline void
 fill_val(CompactAttribute *att,
-		 bits8 **bit,
+		 uint8 **bit,
 		 int *bitmask,
 		 char **dataP,
 		 uint16 *infomask,
@@ -401,9 +401,9 @@ void
 heap_fill_tuple(TupleDesc tupleDesc,
 				const Datum *values, const bool *isnull,
 				char *data, Size data_size,
-				uint16 *infomask, bits8 *bit)
+				uint16 *infomask, uint8 *bit)
 {
-	bits8	   *bitP;
+	uint8	   *bitP;
 	int			bitmask;
 	int			i;
 	int			numberOfAttributes = tupleDesc->natts;
@@ -513,7 +513,7 @@ nocachegetattr(HeapTuple tup,
 	CompactAttribute *cattr;
 	HeapTupleHeader td = tup->t_data;
 	char	   *tp;				/* ptr to data part of tuple */
-	bits8	   *bp = td->t_bits;	/* ptr to null bitmap in tuple */
+	uint8	   *bp = td->t_bits;	/* ptr to null bitmap in tuple */
 	int			off;			/* current offset within data */
 	int			startAttr;
 	int			firstNullAttr;
@@ -589,14 +589,6 @@ nocachegetattr(HeapTuple tup,
 
 			cattr = TupleDescCompactAttr(tupleDesc, i);
 			attlen = cattr->attlen;
-
-			/*
-			 * cstrings don't exist in heap tuples.  Use pg_assume to instruct
-			 * the compiler not to emit the cstring-related code in
-			 * att_addlength_pointer().
-			 */
-			pg_assume(attlen > 0 || attlen == -1);
-
 			off = att_pointer_alignby(off,
 									  cattr->attalignby,
 									  attlen,
@@ -613,10 +605,6 @@ nocachegetattr(HeapTuple tup,
 
 			cattr = TupleDescCompactAttr(tupleDesc, i);
 			attlen = cattr->attlen;
-
-			/* As above, heaptuples have no cstrings */
-			pg_assume(attlen > 0 || attlen == -1);
-
 			off = att_pointer_alignby(off, cattr->attalignby, attlen,
 									  tp + off);
 			off = att_addlength_pointer(off, attlen, tp + off);
@@ -766,7 +754,7 @@ expand_tuple(HeapTuple *targetHeapTuple,
 	Size		targetDataLen;
 	Size		len;
 	int			hoff;
-	bits8	   *nullBits = NULL;
+	uint8	   *nullBits = NULL;
 	int			bitMask = 0;
 	char	   *targetData;
 	uint16	   *infoMask;
@@ -878,7 +866,7 @@ expand_tuple(HeapTuple *targetHeapTuple,
 		/* We also make sure that t_ctid is invalid unless explicitly set */
 		ItemPointerSetInvalid(&(targetTHeader->t_ctid));
 		if (targetNullLen > 0)
-			nullBits = (bits8 *) ((char *) (*targetHeapTuple)->t_data
+			nullBits = (uint8 *) ((char *) (*targetHeapTuple)->t_data
 								  + offsetof(HeapTupleHeaderData, t_bits));
 		targetData = (char *) (*targetHeapTuple)->t_data + hoff;
 		infoMask = &(targetTHeader->t_infomask);
@@ -896,7 +884,7 @@ expand_tuple(HeapTuple *targetHeapTuple,
 		/* Same macro works for MinimalTuples */
 		HeapTupleHeaderSetNatts(*targetMinimalTuple, natts);
 		if (targetNullLen > 0)
-			nullBits = (bits8 *) ((char *) *targetMinimalTuple
+			nullBits = (uint8 *) ((char *) *targetMinimalTuple
 								  + offsetof(MinimalTupleData, t_bits));
 		targetData = (char *) *targetMinimalTuple + hoff;
 		infoMask = &((*targetMinimalTuple)->t_infomask);
@@ -1274,7 +1262,7 @@ heap_deform_tuple(HeapTuple tuple, TupleDesc tupleDesc,
 	int			attnum;
 	char	   *tp;				/* ptr to tuple data */
 	uint32		off;			/* offset in tuple data */
-	bits8	   *bp = tup->t_bits;	/* ptr to null bitmap in tuple */
+	uint8	   *bp = tup->t_bits;	/* ptr to null bitmap in tuple */
 	int			firstNonCacheOffsetAttr;
 	int			firstNullAttr;
 

@@ -524,6 +524,8 @@ static void get_rte_alias(RangeTblEntry *rte, int varno, bool use_as,
 						  deparse_context *context);
 static void get_column_alias_list(deparse_columns *colinfo,
 								  deparse_context *context);
+static void get_for_portion_of(ForPortionOfExpr *forPortionOf,
+							   deparse_context *context);
 static void get_from_clause_coldeflist(RangeTblFunction *rtfunc,
 									   deparse_columns *colinfo,
 									   deparse_context *context);
@@ -545,7 +547,7 @@ static void add_cast_to(StringInfo buf, Oid typid);
 static char *generate_qualified_type_name(Oid typid);
 static text *string_to_text(char *str);
 static char *flatten_reloptions(Oid relid);
-static void get_reloptions(StringInfo buf, Datum reloptions);
+void		get_reloptions(StringInfo buf, Datum reloptions);
 static void get_json_path_spec(Node *path_spec, deparse_context *context,
 							   bool showimplicit);
 static void get_json_table_columns(TableFunc *tf, JsonTablePathScan *scan,
@@ -1255,7 +1257,7 @@ pg_get_indexdef_columns(Oid indexrelid, bool pretty)
 
 /* Internal version, extensible with flags to control its behavior */
 char *
-pg_get_indexdef_columns_extended(Oid indexrelid, bits16 flags)
+pg_get_indexdef_columns_extended(Oid indexrelid, uint16 flags)
 {
 	bool		pretty = ((flags & RULE_INDEXDEF_PRETTY) != 0);
 	bool		keys_only = ((flags & RULE_INDEXDEF_KEYS_ONLY) != 0);
@@ -1689,7 +1691,7 @@ make_propgraphdef_elements(StringInfo buf, Oid pgrelid, char pgekind)
 			first = false;
 		}
 		else
-			appendStringInfo(buf, ",\n");
+			appendStringInfoString(buf, ",\n");
 
 		relname = get_rel_name(pgeform->pgerelid);
 		if (relname && strcmp(relname, NameStr(pgeform->pgealias)) == 0)
@@ -1705,7 +1707,7 @@ make_propgraphdef_elements(StringInfo buf, Oid pgrelid, char pgekind)
 		{
 			appendStringInfoString(buf, " KEY (");
 			decompile_column_index_array(datum, pgeform->pgerelid, false, buf);
-			appendStringInfoString(buf, ")");
+			appendStringInfoChar(buf, ')');
 		}
 		else
 			elog(ERROR, "null pgekey for element %u", pgeform->oid);
@@ -1739,7 +1741,7 @@ make_propgraphdef_elements(StringInfo buf, Oid pgrelid, char pgekind)
 				decompile_column_index_array(srckey, pgeform->pgerelid, false, buf);
 				appendStringInfo(buf, ") REFERENCES %s (", quote_identifier(NameStr(pgeform2->pgealias)));
 				decompile_column_index_array(srcref, pgeform2->pgerelid, false, buf);
-				appendStringInfoString(buf, ")");
+				appendStringInfoChar(buf, ')');
 			}
 			else
 				appendStringInfo(buf, " %s ", quote_identifier(NameStr(pgeform2->pgealias)));
@@ -1756,7 +1758,7 @@ make_propgraphdef_elements(StringInfo buf, Oid pgrelid, char pgekind)
 				decompile_column_index_array(destkey, pgeform->pgerelid, false, buf);
 				appendStringInfo(buf, ") REFERENCES %s (", quote_identifier(NameStr(pgeform2->pgealias)));
 				decompile_column_index_array(destref, pgeform2->pgerelid, false, buf);
-				appendStringInfoString(buf, ")");
+				appendStringInfoChar(buf, ')');
 			}
 			else
 				appendStringInfo(buf, " %s", quote_identifier(NameStr(pgeform2->pgealias)));
@@ -1766,10 +1768,25 @@ make_propgraphdef_elements(StringInfo buf, Oid pgrelid, char pgekind)
 		make_propgraphdef_labels(buf, pgeform->oid, NameStr(pgeform->pgealias), pgeform->pgerelid);
 	}
 	if (!first)
-		appendStringInfo(buf, "\n    )");
+		appendStringInfoString(buf, "\n    )");
 
 	systable_endscan(scan);
 	table_close(pgerel, AccessShareLock);
+}
+
+struct oid_str_pair
+{
+	Oid			oid;
+	char	   *str;
+};
+
+static int
+list_oid_str_pair_cmp_by_str(const ListCell *p1, const ListCell *p2)
+{
+	struct oid_str_pair *v1 = lfirst(p1);
+	struct oid_str_pair *v2 = lfirst(p2);
+
+	return strcmp(v1->str, v2->str);
 }
 
 /*
@@ -1784,6 +1801,7 @@ make_propgraphdef_labels(StringInfo buf, Oid elid, const char *elalias, Oid elre
 	SysScanDesc scan;
 	int			count;
 	HeapTuple	tup;
+	List	   *label_list = NIL;
 
 	pglrel = table_open(PropgraphElementLabelRelationId, AccessShareLock);
 
@@ -1792,38 +1810,51 @@ make_propgraphdef_labels(StringInfo buf, Oid elid, const char *elalias, Oid elre
 				BTEqualStrategyNumber, F_OIDEQ,
 				ObjectIdGetDatum(elid));
 
-	count = 0;
-	scan = systable_beginscan(pglrel, PropgraphElementLabelElementLabelIndexId, true, NULL, 1, scankey);
-	while ((tup = systable_getnext(scan)))
-	{
-		count++;
-	}
-	systable_endscan(scan);
-
+	/*
+	 * We want to output the labels in a deterministic order.  So we first
+	 * read all the data, then sort, then print it.
+	 */
 	scan = systable_beginscan(pglrel, PropgraphElementLabelElementLabelIndexId, true, NULL, 1, scankey);
 
 	while ((tup = systable_getnext(scan)))
 	{
 		Form_pg_propgraph_element_label pgelform = (Form_pg_propgraph_element_label) GETSTRUCT(tup);
-		const char *labelname;
+		struct oid_str_pair *osp;
 
-		labelname = get_propgraph_label_name(pgelform->pgellabelid);
+		osp = palloc_object(struct oid_str_pair);
+		osp->oid = pgelform->oid;
+		osp->str = get_propgraph_label_name(pgelform->pgellabelid);
 
-		if (strcmp(labelname, elalias) == 0)
-		{
-			/* If the default label is the only label, don't print anything. */
-			if (count != 1)
-				appendStringInfo(buf, " DEFAULT LABEL");
-		}
-		else
-			appendStringInfo(buf, " LABEL %s", quote_identifier(labelname));
-
-		make_propgraphdef_properties(buf, pgelform->oid, elrelid);
+		label_list = lappend(label_list, osp);
 	}
 
 	systable_endscan(scan);
-
 	table_close(pglrel, AccessShareLock);
+
+	count = list_length(label_list);
+
+	/* Each element has at least one label. */
+	Assert(count > 0);
+
+	/*
+	 * It is enough for the comparison function to compare just labels, since
+	 * all the labels of an element table should have distinct names.
+	 */
+	list_sort(label_list, list_oid_str_pair_cmp_by_str);
+
+	foreach_ptr(struct oid_str_pair, osp, label_list)
+	{
+		if (strcmp(osp->str, elalias) == 0)
+		{
+			/* If the default label is the only label, don't print anything. */
+			if (count != 1)
+				appendStringInfoString(buf, " DEFAULT LABEL");
+		}
+		else
+			appendStringInfo(buf, " LABEL %s", quote_identifier(osp->str));
+
+		make_propgraphdef_properties(buf, osp->oid, elrelid);
+	}
 }
 
 /*
@@ -1901,7 +1932,7 @@ make_propgraphdef_properties(StringInfo buf, Oid ellabelid, Oid elrelid)
 
 		context = deparse_context_for(get_relation_name(elrelid), elrelid);
 
-		appendStringInfo(buf, " PROPERTIES (");
+		appendStringInfoString(buf, " PROPERTIES (");
 
 		foreach(lc, outlist)
 		{
@@ -1912,20 +1943,20 @@ make_propgraphdef_properties(StringInfo buf, Oid ellabelid, Oid elrelid)
 			if (first)
 				first = false;
 			else
-				appendStringInfo(buf, ", ");
+				appendStringInfoString(buf, ", ");
 
 			if (IsA(expr, Var) && strcmp(propname, get_attname(elrelid, castNode(Var, expr)->varattno, false)) == 0)
-				appendStringInfo(buf, "%s", quote_identifier(propname));
+				appendStringInfoString(buf, quote_identifier(propname));
 			else
 				appendStringInfo(buf, "%s AS %s",
 								 deparse_expression_pretty(expr, context, false, false, 0, 0),
 								 quote_identifier(propname));
 		}
 
-		appendStringInfo(buf, ")");
+		appendStringInfoChar(buf, ')');
 	}
 	else
-		appendStringInfo(buf, " NO PROPERTIES");
+		appendStringInfoString(buf, " NO PROPERTIES");
 }
 
 /*
@@ -7524,6 +7555,9 @@ get_update_query_def(Query *query, deparse_context *context)
 					 only_marker(rte),
 					 generate_relation_name(rte->relid, NIL));
 
+	/* Print the FOR PORTION OF, if needed */
+	get_for_portion_of(query->forPortionOf, context);
+
 	/* Print the relation alias, if needed */
 	get_rte_alias(rte, query->resultRelation, false, context);
 
@@ -7727,6 +7761,9 @@ get_delete_query_def(Query *query, deparse_context *context)
 	appendStringInfo(buf, "DELETE FROM %s%s",
 					 only_marker(rte),
 					 generate_relation_name(rte->relid, NIL));
+
+	/* Print the FOR PORTION OF, if needed */
+	get_for_portion_of(query->forPortionOf, context);
 
 	/* Print the relation alias, if needed */
 	get_rte_alias(rte, query->resultRelation, false, context);
@@ -7971,7 +8008,7 @@ get_graph_label_expr(Node *label_expr, deparse_context *context)
 					if (!first)
 					{
 						if (be->boolop == OR_EXPR)
-							appendStringInfoString(buf, "|");
+							appendStringInfoChar(buf, '|');
 					}
 					else
 						first = false;
@@ -8004,7 +8041,7 @@ get_path_pattern_expr_def(List *path_pattern_expr, deparse_context *context)
 		switch (gep->kind)
 		{
 			case VERTEX_PATTERN:
-				appendStringInfoString(buf, "(");
+				appendStringInfoChar(buf, '(');
 				break;
 			case EDGE_PATTERN_LEFT:
 				appendStringInfoString(buf, "<-[");
@@ -8014,7 +8051,7 @@ get_path_pattern_expr_def(List *path_pattern_expr, deparse_context *context)
 				appendStringInfoString(buf, "-[");
 				break;
 			case PAREN_EXPR:
-				appendStringInfoString(buf, "(");
+				appendStringInfoChar(buf, '(');
 				break;
 		}
 
@@ -8049,7 +8086,7 @@ get_path_pattern_expr_def(List *path_pattern_expr, deparse_context *context)
 		switch (gep->kind)
 		{
 			case VERTEX_PATTERN:
-				appendStringInfoString(buf, ")");
+				appendStringInfoChar(buf, ')');
 				break;
 			case EDGE_PATTERN_LEFT:
 			case EDGE_PATTERN_ANY:
@@ -8059,7 +8096,7 @@ get_path_pattern_expr_def(List *path_pattern_expr, deparse_context *context)
 				appendStringInfoString(buf, "]->");
 				break;
 			case PAREN_EXPR:
-				appendStringInfoString(buf, ")");
+				appendStringInfoChar(buf, ')');
 				break;
 		}
 
@@ -12244,6 +12281,21 @@ get_json_constructor(JsonConstructorExpr *ctor, deparse_context *context,
 		get_json_agg_constructor(ctor, context, "JSON_ARRAYAGG", false);
 		return;
 	}
+	else if (ctor->type == JSCTOR_JSON_ARRAY_QUERY)
+	{
+		Query	   *query = castNode(Query, ctor->orig_query);
+
+		appendStringInfo(buf, "JSON_ARRAY(");
+
+		get_query_def(query, buf, context->namespaces, NULL, false,
+					  context->prettyFlags, context->wrapColumn,
+					  context->indentLevel);
+
+		get_json_constructor_options(ctor, buf);
+		appendStringInfoChar(buf, ')');
+
+		return;
+	}
 
 	switch (ctor->type)
 	{
@@ -13054,28 +13106,21 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 				get_graph_pattern_def(rte->graph_pattern, context);
 				appendStringInfoString(buf, " COLUMNS (");
 				{
-					ListCell   *lc;
 					bool		first = true;
 
-					foreach(lc, rte->graph_table_columns)
+					foreach_node(TargetEntry, te, rte->graph_table_columns)
 					{
-						TargetEntry *te = lfirst_node(TargetEntry, lc);
-						deparse_context context = {0};
-
 						if (!first)
 							appendStringInfoString(buf, ", ");
 						else
 							first = false;
 
-						context.buf = buf;
-
-						get_rule_expr((Node *) te->expr, &context, false);
+						get_rule_expr((Node *) te->expr, context, false);
 						appendStringInfoString(buf, " AS ");
 						appendStringInfoString(buf, quote_identifier(te->resname));
 					}
 				}
-				appendStringInfoString(buf, ")");
-				appendStringInfoString(buf, ")");
+				appendStringInfoString(buf, "))");
 				break;
 			case RTE_VALUES:
 				/* Values list RTE */
@@ -13299,6 +13344,39 @@ get_rte_alias(RangeTblEntry *rte, int varno, bool use_as,
 		appendStringInfo(context->buf, "%s%s",
 						 use_as ? " AS " : " ",
 						 quote_identifier(refname));
+}
+
+/*
+ * get_for_portion_of - print FOR PORTION OF if needed
+ * XXX: Newlines would help here, at least when pretty-printing. But then the
+ * alias and SET will be on their own line with a leading space.
+ */
+static void
+get_for_portion_of(ForPortionOfExpr *forPortionOf, deparse_context *context)
+{
+	if (forPortionOf)
+	{
+		appendStringInfo(context->buf, " FOR PORTION OF %s",
+						 quote_identifier(forPortionOf->range_name));
+
+		/*
+		 * Try to write it as FROM ... TO ... if we received it that way,
+		 * otherwise (targetRange).
+		 */
+		if (forPortionOf->targetFrom && forPortionOf->targetTo)
+		{
+			appendStringInfoString(context->buf, " FROM ");
+			get_rule_expr(forPortionOf->targetFrom, context, false);
+			appendStringInfoString(context->buf, " TO ");
+			get_rule_expr(forPortionOf->targetTo, context, false);
+		}
+		else
+		{
+			appendStringInfoString(context->buf, " (");
+			get_rule_expr(forPortionOf->targetRange, context, false);
+			appendStringInfoChar(context->buf, ')');
+		}
+	}
 }
 
 /*
@@ -13798,23 +13876,15 @@ generate_qualified_relation_name(Oid relid)
 {
 	HeapTuple	tp;
 	Form_pg_class reltup;
-	char	   *relname;
-	char	   *nspname;
 	char	   *result;
 
 	tp = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for relation %u", relid);
 	reltup = (Form_pg_class) GETSTRUCT(tp);
-	relname = NameStr(reltup->relname);
 
-	nspname = get_namespace_name_or_temp(reltup->relnamespace);
-	if (!nspname)
-		elog(ERROR, "cache lookup failed for namespace %u",
-			 reltup->relnamespace);
-
-	result = quote_qualified_identifier(nspname, relname);
-
+	result = get_qualified_objname(reltup->relnamespace,
+								   NameStr(reltup->relname));
 	ReleaseSysCache(tp);
 
 	return result;
@@ -14170,7 +14240,7 @@ string_to_text(char *str)
 /*
  * Generate a C string representing a relation options from text[] datum.
  */
-static void
+void
 get_reloptions(StringInfo buf, Datum reloptions)
 {
 	Datum	   *options;

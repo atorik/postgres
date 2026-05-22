@@ -783,6 +783,33 @@ UPDATE errtst SET a = 'aaaa', b = NULL WHERE a = 'aaa';
 SET SESSION AUTHORIZATION regress_priv_user1;
 DROP TABLE errtst;
 
+-- test column-level privileges on the range used in FOR PORTION OF
+SET SESSION AUTHORIZATION regress_priv_user1;
+CREATE TABLE t1 (
+  c1 int4range,
+  valid_at tsrange,
+	CONSTRAINT t1pk PRIMARY KEY (c1, valid_at WITHOUT OVERLAPS)
+);
+-- UPDATE requires select permission on the valid_at column (but not update):
+GRANT SELECT (c1) ON t1 TO regress_priv_user2;
+GRANT UPDATE (c1) ON t1 TO regress_priv_user2;
+GRANT SELECT (c1, valid_at) ON t1 TO regress_priv_user3;
+GRANT UPDATE (c1) ON t1 TO regress_priv_user3;
+SET SESSION AUTHORIZATION regress_priv_user2;
+UPDATE t1 FOR PORTION OF valid_at FROM '2000-01-01' TO '2001-01-01' SET c1 = '[2,3)';
+SET SESSION AUTHORIZATION regress_priv_user3;
+UPDATE t1 FOR PORTION OF valid_at FROM '2000-01-01' TO '2001-01-01' SET c1 = '[2,3)';
+SET SESSION AUTHORIZATION regress_priv_user1;
+-- DELETE requires select permission on the valid_at column:
+GRANT DELETE ON t1 TO regress_priv_user2;
+GRANT DELETE ON t1 TO regress_priv_user3;
+SET SESSION AUTHORIZATION regress_priv_user2;
+DELETE FROM t1 FOR PORTION OF valid_at FROM '2000-01-01' TO '2001-01-01';
+SET SESSION AUTHORIZATION regress_priv_user3;
+DELETE FROM t1 FOR PORTION OF valid_at FROM '2000-01-01' TO '2001-01-01';
+SET SESSION AUTHORIZATION regress_priv_user1;
+DROP TABLE t1;
+
 -- test column-level privileges when involved with DELETE
 SET SESSION AUTHORIZATION regress_priv_user1;
 ALTER TABLE atest6 ADD COLUMN three integer;
@@ -2211,3 +2238,37 @@ SELECT * FROM information_schema.table_privileges t
 
 DROP TABLE grantor_test1, grantor_test2, grantor_test3;
 DROP ROLE regress_grantor1, regress_grantor2, regress_grantor3;
+
+-- GRANTED BY
+CREATE ROLE regress_grantor1;
+CREATE ROLE regress_grantor2 ROLE regress_grantor1;
+CREATE ROLE regress_grantor3 ROLE regress_grantor1;
+CREATE ROLE regress_grantor4 ROLE regress_grantor1;
+CREATE ROLE regress_grantor5;
+CREATE TABLE grantor_test ();
+GRANT SELECT ON grantor_test TO regress_grantor2 WITH GRANT OPTION;
+GRANT UPDATE ON grantor_test TO regress_grantor3 WITH GRANT OPTION;
+GRANT SELECT, UPDATE ON grantor_test TO regress_grantor4 WITH GRANT OPTION;
+SET ROLE regress_grantor1;
+
+GRANT SELECT, UPDATE ON grantor_test TO regress_grantor5;
+
+SELECT * FROM information_schema.table_privileges t
+    WHERE grantor LIKE 'regress_grantor%' ORDER BY ROW(t.*);
+
+REVOKE SELECT, UPDATE ON grantor_test FROM regress_grantor5;
+GRANT SELECT, UPDATE ON grantor_test TO regress_grantor5 GRANTED BY regress_grantor2;
+GRANT SELECT, UPDATE ON grantor_test TO regress_grantor5 GRANTED BY regress_grantor3;
+
+SELECT * FROM information_schema.table_privileges t
+    WHERE grantor LIKE 'regress_grantor%' ORDER BY ROW(t.*);
+
+REVOKE SELECT, UPDATE ON grantor_test FROM regress_grantor5 GRANTED BY regress_grantor2;
+REVOKE SELECT, UPDATE ON grantor_test FROM regress_grantor5 GRANTED BY regress_grantor3;
+
+SELECT * FROM information_schema.table_privileges t
+    WHERE grantor LIKE 'regress_grantor%' ORDER BY ROW(t.*);
+
+RESET ROLE;
+DROP TABLE grantor_test;
+DROP ROLE regress_grantor1, regress_grantor2, regress_grantor3, regress_grantor4, regress_grantor5;

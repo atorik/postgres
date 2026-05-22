@@ -537,9 +537,8 @@ SELECT relname, old.level, old.relkind, old.relfilenode = new.relfilenode FROM o
  clstrpart33 |     2 | r       | f
 (7 rows)
 
-DROP TABLE clstrpart;
 -- Ownership of partitions is checked
-CREATE TABLE ptnowner(i int unique) PARTITION BY LIST (i);
+CREATE TABLE ptnowner(i int unique not null) PARTITION BY LIST (i);
 CREATE INDEX ptnowner_i_idx ON ptnowner(i);
 CREATE TABLE ptnowner1 PARTITION OF ptnowner FOR VALUES IN (1);
 CREATE ROLE regress_ptnowner;
@@ -557,15 +556,6 @@ SET SESSION AUTHORIZATION regress_ptnowner;
 CLUSTER ptnowner USING ptnowner_i_idx;
 WARNING:  permission denied to execute CLUSTER on "ptnowner2", skipping it
 RESET SESSION AUTHORIZATION;
-SELECT a.relname, a.relfilenode=b.relfilenode FROM pg_class a
-  JOIN ptnowner_oldnodes b USING (oid) ORDER BY a.relname COLLATE "C";
-  relname  | ?column? 
------------+----------
- ptnowner  | t
- ptnowner1 | f
- ptnowner2 | t
-(3 rows)
-
 DROP TABLE ptnowner;
 DROP ROLE regress_ptnowner;
 -- Test CLUSTER with external tuplesorting
@@ -711,6 +701,10 @@ COMMIT;
 --
 -- REPACK
 --
+-- Note we cannot test working REPACK (CONCURRENTLY) here, because the
+-- tests are sometimes run with wal_level=minimal.  Tests for that appear
+-- elsewhere.
+--
 ----------------------------------------------------------------------
 -- REPACK handles individual tables identically to CLUSTER, but it's worth
 -- checking if it handles table hierarchies identically as well.
@@ -802,11 +796,65 @@ ORDER BY o.relname;
  clstr_3
 (2 rows)
 
+--
+-- Check concurrent mode requirements
+--
+-- Disallowed in catalogs
+REPACK (CONCURRENTLY) pg_class;
+ERROR:  cannot repack relation "pg_class"
+HINT:  REPACK (CONCURRENTLY) is not supported for catalog relations.
+-- Doesn't like partitioned tables
+REPACK (CONCURRENTLY) clstrpart;
+ERROR:  REPACK (CONCURRENTLY) is not supported for partitioned tables
+HINT:  Consider running the command on individual partitions.
+-- Doesn't support catalog tables
+REPACK (CONCURRENTLY) pg_class;
+ERROR:  cannot repack relation "pg_class"
+HINT:  REPACK (CONCURRENTLY) is not supported for catalog relations.
+-- Only support permanent tables, temp and unlogged tables are not supported
+CREATE TEMP TABLE repack_conc_temp (i int PRIMARY KEY);
+REPACK (CONCURRENTLY) repack_conc_temp;
+ERROR:  cannot repack relation "repack_conc_temp"
+HINT:  REPACK (CONCURRENTLY) is only allowed for permanent relations.
+DROP TABLE repack_conc_temp;
+CREATE UNLOGGED TABLE repack_conc_unlogged (i int PRIMARY KEY);
+REPACK (CONCURRENTLY) repack_conc_unlogged;
+ERROR:  cannot repack relation "repack_conc_unlogged"
+HINT:  REPACK (CONCURRENTLY) is only allowed for permanent relations.
+DROP TABLE repack_conc_unlogged;
+-- Doesn't support TOAST tables directly
+CREATE TABLE repack_conc_toast (t text);
+SELECT reltoastrelid::regclass AS toast_rel
+FROM pg_class WHERE oid = 'repack_conc_toast'::regclass \gset
+\set VERBOSITY sqlstate
+REPACK (CONCURRENTLY) :toast_rel;
+ERROR:  0A000
+\set VERBOSITY default
+DROP TABLE repack_conc_toast;
+-- Doesn't support tables with REPLICA IDENTITY NOTHING, even if they have a primary key
+CREATE TABLE repack_conc_replident (i int PRIMARY KEY);
+ALTER TABLE repack_conc_replident REPLICA IDENTITY NOTHING;
+REPACK (CONCURRENTLY) repack_conc_replident;
+ERROR:  cannot repack relation "repack_conc_replident"
+HINT:  Relation "repack_conc_replident" has insufficient replication identity.
+-- Doesn't support tables without a primary key or replica identity index
+ALTER TABLE repack_conc_replident DROP CONSTRAINT repack_conc_replident_pkey;
+ALTER TABLE repack_conc_replident REPLICA IDENTITY DEFAULT;
+REPACK (CONCURRENTLY) repack_conc_replident;
+ERROR:  cannot process relation "repack_conc_replident"
+HINT:  Relation "repack_conc_replident" has no identity index.
+-- Doesn't support tables with deferrable primary keys
+ALTER TABLE repack_conc_replident ADD PRIMARY KEY (i) DEFERRABLE;
+REPACK (CONCURRENTLY) repack_conc_replident;
+ERROR:  cannot process relation "repack_conc_replident"
+HINT:  Relation "repack_conc_replident" has no identity index.
 -- clean up
+DROP TABLE repack_conc_replident;
 DROP TABLE clustertest;
 DROP TABLE clstr_1;
 DROP TABLE clstr_2;
 DROP TABLE clstr_3;
 DROP TABLE clstr_4;
 DROP TABLE clstr_expression;
+DROP TABLE clstrpart;
 DROP USER regress_clstr_user;

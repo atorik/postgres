@@ -3039,7 +3039,7 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 
 		case ProcedureRelationId:
 			{
-				bits16		flags = FORMAT_PROC_INVALID_AS_NULL;
+				uint16		flags = FORMAT_PROC_INVALID_AS_NULL;
 				char	   *proname = format_procedure_extended(object->objectId,
 																flags);
 
@@ -3052,7 +3052,7 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 
 		case TypeRelationId:
 			{
-				bits16		flags = FORMAT_TYPE_INVALID_AS_NULL;
+				uint16		flags = FORMAT_TYPE_INVALID_AS_NULL;
 				char	   *typname = format_type_extended(object->objectId, -1,
 														   flags);
 
@@ -3245,7 +3245,7 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 
 		case OperatorRelationId:
 			{
-				bits16		flags = FORMAT_OPERATOR_INVALID_AS_NULL;
+				uint16		flags = FORMAT_OPERATOR_INVALID_AS_NULL;
 				char	   *oprname = format_operator_extended(object->objectId,
 															   flags);
 
@@ -4106,26 +4106,19 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 		case PropgraphElementLabelRelationId:
 			{
 				Relation	rel;
-				SysScanDesc scan;
-				ScanKeyData key[1];
 				HeapTuple	tuple;
 				Form_pg_propgraph_element_label pgelform;
 				ObjectAddress oa;
 
 				rel = table_open(PropgraphElementLabelRelationId, AccessShareLock);
-				ScanKeyInit(&key[0],
-							Anum_pg_propgraph_element_label_oid,
-							BTEqualStrategyNumber, F_OIDEQ,
-							ObjectIdGetDatum(object->objectId));
-
-				scan = systable_beginscan(rel, PropgraphElementLabelObjectIndexId, true, NULL, 1, key);
-				tuple = systable_getnext(scan);
+				tuple = get_catalog_object_by_oid(rel,
+												  Anum_pg_propgraph_element_label_oid,
+												  object->objectId);
 				if (!HeapTupleIsValid(tuple))
 				{
 					if (!missing_ok)
 						elog(ERROR, "could not find tuple for element label %u", object->objectId);
 
-					systable_endscan(scan);
 					table_close(rel, AccessShareLock);
 					break;
 				}
@@ -4136,7 +4129,6 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				ObjectAddressSet(oa, PropgraphElementRelationId, pgelform->pgelelid);
 				appendStringInfoString(&buffer, getObjectDescription(&oa, false));
 
-				systable_endscan(scan);
 				table_close(rel, AccessShareLock);
 				break;
 			}
@@ -4146,7 +4138,7 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				HeapTuple	tuple;
 				Form_pg_propgraph_label pglform;
 
-				tuple = SearchSysCache1(PROPGRAPHLABELOID, object->objectId);
+				tuple = SearchSysCache1(PROPGRAPHLABELOID, ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tuple))
 				{
 					if (!missing_ok)
@@ -4166,26 +4158,19 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 		case PropgraphLabelPropertyRelationId:
 			{
 				Relation	rel;
-				SysScanDesc scan;
-				ScanKeyData key[1];
 				HeapTuple	tuple;
 				Form_pg_propgraph_label_property plpform;
 				ObjectAddress oa;
 
 				rel = table_open(PropgraphLabelPropertyRelationId, AccessShareLock);
-				ScanKeyInit(&key[0],
-							Anum_pg_propgraph_label_property_oid,
-							BTEqualStrategyNumber, F_OIDEQ,
-							ObjectIdGetDatum(object->objectId));
-
-				scan = systable_beginscan(rel, PropgraphLabelPropertyObjectIndexId, true, NULL, 1, key);
-				tuple = systable_getnext(scan);
+				tuple = get_catalog_object_by_oid(rel,
+												  Anum_pg_propgraph_label_property_oid,
+												  object->objectId);
 				if (!HeapTupleIsValid(tuple))
 				{
 					if (!missing_ok)
 						elog(ERROR, "could not find tuple for label property %u", object->objectId);
 
-					systable_endscan(scan);
 					table_close(rel, AccessShareLock);
 					break;
 				}
@@ -4196,7 +4181,6 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				ObjectAddressSet(oa, PropgraphElementLabelRelationId, plpform->plpellabelid);
 				appendStringInfoString(&buffer, getObjectDescription(&oa, false));
 
-				systable_endscan(scan);
 				table_close(rel, AccessShareLock);
 				break;
 			}
@@ -4206,7 +4190,7 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				HeapTuple	tuple;
 				Form_pg_propgraph_property pgpform;
 
-				tuple = SearchSysCache1(PROPGRAPHPROPOID, object->objectId);
+				tuple = SearchSysCache1(PROPGRAPHPROPOID, ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tuple))
 				{
 					if (!missing_ok)
@@ -5160,7 +5144,7 @@ getObjectIdentityParts(const ObjectAddress *object,
 
 		case ProcedureRelationId:
 			{
-				bits16		flags = FORMAT_PROC_FORCE_QUALIFY | FORMAT_PROC_INVALID_AS_NULL;
+				uint16		flags = FORMAT_PROC_FORCE_QUALIFY | FORMAT_PROC_INVALID_AS_NULL;
 				char	   *proname = format_procedure_extended(object->objectId,
 																flags);
 
@@ -5176,7 +5160,7 @@ getObjectIdentityParts(const ObjectAddress *object,
 
 		case TypeRelationId:
 			{
-				bits16		flags = FORMAT_TYPE_INVALID_AS_NULL | FORMAT_TYPE_FORCE_QUALIFY;
+				uint16		flags = FORMAT_TYPE_INVALID_AS_NULL | FORMAT_TYPE_FORCE_QUALIFY;
 				char	   *typeout;
 
 				typeout = format_type_extended(object->objectId, -1, flags);
@@ -5383,7 +5367,7 @@ getObjectIdentityParts(const ObjectAddress *object,
 
 		case OperatorRelationId:
 			{
-				bits16		flags = FORMAT_OPERATOR_FORCE_QUALIFY | FORMAT_OPERATOR_INVALID_AS_NULL;
+				uint16		flags = FORMAT_OPERATOR_FORCE_QUALIFY | FORMAT_OPERATOR_INVALID_AS_NULL;
 				char	   *oprname = format_operator_extended(object->objectId,
 															   flags);
 
@@ -6166,7 +6150,7 @@ getObjectIdentityParts(const ObjectAddress *object,
 				HeapTuple	tup;
 				Form_pg_propgraph_element pge;
 
-				tup = SearchSysCache1(PROPGRAPHELOID, object->objectId);
+				tup = SearchSysCache1(PROPGRAPHELOID, ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -6189,7 +6173,7 @@ getObjectIdentityParts(const ObjectAddress *object,
 				HeapTuple	tup;
 				Form_pg_propgraph_label pgl;
 
-				tup = SearchSysCache1(PROPGRAPHLABELOID, object->objectId);
+				tup = SearchSysCache1(PROPGRAPHLABELOID, ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -6211,7 +6195,7 @@ getObjectIdentityParts(const ObjectAddress *object,
 				HeapTuple	tup;
 				Form_pg_propgraph_property pgp;
 
-				tup = SearchSysCache1(PROPGRAPHPROPOID, object->objectId);
+				tup = SearchSysCache1(PROPGRAPHPROPOID, ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)

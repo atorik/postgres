@@ -147,6 +147,9 @@ typedef struct Query
 	 */
 	int			resultRelation pg_node_attr(query_jumble_ignore);
 
+	/* FOR PORTION OF clause for UPDATE/DELETE */
+	ForPortionOfExpr *forPortionOf;
+
 	/* has aggregates in tlist or havingQual */
 	bool		hasAggs pg_node_attr(query_jumble_ignore);
 	/* has window functions in tlist */
@@ -793,7 +796,7 @@ typedef struct TableLikeClause
 {
 	NodeTag		type;
 	RangeVar   *relation;
-	bits32		options;		/* OR of TableLikeOption flags */
+	uint32		options;		/* OR of TableLikeOption flags */
 	Oid			relationOid;	/* If table has been looked up, its OID */
 } TableLikeClause;
 
@@ -1698,6 +1701,22 @@ typedef struct RowMarkClause
 } RowMarkClause;
 
 /*
+ * ForPortionOfClause
+ *		representation of FOR PORTION OF <range-name> FROM <target-start> TO
+ *		<target-end> or FOR PORTION OF <range-name> (<target>)
+ */
+typedef struct ForPortionOfClause
+{
+	NodeTag		type;
+	char	   *range_name;		/* column name of the range/multirange */
+	ParseLoc	location;		/* token location, or -1 if unknown */
+	ParseLoc	target_location;	/* token location, or -1 if unknown */
+	Node	   *target;			/* Expr from FOR PORTION OF col (...) syntax */
+	Node	   *target_start;	/* Expr from FROM ... TO ... syntax */
+	Node	   *target_end;		/* Expr from FROM ... TO ... syntax */
+} ForPortionOfClause;
+
+/*
  * WithClause -
  *	   representation of WITH clause
  *
@@ -2211,6 +2230,7 @@ typedef struct DeleteStmt
 	Node	   *whereClause;	/* qualifications */
 	ReturningClause *returningClause;	/* RETURNING clause */
 	WithClause *withClause;		/* WITH clause */
+	ForPortionOfClause *forPortionOf;	/* FOR PORTION OF clause */
 } DeleteStmt;
 
 /* ----------------------
@@ -2226,6 +2246,7 @@ typedef struct UpdateStmt
 	List	   *fromClause;		/* optional from clause for more tables */
 	ReturningClause *returningClause;	/* RETURNING clause */
 	WithClause *withClause;		/* WITH clause */
+	ForPortionOfClause *forPortionOf;	/* FOR PORTION OF clause */
 } UpdateStmt;
 
 /* ----------------------
@@ -2672,7 +2693,7 @@ typedef struct GrantStmt
 	/* privileges == NIL denotes ALL PRIVILEGES */
 	List	   *grantees;		/* list of RoleSpec nodes */
 	bool		grant_option;	/* grant or revoke grant option */
-	RoleSpec   *grantor;
+	RoleSpec   *grantor;		/* GRANTED BY clause, or NULL if none */
 	DropBehavior behavior;		/* drop behavior (for REVOKE) */
 } GrantStmt;
 
@@ -4525,6 +4546,8 @@ typedef struct AlterPublicationStmt
 	List	   *pubobjects;		/* Optional list of publication objects */
 	AlterPublicationAction action;	/* What action to perform with the given
 									 * objects */
+	bool		for_all_tables; /* True if ALL TABLES is specified */
+	bool		for_all_sequences;	/* True if ALL SEQUENCES is specified */
 } AlterPublicationStmt;
 
 typedef struct CreateSubscriptionStmt

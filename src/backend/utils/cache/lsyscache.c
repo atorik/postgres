@@ -861,6 +861,44 @@ comparison_ops_are_compatible(Oid opno1, Oid opno2)
 }
 
 /*
+ * collations_agree_on_equality
+ *		Return true if the two collations have equivalent notions of equality,
+ *		so that a uniqueness or equality proof established under one side
+ *		carries over to a comparison performed under the other side.
+ *
+ * Note: this is equality compatibility only.  Do NOT use this to reason
+ * about ordering.
+ *
+ * An InvalidOid on either side denotes the absence of a collation -- that
+ * side's operation is not collation-sensitive (e.g. a non-collatable column
+ * type).  Absence of a collation cannot conflict with the other side's
+ * collation, so we treat such pairs as agreeing on equality.  This generalizes
+ * the asymmetric treatment in IndexCollMatchesExprColl().
+ *
+ * Otherwise the collations have equivalent equality if they match, or if both
+ * are deterministic: by definition a deterministic collation treats two
+ * strings as equal iff they are byte-wise equal (see CREATE COLLATION), so any
+ * two deterministic collations share the same equality relation.  A mismatch
+ * involving a nondeterministic collation, however, may mean the two equality
+ * relations disagree, and the proof is unsound.
+ */
+bool
+collations_agree_on_equality(Oid coll1, Oid coll2)
+{
+	if (!OidIsValid(coll1) || !OidIsValid(coll2))
+		return true;
+
+	if (coll1 == coll2)
+		return true;
+
+	if (!get_collation_isdeterministic(coll1) ||
+		!get_collation_isdeterministic(coll2))
+		return false;
+
+	return true;
+}
+
+/*
  * op_is_safe_index_member
  *		Check if the operator is a member of a B-tree or Hash operator family.
  *
@@ -1110,33 +1148,6 @@ get_attoptions(Oid relid, int16 attnum)
 		result = datumCopy(attopts, false, -1); /* text[] */
 
 	ReleaseSysCache(tuple);
-
-	return result;
-}
-
-/*
- * get_attnotnull
- *
- *		Given the relation id and the attribute number,
- *		return the "attnotnull" field from the attribute relation.
- */
-bool
-get_attnotnull(Oid relid, AttrNumber attnum)
-{
-	HeapTuple	tp;
-	bool		result = false;
-
-	tp = SearchSysCache2(ATTNUM,
-						 ObjectIdGetDatum(relid),
-						 Int16GetDatum(attnum));
-
-	if (HeapTupleIsValid(tp))
-	{
-		Form_pg_attribute att_tup = (Form_pg_attribute) GETSTRUCT(tp);
-
-		result = att_tup->attnotnull;
-		ReleaseSysCache(tp);
-	}
 
 	return result;
 }
@@ -3617,6 +3628,26 @@ get_namespace_name_or_temp(Oid nspid)
 		return get_namespace_name(nspid);
 }
 
+/*
+ * get_qualified_objname
+ *		Returns a palloc'd string containing the schema-qualified name of the
+ *		object for the given namespace ID and object name.
+ */
+char *
+get_qualified_objname(Oid nspid, char *objname)
+{
+	char	   *nspname;
+	char	   *result;
+
+	nspname = get_namespace_name_or_temp(nspid);
+	if (!nspname)
+		elog(ERROR, "cache lookup failed for namespace %u", nspid);
+
+	result = quote_qualified_identifier(nspname, objname);
+
+	return result;
+}
+
 /*				---------- PG_RANGE CACHES ----------				 */
 
 /*
@@ -3668,6 +3699,31 @@ get_range_collation(Oid rangeOid)
 	}
 	else
 		return InvalidOid;
+}
+
+/*
+ * get_range_constructor2
+ *		Gets the 2-arg constructor for the given rangetype.
+ *
+ *	Raises an error if not found.
+ */
+RegProcedure
+get_range_constructor2(Oid rangeOid)
+{
+	HeapTuple	tp;
+
+	tp = SearchSysCache1(RANGETYPE, ObjectIdGetDatum(rangeOid));
+	if (HeapTupleIsValid(tp))
+	{
+		Form_pg_range rngtup = (Form_pg_range) GETSTRUCT(tp);
+		RegProcedure result;
+
+		result = rngtup->rngconstruct2;
+		ReleaseSysCache(tp);
+		return result;
+	}
+	else
+		elog(ERROR, "cache lookup failed for range type %u", rangeOid);
 }
 
 /*
@@ -3943,7 +3999,7 @@ get_propgraph_label_name(Oid labeloid)
 	HeapTuple	tuple;
 	char	   *labelname;
 
-	tuple = SearchSysCache1(PROPGRAPHLABELOID, labeloid);
+	tuple = SearchSysCache1(PROPGRAPHLABELOID, ObjectIdGetDatum(labeloid));
 	if (!tuple)
 	{
 		elog(ERROR, "cache lookup failed for label %u", labeloid);
@@ -3961,7 +4017,7 @@ get_propgraph_property_name(Oid propoid)
 	HeapTuple	tuple;
 	char	   *propname;
 
-	tuple = SearchSysCache1(PROPGRAPHPROPOID, propoid);
+	tuple = SearchSysCache1(PROPGRAPHPROPOID, ObjectIdGetDatum(propoid));
 	if (!tuple)
 	{
 		elog(ERROR, "cache lookup failed for property %u", propoid);

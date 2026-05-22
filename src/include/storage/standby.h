@@ -15,9 +15,12 @@
 #define STANDBY_H
 
 #include "datatype/timestamp.h"
-#include "storage/lock.h"
+#include "storage/locktag.h"
 #include "storage/relfilelocator.h"
 #include "storage/standbydefs.h"
+
+typedef struct PGPROC PGPROC;
+typedef struct VirtualTransactionId VirtualTransactionId;
 
 /* User-settable GUC parameters */
 extern PGDLLIMPORT int max_standby_archive_delay;
@@ -123,6 +126,7 @@ typedef enum
 
 typedef struct RunningTransactionsData
 {
+	Oid			dbid;			/* only track xacts in this database */
 	int			xcnt;			/* # of xact ids in xids[] */
 	int			subxcnt;		/* # of subxact ids in xids[] */
 	subxids_array_status subxid_status;
@@ -140,7 +144,7 @@ typedef RunningTransactionsData *RunningTransactions;
 extern void LogAccessExclusiveLock(Oid dbOid, Oid relOid);
 extern void LogAccessExclusiveLockPrepare(void);
 
-extern XLogRecPtr LogStandbySnapshot(void);
+extern XLogRecPtr LogStandbySnapshot(Oid dbid);
 extern void LogStandbyInvalidations(int nmsgs, SharedInvalidationMessage *msgs,
 									bool relcacheInitFileInval);
 

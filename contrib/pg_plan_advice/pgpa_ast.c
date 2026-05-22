@@ -32,6 +32,8 @@ pgpa_cstring_advice_tag(pgpa_advice_tag_type advice_tag)
 	{
 		case PGPA_TAG_BITMAP_HEAP_SCAN:
 			return "BITMAP_HEAP_SCAN";
+		case PGPA_TAG_DO_NOT_SCAN:
+			return "DO_NOT_SCAN";
 		case PGPA_TAG_FOREIGN_JOIN:
 			return "FOREIGN_JOIN";
 		case PGPA_TAG_GATHER:
@@ -91,6 +93,10 @@ pgpa_parse_advice_tag(const char *tag, bool *fail)
 		case 'b':
 			if (strcmp(tag, "bitmap_heap_scan") == 0)
 				return PGPA_TAG_BITMAP_HEAP_SCAN;
+			break;
+		case 'd':
+			if (strcmp(tag, "do_not_scan") == 0)
+				return PGPA_TAG_DO_NOT_SCAN;
 			break;
 		case 'f':
 			if (strcmp(tag, "foreign_join") == 0)
@@ -315,7 +321,7 @@ pgpa_identifiers_match_target(int nrids, pgpa_identifier *rids,
  * Returns true if every target or sub-target is matched by at least one
  * identifier, and otherwise false.
  *
- * Also sets rids_used[i] = true for each idenifier that matches at least one
+ * Also sets rids_used[i] = true for each identifier that matches at least one
  * target.
  */
 static bool

@@ -758,9 +758,7 @@ if not gssapiopt.disabled()
   gssapi = dependency('krb5-gssapi', required: false)
   have_gssapi = gssapi.found()
 
-  if have_gssapi
-      gssapi_deps = [gssapi]
-  elif not have_gssapi
+  if not have_gssapi
     # Hardcoded lookup for gssapi. This is necessary as gssapi on windows does
     # not install neither pkg-config nor cmake dependency information.
     if host_system == 'windows'
@@ -784,18 +782,15 @@ if not gssapiopt.disabled()
     endforeach
 
     if have_gssapi
-      # Meson before 0.57.0 did not support using check_header() etc with
-      # declare_dependency(). Thus the tests below use the library looked up
-      # above.  Once we require a newer meson version, we can simplify.
       gssapi = declare_dependency(dependencies: gssapi_deps)
     endif
   endif
 
   if not have_gssapi
-  elif cc.check_header('gssapi/gssapi.h', dependencies: gssapi_deps, required: false,
+  elif cc.check_header('gssapi/gssapi.h', dependencies: [gssapi], required: false,
       args: test_c_args, include_directories: postgres_inc)
     cdata.set('HAVE_GSSAPI_GSSAPI_H', 1)
-  elif cc.check_header('gssapi.h', dependencies: gssapi_deps, required: gssapiopt,
+  elif cc.check_header('gssapi.h', dependencies: [gssapi], required: gssapiopt,
       args: test_c_args, include_directories: postgres_inc)
     cdata.set('HAVE_GSSAPI_H', 1)
   else
@@ -803,10 +798,10 @@ if not gssapiopt.disabled()
   endif
 
   if not have_gssapi
-  elif cc.check_header('gssapi/gssapi_ext.h', dependencies: gssapi_deps, required: false,
+  elif cc.check_header('gssapi/gssapi_ext.h', dependencies: [gssapi], required: false,
       args: test_c_args, include_directories: postgres_inc)
     cdata.set('HAVE_GSSAPI_GSSAPI_EXT_H', 1)
-  elif cc.check_header('gssapi_ext.h', dependencies: gssapi_deps, required: gssapiopt,
+  elif cc.check_header('gssapi_ext.h', dependencies: [gssapi], required: gssapiopt,
       args: test_c_args, include_directories: postgres_inc)
     cdata.set('HAVE_GSSAPI_EXT_H', 1)
   else
@@ -814,7 +809,7 @@ if not gssapiopt.disabled()
   endif
 
   if not have_gssapi
-  elif cc.has_function('gss_store_cred_into', dependencies: gssapi_deps,
+  elif cc.has_function('gss_store_cred_into', dependencies: [gssapi],
       args: test_c_args, include_directories: postgres_inc)
     cdata.set('ENABLE_GSS', 1)
 
@@ -1274,6 +1269,7 @@ endif
 
 perlopt = get_option('plperl')
 perl_dep = not_found_dep
+perl_includespec = ''
 perlversion = ''
 if not perlopt.disabled()
   perl_may_work = true
@@ -1298,6 +1294,7 @@ if not perlopt.disabled()
     useshrplib = run_command(perl_conf_cmd, 'useshrplib', check: true).stdout()
 
     perl_inc_dir = '@0@/CORE'.format(archlibexp)
+    perl_includespec = '-I@0@'.format(perl_inc_dir)
 
     if perlversion.version_compare('< 5.14')
       perl_may_work = false
@@ -1316,6 +1313,7 @@ if not perlopt.disabled()
     if not fs.is_file('@0@/perl.h'.format(perl_inc_dir)) and \
        fs.is_file('@0@@1@/perl.h'.format(pg_sysroot, perl_inc_dir))
       perl_ccflags = ['-iwithsysroot', perl_inc_dir]
+      perl_includespec = '-iwithsysroot @0@/CORE'.format(archlibexp)
     endif
 
     # check compiler finds header
@@ -1420,6 +1418,7 @@ endif
 
 pyopt = get_option('plpython')
 python3_dep = not_found_dep
+python_includespec = ''
 if not pyopt.disabled()
   pm = import('python')
   python3_inst = pm.find_installation(python.full_path(), required: pyopt)
@@ -1448,6 +1447,11 @@ if not pyopt.disabled()
     if not cc.check_header('Python.h', args: python3_header_check_args, dependencies: python3_dep, required: pyopt, include_directories: postgres_inc)
       python3_dep = not_found_dep
     endif
+  endif
+
+  if python3_dep.found()
+    command = [python, '-c', 'import sysconfig; print("-I" + sysconfig.get_config_var("INCLUDEPY"))']
+    python_includespec = run_command(command, check: true).stdout().strip()
   endif
 endif
 
@@ -1554,17 +1558,6 @@ Use -Dreadline=disabled to disable readline support.'''.format(readline_dep))
       'rl_filename_quoting_function',
     ]
 
-    foreach var : check_vars
-      cdata.set('HAVE_' + var.to_upper(),
-        cc.has_header_symbol(readline_h, var,
-          args: test_c_args, include_directories: postgres_inc,
-          prefix: '#include <stdio.h>',
-          dependencies: [readline]) ? 1 : false)
-    endforeach
-
-    # If found via cc.find_library() ensure headers are found when using the
-    # dependency. On meson < 0.57 one cannot do compiler checks using the
-    # dependency returned by declare_dependency(), so we can't do this above.
     if readline.type_name() == 'library'
       readline = declare_dependency(dependencies: readline,
         include_directories: postgres_inc)
@@ -1576,6 +1569,14 @@ Use -Dreadline=disabled to disable readline support.'''.format(readline_dep))
       readline = declare_dependency(dependencies: readline,
         link_args: '-Wl,--enable-auto-import')
     endif
+
+    foreach var : check_vars
+      cdata.set('HAVE_' + var.to_upper(),
+        cc.has_header_symbol(readline_h, var,
+          args: test_c_args, include_directories: postgres_inc,
+          prefix: '#include <stdio.h>',
+          dependencies: [readline]) ? 1 : false)
+    endforeach
   endif
 
   # XXX: Figure out whether to implement mingw warning equivalent
@@ -1675,6 +1676,7 @@ if sslopt in ['auto', 'openssl']
       ['X509_get_signature_info'],
       ['SSL_CTX_set_num_tickets'],
       ['SSL_CTX_set_keylog_callback'],
+      ['SSL_CTX_set_client_hello_cb'],
     ]
 
     are_openssl_funcs_complete = true
@@ -2122,7 +2124,7 @@ elif cc.links('''
 endif
 
 
-# Check for __get_cpuid_count() and __cpuidex() in a similar fashion.
+# Check for __get_cpuid_count()
 if cc.links('''
     #include <cpuid.h>
     int main(int arg, char **argv)
@@ -2133,12 +2135,19 @@ if cc.links('''
     ''', name: '__get_cpuid_count',
     args: test_c_args)
   cdata.set('HAVE__GET_CPUID_COUNT', 1)
-elif cc.links('''
+endif
+
+# Check for __cpuidex()
+if cc.links('''
+    #ifdef _MSC_VER
     #include <intrin.h>
+    #else
+    #include <cpuid.h>
+    #endif
     int main(int arg, char **argv)
     {
         unsigned int exx[4] = {0, 0, 0, 0};
-        __cpuidex(exx, 7, 0);
+        __cpuidex((int *) exx, 7, 0);
     }
     ''', name: '__cpuidex',
     args: test_c_args)
@@ -2166,6 +2175,20 @@ choke me
 endif
 
 
+# Check whether the C++ compiler supports designated initializers.
+# These are used by PG_MODULE_MAGIC, and we use the result of this
+# test to decide whether to enable the test_cplusplusext test module.
+# Designated initializers only got standardized in C++20.  In GCC and
+# Clang they also work when using earlier C++ versions, but MSVC
+# really only supports them when its configured to be in C++20 mode or
+# higher.
+if have_cxx
+  have_cxx_desinit = cxx.compiles('struct S { int x; } s = { .x = 1 };', name: 'C++ designated initializers')
+else
+  have_cxx_desinit = false
+endif
+
+
 
 ###############################################################
 # Compiler flags
@@ -2188,13 +2211,11 @@ vectorize_cflags = cc.get_supported_arguments(['-ftree-vectorize'])
 unroll_loops_cflags = cc.get_supported_arguments(['-funroll-loops'])
 
 common_warning_flags = [
-  '-Wmissing-prototypes',
   '-Wpointer-arith',
   # Really don't want VLAs to be used in our dialect of C
   '-Werror=vla',
   # On macOS, complain about usage of symbols newer than the deployment target
   '-Werror=unguarded-availability-new',
-  '-Wendif-labels',
   '-Wmissing-format-attribute',
   '-Wcast-function-type',
   '-Wshadow=compatible-local',
@@ -2202,7 +2223,15 @@ common_warning_flags = [
   '-Wformat-security',
 ]
 
-cflags_warn += cc.get_supported_arguments(common_warning_flags)
+# C-only warnings
+c_warning_flags = [
+  '-Wmissing-prototypes',
+  '-Wold-style-declaration',
+  '-Wold-style-definition',
+  '-Wstrict-prototypes',
+]
+
+cflags_warn += cc.get_supported_arguments(common_warning_flags, c_warning_flags)
 if have_cxx
   cxxflags_warn += cxx.get_supported_arguments(common_warning_flags)
 endif
@@ -2243,7 +2272,6 @@ if cc.has_argument('-Wmissing-variable-declarations')
   cflags_no_missing_var_decls += '-Wno-missing-variable-declarations'
 endif
 
-
 # The following tests want to suppress various unhelpful warnings by adding
 # -Wno-foo switches.  But gcc won't complain about unrecognized -Wno-foo
 # switches, so we have to test for the positive form and if that works,
@@ -2282,22 +2310,51 @@ endforeach
 
 
 if cc.get_id() == 'msvc'
-  cflags_warn += [
+  msvc_common_warning_flags = [
+    # Disable warnings in system headers
+    '/external:anglebrackets',
+    '/external:W0',
+
+    # Warnings to disable:
+    # from /W2:
+    '/wd4244', # conversion from 'type1' to 'type2', possible loss of data
+
+    # Additional warnings to enable:
+    '/w24062', # enumerator 'identifier' in switch of enum 'enumeration' is not handled [like -Wswitch]
+    '/w24102', # unreferenced label [like -Wunused-label]
+
+    # This one doesn't match a gcc warning, but it can help catch
+    # issues related to 4-byte long on Windows.
+    '/w24334', # 'operator': result of 32-bit shift implicitly converted to 64 bits (was 64-bit shift intended?)
+
+    # Turn this into an error, to match other compilers (as of C99)
+    '/we4013', # 'function' undefined; assuming extern returning int' [like -Wimplicit-function-declaration]
+  ]
+
+  msvc_c_warning_flags = [
     # Warnings to disable:
     # from /W1:
     '/wd4090', # different 'modifier' qualifiers
-    # from /W2:
-    '/wd4244', # conversion from 'type1' to 'type2', possible loss of data
     # from /W3:
     '/wd4018', # signed/unsigned mismatch
     '/wd4101', # unreferenced local variable [like -Wunused-variable, but there is no "unused" attribute, so too noisy]
     '/wd4267', # conversion from 'size_t' to 'type', possible loss of data
 
     # Additional warnings to enable:
-    '/w24062', # enumerator 'identifier' in switch of enum 'enumeration' is not handled [like -Wswitch]
-    '/w24102', # unreferenced label [like -Wunused-label]
-    '/w24777', # 'function' : format string 'string' requires an argument of type 'type1', but variadic argument number has type 'type2' [like -Wformat]
+    '/w24255', # 'function' : no function prototype given: converting '()' to '(void)' [like -Wstrict-prototypes]
   ]
+
+  msvc_cxx_warning_flags = [
+    # Warnings to disable:
+    # from /W2:
+    '/wd4200', # nonstandard extension used: zero-sized array in struct/union [widely used in PostgreSQL C headers]
+  ]
+
+  cflags_warn += msvc_common_warning_flags
+  cflags_warn += msvc_c_warning_flags
+
+  cxxflags_warn += msvc_common_warning_flags
+  cxxflags_warn += msvc_cxx_warning_flags
 
   cppflags += [
     '/DWIN32',
@@ -2431,6 +2488,33 @@ int main(void)
 
   if cc.links(prog, name: 'XSAVE intrinsics', args: test_c_args)
     cdata.set('HAVE_XSAVE_INTRINSICS', 1)
+  endif
+
+endif
+
+
+###############################################################
+# Check if the compiler supports AVX2 as a target
+# There is deliberately not a guard for __has_attribute here
+###############################################################
+
+if host_cpu == 'x86_64'
+
+  prog = '''
+__attribute__((target("avx2")))
+static int avx2_test(void)
+{
+    return 0;
+}
+
+int main(void)
+{
+    return avx2_test();
+}
+'''
+
+  if cc.links(prog, name: 'AVX2 support', args: test_c_args)
+    cdata.set('USE_AVX2_WITH_RUNTIME_CHECK', 1)
   endif
 
 endif
@@ -2662,6 +2746,39 @@ int main(void)
     have_optimized_crc = true
   endif
 
+    # Check if the compiler supports Arm CRYPTO PMULL (carryless multiplication)
+    # instructions used for vectorized CRC.
+    prog = '''
+#include <arm_acle.h>
+#include <arm_neon.h>
+uint64x2_t	a;
+uint64x2_t	b;
+uint64x2_t	c;
+
+#if defined(__has_attribute) && __has_attribute (target)
+__attribute__((target("+crypto")))
+#endif
+int main(void)
+{
+    uint64x2_t	r1;
+    uint64x2_t	r2;
+
+	__asm("pmull  %0.1q, %2.1d, %3.1d\neor %0.16b, %0.16b, %1.16b\n":"=w"(r1), "+w"(c):"w"(a), "w"(b));
+	__asm("pmull2 %0.1q, %2.2d, %3.2d\neor %0.16b, %0.16b, %1.16b\n":"=w"(r2), "+w"(c):"w"(a), "w"(b));
+
+	r1 = veorq_u64(r1, r2);
+	/* return computed value, to prevent the above being optimized away */
+	return (int) vgetq_lane_u64(r1, 0);
+}
+'''
+
+  if cc.links(prog,
+      name: 'CRYPTO CRC32C',
+      args: test_c_args)
+    # Use ARM CRYPTO Extension, with runtime check
+    cdata.set('USE_PMULL_CRC32C_WITH_RUNTIME_CHECK', 1)
+  endif
+
 elif host_cpu == 'loongarch64'
 
   prog = '''
@@ -2865,6 +2982,10 @@ if cc.has_member('struct sockaddr', 'sa_len',
 #include <sys/types.h>
 #include <sys/socket.h>''')
   cdata.set('HAVE_STRUCT_SOCKADDR_SA_LEN', 1)
+endif
+
+if cc.has_header_symbol('signal.h', 'SA_SIGINFO')
+  cdata.set('HAVE_SA_SIGINFO', 1)
 endif
 
 if cc.has_member('struct tm', 'tm_zone',
@@ -3253,6 +3374,7 @@ pl_targets = []
 contrib_targets = []
 testprep_targets = []
 nls_targets = []
+update_unicode_targets = []
 
 
 # Define the tests to distribute them to the correct test styles later
@@ -3625,7 +3747,7 @@ endforeach
 # find and report conflicting files
 foreach build_path : potentially_conflicting_files
   build_path = host_system == 'windows' ? fs.as_posix(build_path) : build_path
-  # str.replace is in 0.56
+  # str.replace is in meson 0.58.0.
   src_path = meson.current_source_dir() / build_path.split(meson.current_build_dir() / '')[1]
   if fs.exists(src_path) or fs.is_symlink(src_path)
     conflicting_files += src_path
@@ -4014,6 +4136,21 @@ add_test_setup('running',
 
 
 ###############################################################
+# headerscheck
+###############################################################
+
+headerscheck = files('src/tools/pginclude/headerscheck')
+run_target('headerscheck',
+  command: [headerscheck, meson.project_source_root(), meson.project_build_root()]
+)
+
+run_target('cpluspluscheck',
+  command: [headerscheck, '--cplusplus', meson.project_source_root(), meson.project_build_root()]
+)
+
+
+
+###############################################################
 # Pseudo targets
 ###############################################################
 
@@ -4025,6 +4162,10 @@ alias_target('testprep', testprep_targets)
 
 alias_target('world', all_built, docs)
 alias_target('install-world', install_quiet, installdocs)
+
+if update_unicode_targets.length() > 0
+  alias_target('update-unicode', update_unicode_targets)
+endif
 
 run_target('help',
   command: [
