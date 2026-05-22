@@ -137,21 +137,11 @@ extern PGDLLIMPORT BufferUsage pgBufferUsage;
 extern PGDLLIMPORT StorageIOUsage pgStorageIOUsageParallel;
 extern PGDLLIMPORT WalUsage pgWalUsage;
 
-extern Instrumentation *InstrAlloc(int n, int instrument_options,
-								   bool async_mode);
 extern Instrumentation *InstrAlloc(int instrument_options);
 extern void InstrInitOptions(Instrumentation *instr, int instrument_options);
 extern void InstrStart(Instrumentation *instr);
 extern void InstrStop(Instrumentation *instr);
 extern void InstrInit(Instrumentation *instr, int instrument_options);
-extern void InstrStartNode(Instrumentation *instr);
-extern void InstrStopNode(Instrumentation *instr, double nTuples);
-extern void InstrUpdateTupleCount(Instrumentation *instr, double nTuples);
-extern void InstrEndLoop(Instrumentation *instr);
-extern void InstrAggNode(Instrumentation *dst, Instrumentation *add);
-extern void InstrStartParallelQuery(StorageIOUsage *storageiousage);
-extern void InstrEndParallelQuery(BufferUsage *bufusage, StorageIOUsage *storageiousage, WalUsage *walusage, StorageIOUsage *storageiousage_start);
-extern void InstrAccumParallelQuery(BufferUsage *bufusage, StorageIOUsage *storageiousage, WalUsage *walusage);
 
 extern NodeInstrumentation *InstrAllocNode(int instrument_options,
 										   bool async_mode);
@@ -167,10 +157,9 @@ extern TriggerInstrumentation *InstrAllocTrigger(int n, int instrument_options);
 extern void InstrStartTrigger(TriggerInstrumentation *tginstr);
 extern void InstrStopTrigger(TriggerInstrumentation *tginstr, int64 firings);
 
-extern void InstrStartParallelQuery(void);
-extern void InstrEndParallelQuery(BufferUsage *bufusage, WalUsage *walusage);
-extern void InstrAccumParallelQuery(BufferUsage *bufusage, WalUsage *walusage);
->>>>>>> master
+extern void InstrStartParallelQuery(StorageIOUsage *storageiousage);
+extern void InstrEndParallelQuery(BufferUsage *bufusage, StorageIOUsage *storageiousage, WalUsage *walusage, StorageIOUsage *storageiousage_start);
+extern void InstrAccumParallelQuery(BufferUsage *bufusage, StorageIOUsage *storageiousage, WalUsage *walusage);
 extern void BufferUsageAccumDiff(BufferUsage *dst,
 								 const BufferUsage *add, const BufferUsage *sub);
 extern void StorageIOUsageAccumDiff(StorageIOUsage *dst,

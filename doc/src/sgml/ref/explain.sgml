@@ -216,7 +216,9 @@ ROLLBACK;
       Storage I/O <emphasis>write</emphasis> value indicates the number of
       write operations performed on storage during these phases.
       These values are obtained from the <function>getrusage()</function> system
-      call. Note that on platforms that do not support
+      call for the backend process executing the query and for any parallel
+      query worker processes involved in the query.
+      Note that on platforms that do not support
       <function>getrusage()</function>, such as Windows, no output will be shown,
       even if reads or writes actually occur. Also, when
       <xref linkend="guc-io-method"/> is set to <literal>worker</literal>, no output
