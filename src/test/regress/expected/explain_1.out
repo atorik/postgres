@@ -254,13 +254,8 @@ explain_filter
       "Local Dirtied Blocks": N,
       "Local Written Blocks": N,
       "Temp Read Blocks": N,
-      "Temp Written Blocks": N,
-      "Storage I/O Read": N,
-      "Storage I/O Write": N
+      "Temp Written Blocks": N
     },
-    "Execution": {
-      Storage I/O Read: N,
-      Storage I/O Write: N
     "Planning": {
       "Shared Hit Blocks": N,
       "Shared Read Blocks": N,
