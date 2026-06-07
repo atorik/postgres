@@ -107,7 +107,7 @@ $result = $node_publisher->safe_psql(
 			'proto_version', '1',
 			'publication_names', 'tap_pub',
 			'messages', 'true')
-		WHERE lsn = '$message_lsn' AND xid = 0
+		WHERE xid = 0
 ));
 
 is($result, qq(77|0), 'non-transactional message on slot is M');
