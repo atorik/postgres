@@ -1,5 +1,5 @@
 
-# Copyright (c) 2024-2025, PostgreSQL Global Development Group
+# Copyright (c) 2024-2026, PostgreSQL Global Development Group
 
 use strict;
 use warnings FATAL => 'all';
@@ -12,7 +12,7 @@ use Test::More;
 # Test that pg_log_query_plan() actually logs the query plan of
 # another backend executing a query.
 
-# This test requires timing cordinations:
+# This test requires timing coordinations:
 #  1) The target backend must be executing a query when
 #     pg_log_query_plan() sends the signal.
 #  2) We must confirm that the target backend actually received the
@@ -75,7 +75,7 @@ $node->wait_for_event('client backend', 'advisory');
 $psql_session2->query_safe("SELECT pg_log_query_plan($session1_pid);");
 
 # Ensure that the signal of pg_log_query_plan() is actually
-# rececived by confirming session1 is waiting on the injection point.
+# received by confirming session1 is waiting on the injection point.
 $node->wait_for_event('client backend', 'log-query-interrupt');
 
 # Commit the session 2 to release the advisory lock.

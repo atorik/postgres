@@ -479,7 +479,7 @@ ExecProcNodeFirst(PlanState *node)
 	 * does instrumentation.  Otherwise we can dispense with all wrappers and
 	 * have ExecProcNode() directly call the relevant function from now on.
 	 */
-	else if (node->instrument)
+	if (node->instrument)
 		node->ExecProcNode = ExecProcNodeInstr;
 	else
 		node->ExecProcNode = node->ExecProcNodeReal;
