@@ -601,10 +601,10 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	}
 
 	if (es->buffers)
-	{
 		bufusage_start = pgBufferUsage;
+
+	if (es->io)
 		GetStorageIOUsage(&storageio_start);
-	}
 
 	INSTR_TIME_SET_CURRENT(planstart);
 
@@ -655,7 +655,10 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	{
 		memset(&bufusage, 0, sizeof(BufferUsage));
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
+	}
 
+	if (es->io)
+	{
 		GetStorageIOUsage(&storageio);
 		StorageIOUsageDiff(&storageio, &storageio_start);
 	}
@@ -670,7 +673,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		if (pstmt->commandType != CMD_UTILITY)
 			ExplainOnePlan(pstmt, into, es, query_string, paramLI, pstate->p_queryEnv,
 						   &planduration, (es->buffers ? &bufusage : NULL),
-						   es->buffers ? &storageio : NULL,
+						   es->io ? &storageio : NULL,
 						   es->memory ? &mem_counters : NULL);
 		else
 			ExplainOneUtility(pstmt->utilityStmt, into, es, pstate, paramLI);

@@ -20,7 +20,7 @@ $node_sync->start;
 my $xml_sync = $node_sync->safe_psql(
 	'postgres',
 	q{
-	EXPLAIN (ANALYZE, BUFFERS, FORMAT XML)
+	EXPLAIN (ANALYZE, IO, FORMAT XML)
 	SELECT * FROM pg_class;
 	}
 );
@@ -48,7 +48,7 @@ if (have_io_uring())
 	my $xml_io_uring = $node_io_uring->safe_psql(
 		'postgres',
 		q{
-		EXPLAIN (ANALYZE, BUFFERS, FORMAT XML)
+		EXPLAIN (ANALYZE, IO, FORMAT XML)
 		SELECT * FROM pg_class;
 		}
 	);

@@ -357,10 +357,11 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	}
 
 	if (es->buffers)
-	{
 		bufusage_start = pgBufferUsage;
+
+	if (es->io)
 		GetStorageIOUsage(&storageio_start);
-	}
+
 	INSTR_TIME_SET_CURRENT(planstart);
 
 	/* plan the query */
@@ -380,7 +381,10 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	{
 		memset(&bufusage, 0, sizeof(BufferUsage));
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
+	}
 
+	if (es->io)
+	{
 		GetStorageIOUsage(&storageio);
 		StorageIOUsageDiff(&storageio, &storageio_start);
 	}
@@ -388,7 +392,7 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	/* run it (if needed) and produce output */
 	ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
 				   &planduration, (es->buffers ? &bufusage : NULL),
-				   es->buffers ? &storageio : NULL,
+				   es->io ? &storageio : NULL,
 				   es->memory ? &mem_counters : NULL);
 }
 
@@ -532,6 +536,9 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		instrument_option |= INSTRUMENT_ROWS;
 
 	if (es->buffers)
+		instrument_option |= INSTRUMENT_BUFFERS;
+
+	if (es->io)
 	{
 		GetStorageIOUsage(&storageio_start);
 
@@ -542,8 +549,6 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		 */
 		pgStorageIOUsageParallel.inblock = 0;
 		pgStorageIOUsageParallel.outblock = 0;
-
-		instrument_option |= INSTRUMENT_BUFFERS;
 	}
 	if (es->wal)
 		instrument_option |= INSTRUMENT_WAL;
@@ -644,10 +649,11 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		}
 
 		if (bufusage)
-		{
 			show_buffer_usage(es, bufusage);
+
+		if (planstorageio)
 			show_storageio_usage(es, planstorageio);
-		}
+
 		if (mem_counters)
 			show_memory_counters(es, mem_counters);
 
@@ -705,7 +711,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	totaltime += elapsed_time(&starttime);
 
 	/* Show storage I/O usage in execution */
-	if (es->buffers)
+	if (es->io)
 	{
 		StorageIOUsage storageio;
 

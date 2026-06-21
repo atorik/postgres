@@ -1585,7 +1585,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	ExecSetTupleBound(fpes->tuples_needed, queryDesc->planstate);
 
 	/*
-	 * Prepare to track buffer, WAL, and StorageI/O usage during query
+	 * Prepare to track buffer, WAL, and storage I/O usage during query
 	 * execution.
 	 *
 	 * We do this after starting up the executor to match what happens in the
