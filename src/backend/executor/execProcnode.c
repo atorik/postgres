@@ -72,7 +72,7 @@
  */
 #include "postgres.h"
 
-#include "commands/dynamic_explain.h"
+#include "commands/explain_running.h"
 #include "executor/executor.h"
 #include "executor/instrument.h"
 #include "executor/nodeAgg.h"

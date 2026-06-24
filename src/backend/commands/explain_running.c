@@ -1,22 +1,22 @@
 /*-------------------------------------------------------------------------
  *
- * dynamic_explain.c
+ * explain_running.c
  *	  Explain query plans during execution
  *
  * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994-5, Regents of the University of California
  *
  * IDENTIFICATION
- *	  src/backend/commands/dynamic_explain.c
+ *	  src/backend/commands/explain_running.c
  *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
 
 #include "access/xact.h"
-#include "commands/dynamic_explain.h"
 #include "commands/explain.h"
 #include "commands/explain_format.h"
+#include "commands/explain_running.h"
 #include "commands/explain_state.h"
 #include "miscadmin.h"
 #include "storage/proc.h"
@@ -38,9 +38,7 @@ static bool WrapNodesInProgress = false;
 void
 HandleLogQueryPlanInterrupt(void)
 {
-#ifdef USE_INJECTION_POINTS
 	INJECTION_POINT("log-query-interrupt", NULL);
-#endif
 	InterruptPending = true;
 	LogQueryPlanPending = true;
 	/* latch will be set by procsignal_sigusr1_handler */
@@ -64,10 +62,6 @@ LogQueryPlan(void)
 	old_cxt = MemoryContextSwitchTo(cxt);
 
 	es = NewExplainState();
-
-	es->format = EXPLAIN_FORMAT_TEXT;
-	es->settings = true;
-	es->verbose = true;
 	es->signaled = true;
 
 	/*

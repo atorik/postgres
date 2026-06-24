@@ -19,7 +19,7 @@
 
 #include "access/parallel.h"
 #include "commands/async.h"
-#include "commands/dynamic_explain.h"
+#include "commands/explain_running.h"
 #include "commands/repack.h"
 #include "miscadmin.h"
 #include "pgstat.h"

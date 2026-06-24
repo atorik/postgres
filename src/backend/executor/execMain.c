@@ -44,7 +44,7 @@
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
-#include "commands/dynamic_explain.h"
+#include "commands/explain_running.h"
 #include "commands/matview.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"

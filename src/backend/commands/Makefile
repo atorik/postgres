@@ -31,11 +31,11 @@ OBJS = \
 	define.o \
 	discard.o \
 	dropcmds.o \
-	dynamic_explain.o \
 	event_trigger.o \
 	explain.o \
 	explain_dr.o \
 	explain_format.o \
+	explain_running.o \
 	explain_state.o \
 	extension.o \
 	foreigncmds.o \
