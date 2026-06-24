@@ -648,7 +648,6 @@ DatumTupleFields
 DbInfo
 DbInfoArr
 DbLocaleInfo
-DbOidName
 DdlOptType
 DdlOption
 DeClonePtrType
@@ -2075,8 +2074,7 @@ PLyObToTuple
 PLyObject_AsString_t
 PLyPlanObject
 PLyProcedure
-PLyProcedureEntry
-PLyProcedureKey
+PLyProcedureCache
 PLyResultObject
 PLySRFState
 PLySavedArgs
