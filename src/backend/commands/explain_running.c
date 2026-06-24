@@ -138,9 +138,9 @@ ProcessLogQueryPlanInterrupt(void)
 /*
  * Signal a backend process to log the query plan of the running query.
  *
- * By default, only superusers are allowed to signal to log the plan because
- * allowing any users to issue this request at an unbounded rate would
- * cause lots of log messages and which can lead to denial of service.
+ * By default, only superusers are allowed to signal a backend to log its
+ * plan because the output is written to the server log, which in many cases
+ * can only be read by superusers.
  * Additional roles can be permitted with GRANT.
  */
 Datum

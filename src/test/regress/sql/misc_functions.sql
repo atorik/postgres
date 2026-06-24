@@ -122,7 +122,7 @@ DROP ROLE regress_log_memory;
 --
 -- The test that verifies the backend's query plan is actually
 -- logged is implemented in
--- src/test/modules/test_misc/t/009_pg_log_query_plan.pl.
+-- src/test/modules/test_misc/t/014_pg_log_query_plan.pl.
 
 CREATE ROLE regress_log_plan;
 
