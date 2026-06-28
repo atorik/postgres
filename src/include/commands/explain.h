@@ -72,8 +72,6 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 						   const MemoryContextCounters *mem_counters);
 
 extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);
-extern void ExplainPrintTriggers(ExplainState *es, QueryDesc *queryDesc);
-extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);
 extern void ExplainPrintTriggers(ExplainState *es,
 								 QueryDesc *queryDesc);
 

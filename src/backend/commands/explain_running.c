@@ -38,7 +38,6 @@ static bool WrapNodesInProgress = false;
 void
 HandleLogQueryPlanInterrupt(void)
 {
-	INJECTION_POINT("log-query-interrupt", NULL);
 	InterruptPending = true;
 	LogQueryPlanPending = true;
 	/* latch will be set by procsignal_sigusr1_handler */
@@ -77,7 +76,7 @@ LogQueryPlan(void)
 		return;
 	}
 
-	ExplainStringAssemble(es, queryDesc, es->format, 0, -1);
+	ExplainStringAssemble(es, queryDesc, es->format, false, -1);
 
 	ereport(LOG_SERVER_ONLY,
 			errmsg("query and its plan running on backend with PID %d are:\n%s",
@@ -122,6 +121,8 @@ ProcessLogQueryPlanInterrupt(void)
 
 	PG_TRY();
 	{
+		INJECTION_POINT("log-query-interrupt", NULL);
+
 		/*
 		 * Wrap ExecProcNodes with ExecProcNodeFirst, which logs query plan
 		 * when LogQueryPlanPending is true.

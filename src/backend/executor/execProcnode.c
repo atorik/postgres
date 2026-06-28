@@ -574,7 +574,7 @@ CSSChildExecSetExecProcNodeArray(CustomScanState *css)
  *
  * Recursion is usually necessary because the next ExecProcNode() call may be
  * invoked not only through the current node, but also via lefttree, righttree,
- * subPlan, or other special child plans.
+ * initPlan, subPlan, or other special child plans.
  */
 void
 ExecSetExecProcNodeRecurse(PlanState *ps)
@@ -585,6 +585,17 @@ ExecSetExecProcNodeRecurse(PlanState *ps)
 		ExecSetExecProcNodeRecurse(ps->lefttree);
 	if (ps->righttree != NULL)
 		ExecSetExecProcNodeRecurse(ps->righttree);
+	if (ps->initPlan != NULL)
+	{
+		ListCell   *l;
+
+		foreach(l, ps->initPlan)
+		{
+			SubPlanState *sstate = (SubPlanState *) lfirst(l);
+
+			ExecSetExecProcNodeRecurse(sstate->planstate);
+		}
+	}
 	if (ps->subPlan != NULL)
 	{
 		ListCell   *l;
