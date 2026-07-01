@@ -70,17 +70,14 @@ LogQueryPlan(void)
 	 */
 	queryDesc = GetCurrentQueryDesc();
 
-	if (queryDesc == NULL)
+	if (queryDesc != NULL)
 	{
-		LogQueryPlanPending = false;
-		return;
+		ExplainStringAssemble(es, queryDesc, es->format, false, -1);
+
+		ereport(LOG_SERVER_ONLY,
+				errmsg("query and its plan running on backend with PID %d are:\n%s",
+					   MyProcPid, es->str->data));
 	}
-
-	ExplainStringAssemble(es, queryDesc, es->format, false, -1);
-
-	ereport(LOG_SERVER_ONLY,
-			errmsg("query and its plan running on backend with PID %d are:\n%s",
-				   MyProcPid, es->str->data));
 
 	MemoryContextSwitchTo(old_cxt);
 	MemoryContextDelete(cxt);
@@ -149,11 +146,14 @@ pg_log_query_plan(PG_FUNCTION_ARGS)
 {
 	int			pid = PG_GETARG_INT32(0);
 	PGPROC	   *proc;
-	PgBackendStatus *be_status;
+	PgBackendStatus *be_status = NULL;
 
 	proc = BackendPidGetProc(pid);
 
-	if (proc == NULL)
+	if (proc != NULL)
+		be_status = pgstat_get_beentry_by_proc_number(proc->vxid.procNumber);
+
+	if (proc == NULL || be_status == NULL || be_status->st_procpid != pid)
 	{
 		/*
 		 * This is just a warning so a loop-through-resultset will not abort
@@ -164,7 +164,6 @@ pg_log_query_plan(PG_FUNCTION_ARGS)
 		PG_RETURN_BOOL(false);
 	}
 
-	be_status = pgstat_get_beentry_by_proc_number(proc->vxid.procNumber);
 	if (be_status->st_backendType != B_BACKEND)
 	{
 		ereport(WARNING,
