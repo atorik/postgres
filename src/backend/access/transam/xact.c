@@ -5379,9 +5379,9 @@ AbortSubTransaction(void)
 	ResetLogicalStreamingState();
 
 	/*
-	 * Reset current QueryDesc. Note that even after this reset, it's
-	 * still possible to obtain the parent transaction's query plans, since
-	 * they are preserved in standard_ExecutorRun().
+	 * Reset current QueryDesc. Note that even after this reset, it's still
+	 * possible to obtain the parent transaction's query plans, since they are
+	 * preserved in standard_ExecutorRun().
 	 */
 	SetCurrentQueryDesc(NULL);
 
