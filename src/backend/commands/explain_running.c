@@ -65,24 +65,29 @@ LogQueryPlan(void)
 
 	/*
 	 * Current QueryDesc is valid only during standard_ExecutorRun. However,
-	 * ExecProcNode can be called afterward(i.e., ExecPostprocessPlan). To
+	 * ExecProcNode can be called afterward (i.e., ExecPostprocessPlan). To
 	 * handle the case, check whether we have QueryDesc now.
 	 */
 	queryDesc = GetCurrentQueryDesc();
 
-	if (queryDesc != NULL)
+	PG_TRY();
 	{
-		ExplainStringAssemble(es, queryDesc, es->format, false, -1);
+		if (queryDesc != NULL)
+		{
+			ExplainStringAssemble(es, queryDesc, es->format, false, -1);
 
-		ereport(LOG_SERVER_ONLY,
-				errmsg("query and its plan running on backend with PID %d are:\n%s",
-					   MyProcPid, es->str->data));
+			ereport(LOG_SERVER_ONLY,
+					errmsg("query and its plan running on backend with PID %d are:\n%s",
+						   MyProcPid, es->str->data));
+		}
 	}
-
-	MemoryContextSwitchTo(old_cxt);
-	MemoryContextDelete(cxt);
-
-	LogQueryPlanPending = false;
+	PG_FINALLY();
+	{
+		MemoryContextSwitchTo(old_cxt);
+		MemoryContextDelete(cxt);
+		LogQueryPlanPending = false;
+	}
+	PG_END_TRY();
 }
 
 /*
