@@ -206,7 +206,8 @@
         point where the running plan can be inspected.  If the backend
         is spending a long time in work that does not reach such a
         point, the log output can be delayed until that work
-        completes.
+        completes. If the query finishes before such a point is
+        reached, no plan may be logged.
        </para>
        <para>
         This function is restricted to superusers by default, but other

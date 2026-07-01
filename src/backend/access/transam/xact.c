@@ -2976,7 +2976,7 @@ AbortTransaction(void)
 	/* Reset snapshot export state. */
 	SnapBuildResetExportedSnapshotState();
 
-	/* Reset current query plan state. */
+	/* Reset current QueryDesc. */
 	SetCurrentQueryDesc(NULL);
 
 	/*
@@ -5379,7 +5379,7 @@ AbortSubTransaction(void)
 	ResetLogicalStreamingState();
 
 	/*
-	 * Reset current query plan state. Note that even after this reset, it's
+	 * Reset current QueryDesc. Note that even after this reset, it's
 	 * still possible to obtain the parent transaction's query plans, since
 	 * they are preserved in standard_ExecutorRun().
 	 */
