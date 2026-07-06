@@ -210,6 +210,11 @@
         reached, no plan may be logged.
        </para>
        <para>
+        If the target backend is executing a nested query when it
+        processes the request, only the plan of the innermost
+        executing query is logged.
+       </para>
+       <para>
         This function is restricted to superusers by default, but other
         users can be granted EXECUTE to run the function.
        </para></entry>

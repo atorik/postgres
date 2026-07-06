@@ -61,7 +61,7 @@ LogQueryPlan(void)
 	old_cxt = MemoryContextSwitchTo(cxt);
 
 	es = NewExplainState();
-	es->signaled = true;
+	es->running = true;
 
 	/*
 	 * Current QueryDesc is valid only during standard_ExecutorRun. However,

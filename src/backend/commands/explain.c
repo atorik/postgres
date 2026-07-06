@@ -1865,9 +1865,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	/*
 	 * We have to forcibly clean up the instrumentation state because we
 	 * haven't done ExecutorEnd yet.  This is pretty grotty ... This cleanup
-	 * should not be done when the query has already been executed and explain
-	 * has been requested by signal, as the target query may use
-	 * instrumentation and clean itself up.
+	 * should not be done when explaining a running query, as the target
+	 * query may use instrumentation and clean itself up.
 	 *
 	 * Note: contrib/auto_explain could cause instrumentation to be set up
 	 * even though we didn't ask for it here.  Be careful not to print any
@@ -1875,7 +1874,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	 * InstrEndLoop call anyway, if possible, to reduce the number of cases
 	 * auto_explain has to contend with.
 	 */
-	if (planstate->instrument && !es->signaled)
+	if (planstate->instrument && !es->running)
 		InstrEndLoop(planstate->instrument);
 
 	if (es->analyze &&
