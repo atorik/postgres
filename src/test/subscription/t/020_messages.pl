@@ -94,7 +94,7 @@ is($result, qq(),
 
 $node_publisher->safe_psql('postgres', "INSERT INTO tab_test VALUES (1)");
 
-my $message_lsn = $node_publisher->safe_psql('postgres',
+$node_publisher->safe_psql('postgres',
 	"SELECT pg_logical_emit_message(false, 'pgoutput', 'a non-transactional message')"
 );
 
