@@ -413,7 +413,13 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	 * logging the plan. Otherwise plan will be logged at the next query
 	 * execution on the same session.
 	 */
-	LogQueryPlanPending = false;
+	if (LogQueryPlanPending)
+	{
+		ereport(LOG,
+			(errmsg("query plan logging was requested but there was no opportunity to do it for query " INT64_FORMAT,
+					queryDesc->plannedstmt->queryId)));
+		LogQueryPlanPending = false;
+	}
 }
 
 /* ----------------------------------------------------------------
