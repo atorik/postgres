@@ -88,17 +88,20 @@ LogQueryPlan(void)
 	 */
 	queryDesc = GetCurrentQueryDesc();
 
+	if (queryDesc == NULL)
+	{
+		ereport(LOG_SERVER_ONLY,
+				errmsg("query plan logging was requested but there was no opportunity to do it"));
+	}
+
 	PG_TRY();
 	{
-		if (queryDesc != NULL)
-		{
-			ExplainStringAssemble(es, queryDesc, es->format, false, -1);
+		ExplainStringAssemble(es, queryDesc, es->format, false, -1);
 
-			ereport(LOG_SERVER_ONLY,
-					errmsg("query and its plan for queryid " INT64_FORMAT " running on backend with PID %d are:\n%s",
-						   queryDesc->plannedstmt->queryId, MyProcPid,
-						   es->str->data));
-		}
+		ereport(LOG_SERVER_ONLY,
+				errmsg("query and its plan for queryid " INT64_FORMAT " running on backend with PID %d are:\n%s",
+					   queryDesc->plannedstmt->queryId, MyProcPid,
+					   es->str->data));
 	}
 	PG_FINALLY();
 	{
@@ -126,6 +129,8 @@ ProcessLogQueryPlanInterrupt(void)
 	/* If current query has already finished, we can do nothing but exit */
 	if (querydesc == NULL)
 	{
+		ereport(LOG_SERVER_ONLY,
+				errmsg("query plan logging was requested but there was no opportunity to do it"));
 		LogQueryPlanPending = false;
 		return;
 	}

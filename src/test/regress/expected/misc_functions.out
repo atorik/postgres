@@ -361,7 +361,7 @@ DROP ROLE regress_log_memory;
 --
 -- Plans are logged and they are not returned to the function.
 -- Furthermore, their contents can vary depending on the optimizer.
--- Here we just verifies that the permissions are set properly.
+-- Here we just verify that the permissions are set properly.
 --
 -- The test that verifies the backend's query plan is actually
 -- logged is implemented in
