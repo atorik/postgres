@@ -18,7 +18,9 @@
 #include "commands/explain_format.h"
 #include "commands/explain_running.h"
 #include "commands/explain_state.h"
+#include "executor/executor.h"
 #include "miscadmin.h"
+#include "nodes/nodeFuncs.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/procsignal.h"
@@ -27,6 +29,22 @@
 
 /* Is plan node wrapping for query plan logging currently in progress? */
 static bool WrapNodesInProgress = false;
+
+static bool wrapExecProcNode(PlanState *ps, void *context);
+
+/*
+ * Wrap all the underlying ExecProcNode with ExecProcNodeFirst.
+ */
+static bool
+wrapExecProcNode(PlanState *ps, void *context)
+{
+	if (ps == NULL)
+		return false;
+
+	ExecSetExecProcNode(ps, ps->ExecProcNodeReal);
+
+	return planstate_tree_walker(ps, wrapExecProcNode, context);
+}
 
 /*
  * Handle receipt of an interrupt indicating logging the plan of the currently
@@ -77,8 +95,9 @@ LogQueryPlan(void)
 			ExplainStringAssemble(es, queryDesc, es->format, false, -1);
 
 			ereport(LOG_SERVER_ONLY,
-					errmsg("query and its plan running on backend with PID %d are:\n%s",
-						   MyProcPid, es->str->data));
+					errmsg("query and its plan for queryid " INT64_FORMAT " running on backend with PID %d are:\n%s",
+						   queryDesc->plannedstmt->queryId, MyProcPid,
+						   es->str->data));
 		}
 	}
 	PG_FINALLY();
@@ -129,7 +148,7 @@ ProcessLogQueryPlanInterrupt(void)
 		 * Wrap ExecProcNodes with ExecProcNodeFirst, which logs query plan
 		 * when LogQueryPlanPending is true.
 		 */
-		ExecSetExecProcNodeRecurse(querydesc->planstate);
+		(void) wrapExecProcNode(querydesc->planstate, NULL);
 	}
 	PG_FINALLY();
 	{

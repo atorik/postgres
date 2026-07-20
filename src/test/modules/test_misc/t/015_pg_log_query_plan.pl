@@ -90,7 +90,8 @@ $psql_session2->query_safe(
     SELECT injection_points_detach('log-query-interrupt');
 ]);
 
-$node->wait_for_log('query and its plan running on backend with PID',
+$node->wait_for_log(
+	"running on backend with PID $session1_pid ",
 	$log_offset);
 
 $psql_session1->query_safe("COMMIT;");
