@@ -72,15 +72,6 @@ LogQueryPlan(void)
 	MemoryContext old_cxt;
 	QueryDesc  *queryDesc;
 
-	cxt = AllocSetContextCreate(CurrentMemoryContext,
-								"log_query_plan temporary context",
-								ALLOCSET_DEFAULT_SIZES);
-
-	old_cxt = MemoryContextSwitchTo(cxt);
-
-	es = NewExplainState();
-	es->running = true;
-
 	/*
 	 * Current QueryDesc is valid only during standard_ExecutorRun. However,
 	 * ExecProcNode can be called afterward (i.e., ExecPostprocessPlan). To
@@ -92,7 +83,17 @@ LogQueryPlan(void)
 	{
 		ereport(LOG_SERVER_ONLY,
 				errmsg("query plan logging was requested but there was no opportunity to do it"));
+		LogQueryPlanPending = false;
+		return;
 	}
+
+	cxt = AllocSetContextCreate(CurrentMemoryContext,
+								"log_query_plan temporary context",
+								ALLOCSET_DEFAULT_SIZES);
+	old_cxt = MemoryContextSwitchTo(cxt);
+
+	es = NewExplainState();
+	es->running = true;
 
 	PG_TRY();
 	{
