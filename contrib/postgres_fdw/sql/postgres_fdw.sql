@@ -485,6 +485,41 @@ EXECUTE s(ARRAY['1','2']);
 DEALLOCATE s;
 RESET plan_cache_mode;
 
+-- An ArrayCoerceExpr is pushed down only when its per-element coercion is
+-- a plain relabeling.  An element cast function, an I/O conversion, or a
+-- domain coercion is instead evaluated locally.
+CREATE TABLE loct_acx (id int, ta text[], f8 float8[], txt text[], t text, ia int[], vc varchar[]);
+INSERT INTO loct_acx VALUES (1, '{12345}', '{0.30000000000000004}', '{0.3}', '5', '{5}', '{5}');
+CREATE FOREIGN TABLE ft_acx (id int, ta text[], f8 float8[], txt text[], t text, ia int[], vc varchar[])
+  SERVER loopback OPTIONS (table_name 'loct_acx');
+-- element coercion via a cast function: not shippable, stays local
+CREATE FUNCTION acx_text2int(text) RETURNS int
+  LANGUAGE plpgsql IMMUTABLE STRICT AS 'BEGIN RETURN length($1); END';
+CREATE CAST (text AS integer) WITH FUNCTION acx_text2int(text);
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT id FROM ft_acx WHERE ta::int[] = ARRAY[5];
+DROP CAST (text AS integer);
+DROP FUNCTION acx_text2int(text);
+-- implicit-format element coercion (a cast function): stays local, and the
+-- coercion is not silently dropped from an otherwise pushed-down qual
+CREATE CAST (integer AS text) WITH FUNCTION pg_catalog.to_hex(integer) AS IMPLICIT;
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT id FROM ft_acx WHERE t = ANY (ia);
+DROP CAST (integer AS text);
+-- element coercion via a GUC-sensitive I/O conversion: stays local, so the
+-- result matches local evaluation despite the forced remote extra_float_digits
+SET extra_float_digits = 0;
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT id FROM ft_acx WHERE f8::text[] = txt;
+SELECT id FROM ft_acx WHERE f8::text[] = txt;
+RESET extra_float_digits;
+-- a plain relabeling element coercion (varchar[] to text[]) is still pushed down
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT id FROM ft_acx WHERE t = ANY (vc);
+SELECT id FROM ft_acx WHERE t = ANY (vc);
+DROP FOREIGN TABLE ft_acx;
+DROP TABLE loct_acx;
+
 -- a regconfig constant referring to this text search configuration
 -- is initially unshippable
 CREATE TEXT SEARCH CONFIGURATION public.custom_search
@@ -4587,7 +4622,12 @@ ANALYZE simport_ftable;                   -- should fail
 
 ANALYZE simport_table;
 
+SELECT pg_stat_reset_single_table_counters('public.simport_ftable'::regclass);
 ANALYZE VERBOSE simport_ftable;           -- should work
+SELECT pg_stat_force_next_flush();
+SELECT pg_stat_get_live_tuples('public.simport_ftable'::regclass),
+       pg_stat_get_dead_tuples('public.simport_ftable'::regclass),
+       pg_stat_get_analyze_count('public.simport_ftable'::regclass);
 
 ALTER TABLE simport_table ALTER COLUMN c1 SET STATISTICS 0;
 ALTER TABLE simport_table ALTER COLUMN c2 SET STATISTICS 0;
@@ -4604,7 +4644,12 @@ ANALYZE simport_ftable;                   -- should fail
 ALTER TABLE simport_table ALTER COLUMN c2 SET STATISTICS DEFAULT;
 ANALYZE simport_table;
 
+SELECT pg_stat_reset_single_table_counters('public.simport_ftable'::regclass);
 ANALYZE VERBOSE simport_ftable;           -- should work
+SELECT pg_stat_force_next_flush();
+SELECT pg_stat_get_live_tuples('public.simport_ftable'::regclass),
+       pg_stat_get_dead_tuples('public.simport_ftable'::regclass),
+       pg_stat_get_analyze_count('public.simport_ftable'::regclass);
 
 ANALYZE VERBOSE simport_ftable (c1);      -- should work
 
@@ -4642,6 +4687,34 @@ ANALYZE dtest_table;
 
 ANALYZE VERBOSE dtest_ftable;             -- should work
 
+-- dtest_ftable's stats should now exactly match dtest_table's
+-- compare values, should match
+SELECT relpages, reltuples FROM pg_class
+WHERE oid = 'public.dtest_table'::regclass
+EXCEPT
+SELECT relpages, reltuples FROM pg_class
+WHERE oid = 'public.dtest_ftable'::regclass;
+
+-- compare the rowcounts, should get 0 rows back
+SELECT COUNT(*) FROM pg_stats
+WHERE schemaname = 'public' AND tablename = 'dtest_table'
+EXCEPT
+SELECT COUNT(*) FROM pg_stats
+WHERE schemaname = 'public' AND tablename = 'dtest_ftable';
+
+-- test only a few stats columns common to integer types
+SELECT attname, inherited, null_frac, avg_width, n_distinct,
+  most_common_vals::text as mcv, most_common_freqs,
+  histogram_bounds::text as hb, correlation
+FROM pg_stats
+WHERE schemaname = 'public' AND tablename = 'dtest_table'
+EXCEPT
+SELECT attname, inherited, null_frac, avg_width, n_distinct,
+  most_common_vals::text as mcv, most_common_freqs,
+  histogram_bounds::text as hb, correlation
+FROM pg_stats
+WHERE schemaname = 'public' AND tablename = 'dtest_ftable';
+
 -- cleanup
 DROP FOREIGN TABLE simport_ftable;
 DROP FOREIGN TABLE simport_fview;
@@ -4675,18 +4748,48 @@ SELECT server_name,
   WHERE application_name = 'fdw_conn_check') AS remote_backend_pid
   FROM postgres_fdw_get_connections(true);
 
--- After terminating the remote backend, since the connection is closed,
--- "closed" should be TRUE, or NULL if the connection status check
--- is not available. Despite the termination, remote_backend_pid should
--- still show the non-zero PID of the terminated remote backend.
+-- After terminating the remote backend, if the connection entry is still in
+-- the cache, "closed" should be TRUE, or NULL if the connection status check
+-- is not available, and remote_backend_pid should still show the non-zero PID
+-- of the terminated remote backend. Concurrent invalidation can remove the
+-- idle cached connection before the next statement, in which case
+-- postgres_fdw_get_connections(true) can legitimately return no rows.
 DO $$ BEGIN
 PERFORM pg_terminate_backend(pid, 180000) FROM pg_stat_activity
   WHERE application_name = 'fdw_conn_check';
 END $$;
-SELECT server_name,
+WITH terminated_conn AS (
+  SELECT server_name,
+    CASE WHEN closed IS NOT false THEN true ELSE false END AS closed,
+    remote_backend_pid <> 0 AS remote_backend_pid
+    FROM postgres_fdw_get_connections(true)
+)
+SELECT CASE
+  WHEN count(*) = 0 THEN true
+  WHEN count(*) = 1 THEN bool_and(server_name = 'loopback'
+                                  AND closed
+                                  AND remote_backend_pid)
+  ELSE false
+END AS ok
+FROM terminated_conn;
+
+-- In an explicit transaction, concurrent invalidation may mark the
+-- connection invalid but cannot discard it before transaction end, so the
+-- terminated connection should remain visible in the cache.
+SELECT 1 FROM postgres_fdw_disconnect_all();
+SET client_min_messages = 'ERROR';
+BEGIN;
+SELECT 1 FROM ft1 LIMIT 1;
+DO $$ BEGIN
+PERFORM pg_terminate_backend(pid, 180000) FROM pg_stat_activity
+  WHERE application_name = 'fdw_conn_check';
+END $$;
+SELECT server_name, used_in_xact,
   CASE WHEN closed IS NOT false THEN true ELSE false END AS closed,
   remote_backend_pid <> 0 AS remote_backend_pid
   FROM postgres_fdw_get_connections(true);
+ABORT;
+RESET client_min_messages;
 
 -- Clean up
 \set VERBOSITY default

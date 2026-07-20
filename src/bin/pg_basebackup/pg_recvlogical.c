@@ -223,7 +223,6 @@ StreamLogicalLog(void)
 	PGresult   *res;
 	char	   *copybuf = NULL;
 	TimestampTz last_status = -1;
-	int			i;
 	PQExpBuffer query;
 	XLogRecPtr	cur_record_lsn;
 
@@ -256,7 +255,7 @@ StreamLogicalLog(void)
 	if (noptions)
 		appendPQExpBufferStr(query, " (");
 
-	for (i = 0; i < noptions; i++)
+	for (size_t i = 0; i < noptions; i++)
 	{
 		/* separator */
 		if (i > 0)
@@ -293,10 +292,10 @@ StreamLogicalLog(void)
 	while (!time_to_abort)
 	{
 		int			r;
-		int			bytes_left;
-		int			bytes_written;
+		size_t		bytes_left;
+		size_t		bytes_written;
 		TimestampTz now;
-		int			hdr_len;
+		size_t		hdr_len;
 
 		cur_record_lsn = InvalidXLogRecPtr;
 
@@ -561,7 +560,7 @@ StreamLogicalLog(void)
 
 		while (bytes_left)
 		{
-			int			ret;
+			ssize_t		ret;
 
 			ret = write(outfd,
 						copybuf + hdr_len + bytes_written,
@@ -569,7 +568,7 @@ StreamLogicalLog(void)
 
 			if (ret < 0)
 			{
-				pg_log_error("could not write %d bytes to log file \"%s\": %m",
+				pg_log_error("could not write %zu bytes to log file \"%s\": %m",
 							 bytes_left, outfile);
 				goto error;
 			}
@@ -581,8 +580,8 @@ StreamLogicalLog(void)
 
 		if (write(outfd, "\n", 1) != 1)
 		{
-			pg_log_error("could not write %d bytes to log file \"%s\": %m",
-						 1, outfile);
+			pg_log_error("could not write %zu bytes to log file \"%s\": %m",
+						 (size_t) 1, outfile);
 			goto error;
 		}
 
@@ -1075,6 +1074,29 @@ static void
 prepareToTerminate(PGconn *conn, XLogRecPtr endpos, StreamStopReason reason,
 				   XLogRecPtr lsn)
 {
+	/*
+	 * If pg_recvlogical is terminated by a signal, we can reach here without
+	 * sending final feedback. In that case, send feedback once more before
+	 * sending CopyDone so the replication slot can advance far enough to
+	 * reduce the chance of resending duplicate data when pg_recvlogical is
+	 * restarted.
+	 *
+	 * This is still only a best-effort attempt. Depending on when the signal
+	 * arrives, the receiver may have written decoded output that the server
+	 * cannot yet safely treat as confirmed, so a later restart can still see
+	 * duplicate data.
+	 *
+	 * For other termination cases, such as STREAM_STOP_KEEPALIVE and
+	 * STREAM_STOP_END_OF_WAL, feedback has already been sent before reaching
+	 * here, so there is no need to call flushAndSendFeedback() again.
+	 */
+	if (reason == STREAM_STOP_SIGNAL)
+	{
+		TimestampTz now = feGetCurrentTimestamp();
+
+		(void) flushAndSendFeedback(conn, &now);
+	}
+
 	(void) PQputCopyEnd(conn, NULL);
 	(void) PQflush(conn);
 

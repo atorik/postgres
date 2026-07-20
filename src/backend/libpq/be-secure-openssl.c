@@ -228,7 +228,7 @@ be_tls_init(bool isServerStart)
 		{
 			ereport(isServerStart ? FATAL : LOG,
 					errcode(ERRCODE_CONFIG_FILE_ERROR),
-					errmsg("could not load \"%s\": %s", "pg_hosts.conf",
+					errmsg("could not load \"%s\": %s", HostsFileName,
 						   err_msg ? err_msg : "unknown error"));
 			goto error;
 		}
@@ -365,7 +365,7 @@ be_tls_init(bool isServerStart)
 				errmsg("no SSL configurations loaded"),
 		/*- translator: The two %s contain filenames */
 				errhint("If ssl_sni is enabled then add configuration to \"%s\", else \"%s\"",
-						"pg_hosts.conf", "postgresql.conf"));
+						HostsFileName, "postgresql.conf"));
 		goto error;
 	}
 
@@ -644,7 +644,7 @@ init_host_context(HostsLine *host, bool isServerStart)
 							"Set \"%s\" to \"off\" to make use of the hook "
 							"that is currently installed, or remove the hook "
 							"and use per-host passphrase commands in \"%s\".",
-							"ssl_sni", "pg_hosts.conf"));
+							"ssl_sni", HostsFileName));
 			init_warned = true;
 		}
 
@@ -1347,7 +1347,7 @@ port_bio_read(BIO *h, char *buf, int size)
 
 	if (buf != NULL)
 	{
-		res = secure_raw_read(port, buf, size);
+		res = (int) secure_raw_read(port, buf, size);
 		BIO_clear_retry_flags(h);
 		port->last_read_was_eof = res == 0;
 		if (res <= 0)
@@ -1368,7 +1368,7 @@ port_bio_write(BIO *h, const char *buf, int size)
 {
 	int			res = 0;
 
-	res = secure_raw_write(((Port *) BIO_get_data(h)), buf, size);
+	res = (int) secure_raw_write(((Port *) BIO_get_data(h)), buf, size);
 	BIO_clear_retry_flags(h);
 	if (res <= 0)
 	{

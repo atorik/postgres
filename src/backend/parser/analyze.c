@@ -1811,14 +1811,12 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt,
 
 	qry->groupClause = transformGroupClause(pstate,
 											stmt->groupClause,
-											stmt->groupByAll,
 											&qry->groupingSets,
 											&qry->targetList,
 											qry->sortClause,
 											EXPR_KIND_GROUP_BY,
 											false /* allow SQL92 rules */ );
 	qry->groupDistinct = stmt->groupDistinct;
-	qry->groupByAll = stmt->groupByAll;
 
 	if (stmt->distinctClause == NIL)
 	{
@@ -3867,7 +3865,7 @@ transformLockingClause(ParseState *pstate, Query *qry, LockingClause *lc,
 										   allrels, true);
 					break;
 				default:
-					/* ignore JOIN, SPECIAL, FUNCTION, VALUES, CTE RTEs */
+					/* ignore all other RTE kinds */
 					break;
 			}
 		}
@@ -3999,6 +3997,15 @@ transformLockingClause(ParseState *pstate, Query *qry, LockingClause *lc,
 							/*------
 							  translator: %s is a SQL row locking clause such as FOR UPDATE */
 									 errmsg("%s cannot be applied to a named tuplestore",
+											LCS_asString(lc->strength)),
+									 parser_errposition(pstate, thisrel->location)));
+							break;
+						case RTE_GRAPH_TABLE:
+							ereport(ERROR,
+									(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							/*------
+							  translator: %s is a SQL row locking clause such as FOR UPDATE */
+									 errmsg("%s cannot be applied to GRAPH_TABLE",
 											LCS_asString(lc->strength)),
 									 parser_errposition(pstate, thisrel->location)));
 							break;

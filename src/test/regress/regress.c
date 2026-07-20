@@ -1335,9 +1335,15 @@ test_translation(PG_FUNCTION_ARGS)
 		 * Apparently the customary workaround is for users to set the
 		 * LANGUAGE environment variable to provide a mapping.  Do so here to
 		 * ensure that the nls.sql regression test will work.
+		 *
+		 * With glibc and perhaps other implementations, LANGUAGE overrides
+		 * LC_MESSAGES, which we don't want either; so let's unset it if we're
+		 * not on Solaris.
 		 */
 #if defined(__sun__)
 		setenv("LANGUAGE", "es_ES.UTF-8:es", 1);
+#else
+		unsetenv("LANGUAGE");
 #endif
 		pg_bindtextdomain(TEXTDOMAIN);
 		inited = true;
@@ -1409,7 +1415,7 @@ test_instr_time(PG_FUNCTION_ARGS)
 	 */
 	max_err = (ticks_per_ns_scaled >> TICKS_TO_NS_SHIFT) + 1;
 
-	for (int i = 0; i < lengthof(test_ns); i++)
+	for (size_t i = 0; i < lengthof(test_ns); i++)
 	{
 		int64		result;
 
