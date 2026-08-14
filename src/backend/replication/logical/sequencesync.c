@@ -201,12 +201,26 @@ report_sequence_errors(List *mismatched_seqs_idx,
 	if (sub_insuffperm_seqs_idx)
 	{
 		get_sequences_string(sub_insuffperm_seqs_idx, &seqstr);
+
+		/*
+		 * With run_as_owner enabled, sequence synchronization runs as the
+		 * subscription owner, so a missing UPDATE privilege should be granted
+		 * to that role. Otherwise, the worker switches to the sequence owner
+		 * before checking privileges, so no useful GRANT hint can be
+		 * provided.
+		 */
 		ereport(WARNING,
 				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				errmsg_plural("insufficient privileges on subscriber sequence (%s)",
 							  "insufficient privileges on subscriber sequences (%s)",
 							  list_length(sub_insuffperm_seqs_idx),
-							  seqstr.data));
+							  seqstr.data),
+				MySubscription->runasowner ?
+				errhint_plural("Grant UPDATE on the sequence to the subscription "
+							   "owner on the subscriber.",
+							   "Grant UPDATE on the sequences to the subscription "
+							   "owner on the subscriber.",
+							   list_length(sub_insuffperm_seqs_idx)) : 0);
 	}
 
 	if (pub_insuffperm_seqs_idx)
@@ -217,7 +231,12 @@ report_sequence_errors(List *mismatched_seqs_idx,
 				errmsg_plural("insufficient privileges on publisher sequence (%s)",
 							  "insufficient privileges on publisher sequences (%s)",
 							  list_length(pub_insuffperm_seqs_idx),
-							  seqstr.data));
+							  seqstr.data),
+				errhint_plural("Grant SELECT on the sequence to the role used for "
+							   "the replication connection on the publisher.",
+							   "Grant SELECT on the sequences to the role used for "
+							   "the replication connection on the publisher.",
+							   list_length(pub_insuffperm_seqs_idx)));
 	}
 
 	if (missing_seqs_idx)
@@ -271,17 +290,42 @@ get_and_validate_seq_info(TupleTableSlot *slot, Relation *sequence_rel,
 		(LogicalRepSequenceInfo *) list_nth(seqinfos, *seqidx);
 
 	/*
+	 * has_sequence_privilege() itself returns NULL, rather than false, when
+	 * the sequence has been dropped concurrently after it was identified in
+	 * the catalog snapshot (see has_sequence_privilege_id()). Treat that as a
+	 * missing sequence on the publisher.
+	 */
+	datum = slot_getattr(slot, ++col, &isnull);
+	if (isnull)
+		return COPYSEQ_SKIPPED;
+
+	remote_has_select_priv = DatumGetBool(datum);
+
+	/*
 	 * The remote sequence state can be NULL if the publisher lacks the
 	 * required privileges or if the sequence was dropped concurrently after
 	 * it was identified in the catalog snapshot (see pg_get_sequence_data()).
 	 */
-	remote_has_select_priv = DatumGetBool(slot_getattr(slot, ++col, &isnull));
-	Assert(!isnull);
-
 	datum = slot_getattr(slot, ++col, &isnull);
 	if (isnull)
-		return remote_has_select_priv ? COPYSEQ_SKIPPED :
-			COPYSEQ_PUBLISHER_INSUFFICIENT_PERM;
+	{
+		/*
+		 * The sequence was dropped concurrently after it was identified in
+		 * the catalog snapshot. Treat it as skipped (and, since it no longer
+		 * exists on the publisher, ultimately missing).
+		 */
+		if (remote_has_select_priv)
+			return COPYSEQ_SKIPPED;
+
+		/*
+		 * The publisher lacks the SELECT privilege required by
+		 * pg_get_sequence_data(). Since has_sequence_privilege() returned
+		 * false, not NULL, do not classify this sequence as missing on the
+		 * publisher.
+		 */
+		seqinfo_local->found_on_pub = true;
+		return COPYSEQ_PUBLISHER_INSUFFICIENT_PERM;
+	}
 
 	seqinfo_local->last_value = DatumGetInt64(datum);
 
@@ -416,6 +460,16 @@ copy_sequences(WalReceiverConn *conn)
 	StringInfoData cmd;
 	MemoryContext oldctx;
 
+	/*
+	 * Sequence synchronization depends on publisher-side functionality
+	 * introduced in PostgreSQL 19, so it cannot work against an older
+	 * publisher.
+	 */
+	if (walrcv_server_version(conn) < 190000)
+		ereport(ERROR,
+				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				errmsg("cannot synchronize sequences if the publisher is running a version earlier than PostgreSQL 19"));
+
 	initStringInfo(&seqstr);
 	initStringInfo(&cmd);
 
@@ -441,6 +495,7 @@ copy_sequences(WalReceiverConn *conn)
 		TupleTableSlot *slot;
 
 		StartTransactionCommand();
+		maybe_reread_subscription();
 
 		for (int idx = cur_batch_base_index; idx < n_seqinfos; idx++)
 		{
@@ -670,6 +725,7 @@ LogicalRepSyncSequences(void)
 	StringInfoData app_name;
 
 	StartTransactionCommand();
+	maybe_reread_subscription();
 
 	rel = table_open(SubscriptionRelRelationId, AccessShareLock);
 
@@ -696,7 +752,16 @@ LogicalRepSyncSequences(void)
 
 		subrel = (Form_pg_subscription_rel) GETSTRUCT(tup);
 
-		sequence_rel = try_table_open(subrel->srrelid, RowExclusiveLock);
+		/*
+		 * Lock the sequence so its identity (namespace and name) cannot
+		 * change under us via a concurrent DROP, RENAME or SET SCHEMA. The
+		 * lock is released immediately rather than at the transaction end.
+		 * The later synchronization does not depend on this captured identity
+		 * remaining valid, as it re-opens the sequence and tolerates
+		 * concurrent changes. Releasing early also avoids holding one lock
+		 * per sequence, which could exhaust the lock table.
+		 */
+		sequence_rel = try_table_open(subrel->srrelid, AccessShareLock);
 
 		/* Skip if sequence was dropped concurrently */
 		if (!sequence_rel)
@@ -705,7 +770,7 @@ LogicalRepSyncSequences(void)
 		/* Skip if the relation is not a sequence */
 		if (sequence_rel->rd_rel->relkind != RELKIND_SEQUENCE)
 		{
-			table_close(sequence_rel, NoLock);
+			table_close(sequence_rel, AccessShareLock);
 			continue;
 		}
 
@@ -723,7 +788,7 @@ LogicalRepSyncSequences(void)
 
 		MemoryContextSwitchTo(oldctx);
 
-		table_close(sequence_rel, NoLock);
+		table_close(sequence_rel, AccessShareLock);
 	}
 
 	/* Cleanup */
@@ -750,7 +815,7 @@ LogicalRepSyncSequences(void)
 	 * Establish the connection to the publisher for sequence synchronization.
 	 */
 	LogRepWorkerWalRcvConn =
-		walrcv_connect(MySubscription->conninfo, true, true,
+		walrcv_connect(MySubscriptionConninfo, true, true,
 					   must_use_password,
 					   app_name.data, &err);
 	if (LogRepWorkerWalRcvConn == NULL)

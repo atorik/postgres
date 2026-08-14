@@ -3808,6 +3808,8 @@ transformJsonObjectConstructor(ParseState *pstate, JsonObjectConstructor *ctor)
  *  - orig_query: the transformed Query of the user's original subquery, so
  *    that ruleutils.c can deparse the original JSON_ARRAY(SELECT ...) syntax
  *    for view definitions.
+ *
+ *  - format: the input FORMAT clause, so that ruleutils.c can deparse it.
  */
 static Node *
 transformJsonArrayQueryConstructor(ParseState *pstate,
@@ -3944,6 +3946,7 @@ transformJsonArrayQueryConstructor(ParseState *pstate,
 									 false, ctor->absent_on_null,
 									 ctor->location);
 	((JsonConstructorExpr *) result)->orig_query = (Node *) query;
+	((JsonConstructorExpr *) result)->format = ctor->format;
 
 	return result;
 }
@@ -4931,8 +4934,17 @@ transformJsonBehavior(ParseState *pstate, JsonExpr *jsexpr,
 	 *
 	 * For other non-NULL expressions, try to find a cast and error out if one
 	 * is not found.
+	 *
+	 * The DEFAULT expression's base type may already match the RETURNING type
+	 * yet still need coercion: when the RETURNING type carries a type
+	 * modifier (e.g. numeric(4,1)), the cast below is what enforces it, so
+	 * skipping it here would let the DEFAULT yield a value that violates its
+	 * declared RETURNING type.  A NULL constant needs no such enforcement.
 	 */
-	if (expr && exprType(expr) != returning->typid)
+	if (expr &&
+		(exprType(expr) != returning->typid ||
+		 (returning->typmod >= 0 &&
+		  !(IsA(expr, Const) && ((Const *) expr)->constisnull))))
 	{
 		bool		isnull = (IsA(expr, Const) && ((Const *) expr)->constisnull);
 

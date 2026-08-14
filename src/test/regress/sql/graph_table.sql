@@ -134,6 +134,8 @@ INSERT INTO wishlist_items (wishlist_items_id, wishlist_id, product_no) VALUES
 
 -- single element path pattern
 SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers) COLUMNS (c.name));
+-- unknown type resolution
+SELECT *, pg_typeof(unknown_col) AS unknown_col_type, pg_typeof(null_col) AS null_col_type FROM GRAPH_TABLE (myshop MATCH (c IS customers) COLUMNS (c.name, 'unknown-literal' AS unknown_col, NULL AS null_col));
 SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address = 'US')-[IS customer_orders]->(o IS orders) COLUMNS (c.name));
 -- graph element specification without label or variable
 SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address = 'US')-[]->(o IS orders) COLUMNS (c.name AS customer_name));
@@ -154,10 +156,12 @@ SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers)->(o IS orders) COLUMNS 
 -- Use table with a column name same as a property in the property graph so as
 -- to test resolution preferences. Property references are preferred over
 -- lateral table references.
-CREATE TABLE x1 (a int, address text);
-INSERT INTO x1 VALUES (1, 'one'), (2, 'two');
+CREATE TABLE x1 (a int, address text, flag boolean);
+INSERT INTO x1 VALUES (1, 'one', true), (2, 'two', false);
 SELECT * FROM x1, GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address = 'US' AND c.customer_id = x1.a)-[IS customer_orders]->(o IS orders) COLUMNS (c.name AS customer_name, c.customer_id AS cid));
 SELECT x1.a, g.* FROM x1, GRAPH_TABLE (myshop MATCH (x1 IS customers WHERE x1.address = 'US')-[IS customer_orders]->(o IS orders) COLUMNS (x1.name AS customer_name, x1.customer_id AS cid, o.order_id)) g;
+-- bare lateral reference in WHERE clause
+SELECT * FROM x1, GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.customer_id = x1.a) WHERE x1.flag COLUMNS (c.name AS customer_name));
 -- lateral reference with multi-label pattern, which is rewritten as UNION of
 -- path queries
 SELECT x1.a, g.* FROM x1,
@@ -302,6 +306,10 @@ SELECT * FROM GRAPH_TABLE (g1 MATCH (src IS el1 | vl1)-[conn]->(dest) COLUMNS (c
 SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address = 'US')-[IS customer_orders]->(o IS orders) COLUMNS (c.*));
 -- star anywhere else is not allowed as a property reference
 SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.* IS NOT NULL)-[IS customer_orders]->(o IS orders) COLUMNS (c.name));
+-- aggregate, window, and set-returning functions are not supported in COLUMNS
+SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers) COLUMNS (count(*) AS num));
+SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers) COLUMNS (row_number() OVER () AS rn));
+SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers) COLUMNS (generate_series(1, 2) AS gs));
 -- consecutive element patterns with same kind
 SELECT * FROM GRAPH_TABLE (g1 MATCH ()() COLUMNS (1 as one));
 SELECT * FROM GRAPH_TABLE (g1 MATCH -> COLUMNS (1 AS one));
@@ -481,12 +489,12 @@ CREATE TABLE cv2 () INHERITS (pv);
 INSERT INTO pv VALUES (1, 10);
 INSERT INTO cv1 VALUES (2, 20);
 INSERT INTO cv2 VALUES (3, 30);
-CREATE TABLE pe (id int, src int, dest int, val int);
+CREATE TABLE pe (id int, src int, dest int, val int, flag boolean);
 CREATE TABLE ce1 () INHERITS (pe);
 CREATE TABLE ce2 () INHERITS (pe);
-INSERT INTO pe VALUES (1, 1, 2, 100);
-INSERT INTO ce1 VALUES (2, 2, 3, 200);
-INSERT INTO ce2 VALUES (3, 3, 1, 300);
+INSERT INTO pe VALUES (1, 1, 2, 100, false);
+INSERT INTO ce1 VALUES (2, 2, 3, 200, false);
+INSERT INTO ce2 VALUES (3, 3, 1, 300, true);
 CREATE PROPERTY GRAPH g3
     NODE TABLES (
         pv KEY (id)
@@ -497,6 +505,9 @@ CREATE PROPERTY GRAPH g3
             DESTINATION KEY(dest) REFERENCES pv(id)
     );
 SELECT * FROM GRAPH_TABLE (g3 MATCH (s IS pv)-[e IS pe]->(d IS pv) COLUMNS (s.val, e.val, d.val)) ORDER BY 1, 2, 3;
+-- bare property reference in WHERE clause
+SELECT * FROM GRAPH_TABLE (g3 MATCH (s IS pv)-[e IS pe WHERE e.flag]->(d IS pv) COLUMNS (s.val, e.val, d.val)) ORDER BY 1, 2, 3;
+SELECT * FROM GRAPH_TABLE (g3 MATCH (s IS pv)-[e IS pe]->(d IS pv) WHERE e.flag COLUMNS (s.val, e.val, d.val)) ORDER BY 1, 2, 3;
 -- temporary property graph
 CREATE TEMPORARY PROPERTY GRAPH gtmp
     VERTEX TABLES (
@@ -532,13 +543,14 @@ SELECT * FROM GRAPH_TABLE (g4 MATCH (s WHERE s.id = 3)-[e]-(d) COLUMNS (s.val, e
 -- GRAPH_TABLE in views
 
 -- The query in the view definition is intentionally complex to test one view with many
--- features like label disjunction, lateral references, WHERE clauses in graph
--- patterns.
+-- features like label disjunction, lateral references, WHERE clauses on graph
+-- pattern elements as well as on the whole graph pattern.
 CREATE VIEW customers_us AS
 SELECT g.* FROM x1,
                 GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address = 'US' AND c.customer_id = x1.a)
                                           -[IS customer_orders | customer_wishlists ]->
                                           (l IS orders | wishlists)-[ IS list_items]->(p IS products)
+                                    WHERE p.price > 0
                                     COLUMNS (c.name AS customer_name, p.name AS product_name, p.price, x1.a AS a)) g
            ORDER BY customer_name, product_name;
 -- Dropping properties or labels used by a view is not allowed
@@ -611,5 +623,9 @@ SELECT src.vname, count(*) FROM v1 AS src
   GROUP BY src.vname
   HAVING count(*) >= (SELECT count(*) FROM GRAPH_TABLE (g1 MATCH (a IS vl1 | vl2) COLUMNS (a.vname AS n)) WHERE n = src.vname)
   ORDER BY vname;
+
+-- Locking clause on GRAPH_TABLE
+SELECT * FROM GRAPH_TABLE (g1 MATCH (src IS vl1) COLUMNS (src.vname)) gt FOR UPDATE OF gt;  -- not supported
+SELECT * FROM GRAPH_TABLE (g1 MATCH (src IS vl1) COLUMNS (src.vname)) gt FOR UPDATE;  -- ignored
 
 -- leave the objects behind for pg_upgrade/pg_dump tests

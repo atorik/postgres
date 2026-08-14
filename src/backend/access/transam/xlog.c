@@ -1143,9 +1143,9 @@ XLogInsertRecord(XLogRecData *rdata,
  *
  * NB: Testing shows that XLogInsertRecord runs faster if this code is inlined;
  * however, because there are two call sites, the compiler is reluctant to
- * inline. We use pg_attribute_always_inline here to try to convince it.
+ * inline. We use pg_always_inline here to try to convince it.
  */
-static pg_attribute_always_inline void
+static pg_always_inline void
 ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 						  XLogRecPtr *PrevPtr)
 {
@@ -2671,8 +2671,7 @@ XLogSetAsyncXactLSN(XLogRecPtr asyncXactLSN)
 
 	if (wakeup)
 	{
-		volatile PROC_HDR *procglobal = ProcGlobal;
-		ProcNumber	walwriterProc = procglobal->walwriterProc;
+		ProcNumber	walwriterProc = pg_atomic_read_u32(&ProcGlobal->walwriterProc);
 
 		if (walwriterProc != INVALID_PROC_NUMBER)
 			SetLatch(&GetPGProcByNumber(walwriterProc)->procLatch);
@@ -3506,7 +3505,7 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 	 */
 	for (nbytes = 0; nbytes < wal_segment_size; nbytes += sizeof(buffer))
 	{
-		int			nread;
+		ssize_t		nread;
 
 		nread = upto - nbytes;
 
@@ -3519,7 +3518,7 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 
 		if (nread > 0)
 		{
-			int			r;
+			ssize_t		r;
 
 			if (nread > sizeof(buffer))
 				nread = sizeof(buffer);
@@ -3535,14 +3534,14 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 				else
 					ereport(ERROR,
 							(errcode(ERRCODE_DATA_CORRUPTED),
-							 errmsg("could not read file \"%s\": read %d of %zu",
-									path, r, (Size) nread)));
+							 errmsg("could not read file \"%s\": read %zd of %zu",
+									path, r, nread)));
 			}
 			pgstat_report_wait_end();
 		}
 		errno = 0;
 		pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_WRITE);
-		if ((int) write(fd, buffer.data, sizeof(buffer)) != (int) sizeof(buffer))
+		if (write(fd, buffer.data, sizeof(buffer)) != sizeof(buffer))
 		{
 			int			save_errno = errno;
 
@@ -4408,7 +4407,7 @@ ReadControlFile(void)
 	pg_crc32c	crc;
 	int			fd;
 	char		wal_segsz_str[20];
-	int			r;
+	ssize_t		r;
 
 	/*
 	 * Read data...
@@ -4433,7 +4432,7 @@ ReadControlFile(void)
 		else
 			ereport(PANIC,
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read file \"%s\": read %d of %zu",
+					 errmsg("could not read file \"%s\": read %zd of %zu",
 							XLOG_CONTROL_FILE, r, sizeof(ControlFileData))));
 	}
 	pgstat_report_wait_end();
@@ -8050,9 +8049,6 @@ static void
 CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 {
 	CheckPointRelationMap();
-	CheckPointReplicationSlots(flags & CHECKPOINT_IS_SHUTDOWN);
-	CheckPointSnapBuild();
-	CheckPointLogicalRewriteHeap();
 	CheckPointReplicationOrigin();
 
 	/* Write out all dirty data in SLRUs and the main buffer pool */
@@ -8072,7 +8068,17 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckpointStats.ckpt_sync_end_t = GetCurrentTimestamp();
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_DONE();
 
-	/* We deliberately delay 2PC checkpointing as long as possible */
+	/*
+	 * Run replication slot checkpointing after buffer writes and
+	 * ProcessSyncRequests(), so WAL removal uses a fresher slot retention
+	 * horizon and avoids retaining WAL segments that slots no longer need.
+	 * Then clean up logical snapshots and rewrite mappings based on the
+	 * updated saved restart LSNs.  Also delay 2PC checkpointing as long as
+	 * possible.
+	 */
+	CheckPointReplicationSlots(flags & CHECKPOINT_IS_SHUTDOWN);
+	CheckPointSnapBuild();
+	CheckPointLogicalRewriteHeap();
 	CheckPointTwoPhase(checkPointRedo);
 }
 
@@ -8779,10 +8785,10 @@ UpdateFullPageWrites(void)
 
 	/*
 	 * It's always safe to take full page images, even when not strictly
-	 * required, but not the other round. So if we're setting full_page_writes
-	 * to true, first set it true and then write the WAL record. If we're
-	 * setting it to false, first write the WAL record and then set the global
-	 * flag.
+	 * required, but not the other way round. So if we're setting
+	 * full_page_writes to true, first set it true and then write the WAL
+	 * record. If we're setting it to false, first write the WAL record and
+	 * then set the global flag.
 	 */
 	if (fullPageWrites)
 	{
@@ -9668,7 +9674,7 @@ do_pg_backup_start(const char *backupidstr, bool fast, List **tablespaces,
 			if (de_type == PGFILETYPE_LNK)
 			{
 				StringInfoData escapedpath;
-				int			rllen;
+				ssize_t		rllen;
 
 				rllen = readlink(fullpath, linkpath, sizeof(linkpath));
 				if (rllen < 0)

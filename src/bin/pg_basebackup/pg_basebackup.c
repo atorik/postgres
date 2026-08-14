@@ -480,12 +480,13 @@ reached_end_position(XLogRecPtr segendpos, uint32 timeline,
 		r = select(bgpipe[0] + 1, &fds, NULL, NULL, &tv);
 		if (r == 1)
 		{
+			ssize_t		nread;
 			char		xlogend[64] = {0};
 			uint32		hi,
 						lo;
 
-			r = read(bgpipe[0], xlogend, sizeof(xlogend) - 1);
-			if (r < 0)
+			nread = read(bgpipe[0], xlogend, sizeof(xlogend) - 1);
+			if (nread < 0)
 				pg_fatal("could not read from ready pipe: %m");
 
 			if (sscanf(xlogend, "%X/%08X", &hi, &lo) != 2)
@@ -796,7 +797,7 @@ progress_update_filename(const char *filename)
 	/* We needn't maintain this variable if not doing verbose reports. */
 	if (showprogress && verbose)
 	{
-		free(progress_filename);
+		pg_free(progress_filename);
 		if (filename)
 			progress_filename = pg_strdup(filename);
 		else
@@ -1082,8 +1083,8 @@ CreateBackupStreamer(char *archive_name, char *spclocation,
 	inject_manifest = (format == 't' && strcmp(basedir, "-") == 0 && manifest);
 
 	/* Check whether it is a tar archive and its compression type */
-	is_tar = parse_tar_compress_algorithm(archive_name,
-										  &compressed_tar_algorithm);
+	is_tar = (parse_tar_compress_algorithm(archive_name,
+										   &compressed_tar_algorithm) > 0);
 
 	/* Is this any kind of compressed tar? */
 	is_compressed_tar = (is_tar &&
@@ -1822,7 +1823,7 @@ BaseBackup(char *compression_algorithm, char *compression_detail,
 	{
 		int			fd;
 		char		mbuf[65536];
-		int			nbytes;
+		ssize_t		nbytes;
 
 		/* Reject if server is too old. */
 		if (serverVersion < MINIMUM_VERSION_FOR_WAL_SUMMARIES)
@@ -2857,7 +2858,7 @@ main(int argc, char **argv)
 
 		if (symlink(xlog_dir, linkloc) != 0)
 			pg_fatal("could not create symbolic link \"%s\": %m", linkloc);
-		free(linkloc);
+		pfree(linkloc);
 	}
 
 	BaseBackup(compression_algorithm, compression_detail, compressloc,

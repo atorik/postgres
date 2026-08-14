@@ -1335,8 +1335,18 @@ ExecInsert(ModifyTableContext *context,
 	if (resultRelInfo->ri_WithCheckOptions != NIL)
 		ExecWithCheckOptions(WCO_VIEW_CHECK, resultRelInfo, slot, estate);
 
-	/* Process RETURNING if present */
-	if (resultRelInfo->ri_projectReturning)
+	/*
+	 * Process RETURNING if present.
+	 *
+	 * If this is an UPDATE/DELETE ... FOR PORTION OF, we do not return the
+	 * leftover rows inserted by ExecForPortionOfLeftovers().  Note that we
+	 * must check mtstate->operation here, because we *do* want to process the
+	 * newly inserted row of a cross-partition UPDATE with a FOR PORTION OF
+	 * clause (ExecCrossPartitionUpdate() leaves mtstate->operation set to
+	 * CMD_UPDATE, whereas ExecForPortionOfLeftovers() sets it to CMD_INSERT).
+	 */
+	if (resultRelInfo->ri_projectReturning &&
+		!(node->forPortionOf && mtstate->operation == CMD_INSERT))
 	{
 		TupleTableSlot *oldSlot = NULL;
 
@@ -2765,8 +2775,27 @@ ExecUpdate(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	 * Prepare for the update.  This includes BEFORE ROW triggers, so we're
 	 * done if it says we are.
 	 */
+	context->tmfd.traversed = false;
 	if (!ExecUpdatePrologue(context, resultRelInfo, tupleid, oldtuple, slot, NULL))
 		return NULL;
+
+	/*
+	 * If the target tuple was concurrently updated, the trigger code will
+	 * have done EPQ and updated tupleid, following the update chain.  In this
+	 * case, we must fetch the most recent version of old tuple for the
+	 * benefit of RETURNING.  Technically, we could get away with not doing
+	 * this, if there is no RETURNING clause, or it doesn't refer to OLD, but
+	 * it seems preferable to always ensure that the contents of oldSlot are
+	 * correct.
+	 */
+	if (context->tmfd.traversed)
+	{
+		if (!table_tuple_fetch_row_version(resultRelInfo->ri_RelationDesc,
+										   tupleid,
+										   SnapshotAny,
+										   oldSlot))
+			elog(ERROR, "failed to re-fetch tuple updated during trigger execution");
+	}
 
 	/* INSTEAD OF ROW UPDATE Triggers */
 	if (resultRelInfo->ri_TrigDesc &&
@@ -5108,6 +5137,8 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	List	   *updateColnosLists = NIL;
 	List	   *mergeActionLists = NIL;
 	List	   *mergeJoinConditions = NIL;
+	List	   *fdwPrivLists = NIL;
+	Bitmapset  *fdwDirectModifyPlans = NULL;
 	ResultRelInfo *resultRelInfo;
 	List	   *arowmarks;
 	ListCell   *l;
@@ -5150,6 +5181,8 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 		if (keep_rel)
 		{
+			List	   *fdwPrivList = (List *) list_nth(node->fdwPrivLists, i);
+
 			resultRelations = lappend_int(resultRelations, rti);
 			if (node->withCheckOptionLists)
 			{
@@ -5185,6 +5218,19 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 				mergeJoinConditions = lappend(mergeJoinConditions, mergeJoinCondition);
 			}
+
+			/*
+			 * fdwPrivLists/fdwDirectModifyPlans are re-indexed to match
+			 * resultRelations
+			 */
+			fdwPrivLists = lappend(fdwPrivLists, fdwPrivList);
+			if (bms_is_member(i, node->fdwDirectModifyPlans))
+			{
+				int			new_index = list_length(resultRelations) - 1;
+
+				fdwDirectModifyPlans = bms_add_member(fdwDirectModifyPlans,
+													  new_index);
+			}
 		}
 		i++;
 	}
@@ -5213,6 +5259,7 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	mtstate->mt_updateColnosLists = updateColnosLists;
 	mtstate->mt_mergeActionLists = mergeActionLists;
 	mtstate->mt_mergeJoinConditions = mergeJoinConditions;
+	mtstate->mt_fdwPrivLists = fdwPrivLists;
 
 	/*----------
 	 * Resolve the target relation. This is the same as:
@@ -5288,13 +5335,13 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 		/* Initialize the usesFdwDirectModify flag */
 		resultRelInfo->ri_usesFdwDirectModify =
-			bms_is_member(i, node->fdwDirectModifyPlans);
+			bms_is_member(i, fdwDirectModifyPlans);
 
 		/*
 		 * Verify result relation is a valid target for the current operation
 		 */
 		CheckValidResultRel(resultRelInfo, operation, node->onConflictAction,
-							mergeActions);
+							mergeActions, node);
 
 		resultRelInfo++;
 		i++;
@@ -5317,7 +5364,7 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 			resultRelInfo->ri_FdwRoutine != NULL &&
 			resultRelInfo->ri_FdwRoutine->BeginForeignModify != NULL)
 		{
-			List	   *fdw_private = (List *) list_nth(node->fdwPrivLists, i);
+			List	   *fdw_private = (List *) list_nth(fdwPrivLists, i);
 
 			resultRelInfo->ri_FdwRoutine->BeginForeignModify(mtstate,
 															 resultRelInfo,
@@ -5604,7 +5651,6 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		/* Create state for FOR PORTION OF operation */
 
 		fpoState = makeNode(ForPortionOfState);
-		fpoState->fp_rangeName = forPortionOf->range_name;
 		fpoState->fp_rangeType = forPortionOf->rangeType;
 		fpoState->fp_rangeAttno = forPortionOf->rangeVar->varattno;
 		fpoState->fp_targetRange = targetRange;
@@ -5891,7 +5937,6 @@ ExecInitForPortionOf(ModifyTableState *mtstate, EState *estate,
 
 	leafState = makeNode(ForPortionOfState);
 
-	leafState->fp_rangeName = fpoState->fp_rangeName;
 	leafState->fp_rangeType = fpoState->fp_rangeType;
 	leafState->fp_targetRange = fpoState->fp_targetRange;
 	map = ExecGetChildToRootMap(resultRelInfo);

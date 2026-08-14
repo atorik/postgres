@@ -62,8 +62,12 @@ static void remove_rel_from_query(PlannerInfo *root, int relid,
 								  Relids joinrelids);
 static void remove_rel_from_restrictinfo(RestrictInfo *rinfo,
 										 int relid, int ojrelid);
-static void remove_rel_from_eclass(EquivalenceClass *ec,
+static void remove_rel_from_eclass(PlannerInfo *root, EquivalenceClass *ec,
 								   int relid, int ojrelid);
+static void remove_rel_from_restrictinfo_phvs(RestrictInfo *rinfo,
+											  int relid, int ojrelid);
+static Node *remove_rel_from_phvs(Node *node, int relid, int ojrelid);
+static Node *remove_rel_from_phvs_mutator(Node *node, Relids removable);
 static List *remove_rel_from_joinlist(List *joinlist, int relid, int *nremoved);
 static bool rel_supports_distinctness(PlannerInfo *root, RelOptInfo *rel);
 static bool rel_is_distinct_for(PlannerInfo *root, RelOptInfo *rel,
@@ -455,6 +459,7 @@ remove_rel_from_query(PlannerInfo *root, int relid,
 	ListCell   *l;
 	bool		is_outer_join = (sjinfo != NULL);
 	bool		is_self_join = (!is_outer_join && subst > 0);
+	Bitmapset  *seen_serials = NULL;
 
 	Assert(is_outer_join || is_self_join);
 	Assert(!is_outer_join || ojrelid > 0);
@@ -618,9 +623,7 @@ remove_rel_from_query(PlannerInfo *root, int relid,
 		{
 			EquivalenceClass *ec = (EquivalenceClass *) lfirst(l);
 
-			if (bms_is_member(relid, ec->ec_relids) ||
-				bms_is_member(ojrelid, ec->ec_relids))
-				remove_rel_from_eclass(ec, relid, ojrelid);
+			remove_rel_from_eclass(root, ec, relid, ojrelid);
 		}
 	}
 
@@ -642,6 +645,11 @@ remove_rel_from_query(PlannerInfo *root, int relid,
 	 * Additionally, if we are performing self-join elimination, we must
 	 * replace references to the removed relid with subst within the
 	 * lateral_vars lists.
+	 *
+	 * Also, for left-join removal, we strip the removed rel and join from any
+	 * PlaceHolderVar embedded in the surviving rels' restriction clauses and
+	 * join clauses; we needn't bother with the rel being removed, nor when
+	 * the query has no PlaceHolderVars.
 	 */
 	for (rti = 1; rti < root->simple_rel_array_size; rti++)
 	{
@@ -667,6 +675,33 @@ remove_rel_from_query(PlannerInfo *root, int relid,
 		if (is_self_join)
 			ChangeVarNodesExtended((Node *) otherrel->lateral_vars, relid,
 								   subst, 0, replace_relid_callback);
+
+		if (is_outer_join && rti != relid && root->glob->lastPHId != 0)
+		{
+			foreach_node(RestrictInfo, rinfo, otherrel->baserestrictinfo)
+				remove_rel_from_restrictinfo_phvs(rinfo, relid, ojrelid);
+
+			/*
+			 * Join clauses need the same treatment, but there's no value in
+			 * processing any join clause more than once.  So it's slightly
+			 * annoying that we have to find them via the per-base-relation
+			 * joininfo lists.  Avoid duplicate processing by tracking the
+			 * rinfo_serial numbers of join clauses we've already seen.  (This
+			 * doesn't work for is_clone clauses, so we must waste effort on
+			 * them.)
+			 */
+			foreach_node(RestrictInfo, rinfo, otherrel->joininfo)
+			{
+				if (!rinfo->is_clone)	/* else serial number is not unique */
+				{
+					if (bms_is_member(rinfo->rinfo_serial, seen_serials))
+						continue;	/* saw it already */
+					seen_serials = bms_add_member(seen_serials,
+												  rinfo->rinfo_serial);
+				}
+				remove_rel_from_restrictinfo_phvs(rinfo, relid, ojrelid);
+			}
+		}
 	}
 }
 
@@ -748,16 +783,38 @@ remove_rel_from_restrictinfo(RestrictInfo *rinfo, int relid, int ojrelid)
 /*
  * Remove any references to relid or ojrelid from the EquivalenceClass.
  *
- * Like remove_rel_from_restrictinfo, we don't worry about cleaning out
- * any nullingrel bits in contained Vars and PHVs.  (This might have to be
- * improved sometime.)  We do need to fix the EC and EM relid sets to ensure
- * that implied join equalities will be generated at the appropriate join
- * level(s).
+ * We fix the EC and EM relid sets to ensure that implied join equalities will
+ * be generated at the appropriate join level(s).  We also strip the removed
+ * rel from PlaceHolderVars embedded in member expressions; a member's
+ * em_relids reflects ph_eval_at rather than the PHV's phrels, so the latter
+ * can still mention the removed rel even when em_relids does not.  Like
+ * remove_rel_from_restrictinfo, we don't bother with nullingrel bits in
+ * contained plain Vars.
  */
 static void
-remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
+remove_rel_from_eclass(PlannerInfo *root, EquivalenceClass *ec,
+					   int relid, int ojrelid)
 {
 	ListCell   *lc;
+
+	/*
+	 * Strip the removed rel/join from PlaceHolderVars in member expressions.
+	 * This is needed even when the EC's relids don't mention the removed rel.
+	 * Plain Vars and Consts can't contain a PlaceHolderVar, so skip them.
+	 */
+	if (root->glob->lastPHId != 0)
+	{
+		foreach_node(EquivalenceMember, em, ec->ec_members)
+		{
+			if (!IsA(em->em_expr, Var) && !IsA(em->em_expr, Const))
+				em->em_expr = (Expr *)
+					remove_rel_from_phvs((Node *) em->em_expr, relid, ojrelid);
+		}
+	}
+
+	if (!bms_is_member(relid, ec->ec_relids) &&
+		!bms_is_member(ojrelid, ec->ec_relids))
+		return;
 
 	/* Fix up the EC's overall relids */
 	ec->ec_relids = bms_del_member(ec->ec_relids, relid);
@@ -806,6 +863,116 @@ remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
 	 * clauses, which we'd not need anymore anyway.)
 	 */
 	ec_clear_derived_clauses(ec);
+}
+
+/*
+ * Remove any references to relid or ojrelid from the PlaceHolderVars embedded
+ * in a RestrictInfo's clause.
+ *
+ * If it's an OR clause, we must also fix up the orclause, which is a parallel
+ * representation built from its own sub-RestrictInfos.  We recurse into the
+ * sub-clauses for that, mirroring remove_rel_from_restrictinfo.
+ */
+static void
+remove_rel_from_restrictinfo_phvs(RestrictInfo *rinfo, int relid, int ojrelid)
+{
+	rinfo->clause = (Expr *)
+		remove_rel_from_phvs((Node *) rinfo->clause, relid, ojrelid);
+
+	/* If it's an OR, recurse to clean up sub-clauses */
+	if (restriction_is_or_clause(rinfo))
+	{
+		ListCell   *lc;
+
+		Assert(is_orclause(rinfo->orclause));
+		foreach(lc, ((BoolExpr *) rinfo->orclause)->args)
+		{
+			Node	   *orarg = (Node *) lfirst(lc);
+
+			/* OR arguments should be ANDs or sub-RestrictInfos */
+			if (is_andclause(orarg))
+			{
+				List	   *andargs = ((BoolExpr *) orarg)->args;
+				ListCell   *lc2;
+
+				foreach(lc2, andargs)
+				{
+					RestrictInfo *rinfo2 = lfirst_node(RestrictInfo, lc2);
+
+					remove_rel_from_restrictinfo_phvs(rinfo2, relid, ojrelid);
+				}
+			}
+			else
+			{
+				RestrictInfo *rinfo2 = castNode(RestrictInfo, orarg);
+
+				remove_rel_from_restrictinfo_phvs(rinfo2, relid, ojrelid);
+			}
+		}
+	}
+}
+
+/*
+ * Remove any references to the specified RT index(es) from the phrels (and
+ * phnullingrels) of every PlaceHolderVar in the given expression.
+ *
+ * remove_rel_from_query() fixes up the relid sets of RestrictInfos and
+ * EquivalenceMembers, but not the PlaceHolderVars embedded in their
+ * expressions.  That's normally fine, but such an expression may later be
+ * translated for an appendrel child and have its relids recomputed by
+ * pull_varnos().  A leftover removed relid in phrels would then make
+ * pull_varnos() reference a nonexistent rel, so we strip it here to match the
+ * canonical PlaceHolderVar.
+ */
+static Node *
+remove_rel_from_phvs(Node *node, int relid, int ojrelid)
+{
+	Relids		removable = bms_add_member(bms_make_singleton(relid), ojrelid);
+
+	return remove_rel_from_phvs_mutator(node, removable);
+}
+
+static Node *
+remove_rel_from_phvs_mutator(Node *node, Relids removable)
+{
+	if (node == NULL)
+		return NULL;
+	if (IsA(node, PlaceHolderVar))
+	{
+		PlaceHolderVar *phv = (PlaceHolderVar *) node;
+		Relids		newphrels;
+
+		/* Upper-level PlaceHolderVars should be long gone at this point */
+		Assert(phv->phlevelsup == 0);
+
+		/* Copy the PlaceHolderVar and mutate what's below ... */
+		phv = (PlaceHolderVar *)
+			expression_tree_mutator(node,
+									remove_rel_from_phvs_mutator,
+									removable);
+
+		/*
+		 * ... then strip the removed rels from its relid sets.
+		 *
+		 * If stripping would empty phrels, the PHV is evaluated only at the
+		 * removed relation(s); it then belongs to an EquivalenceMember that
+		 * the caller drops immediately afterwards.  Leave such a PHV
+		 * untouched rather than build one with empty phrels, which the rest
+		 * of the planner assumes never occurs.
+		 */
+		newphrels = bms_difference(phv->phrels, removable);
+		if (!bms_is_empty(newphrels))
+		{
+			phv->phrels = newphrels;
+			phv->phnullingrels = bms_difference(phv->phnullingrels,
+												removable);
+		}
+
+		return (Node *) phv;
+	}
+	return expression_tree_mutator(node,
+								   remove_rel_from_phvs_mutator,
+								   removable);
 }
 
 /*

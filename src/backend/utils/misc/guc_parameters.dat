@@ -73,7 +73,6 @@
   boot_val => '""',
 },
 
-
 { name => 'archive_command', type => 'string', context => 'PGC_SIGHUP', group => 'WAL_ARCHIVING',
   short_desc => 'Sets the shell command that will be called to archive a WAL file.',
   long_desc => 'An empty string means use "archive_library".',
@@ -906,6 +905,13 @@
   boot_val => 'true',
 },
 
+{ name => 'enable_groupagg', type => 'bool', context => 'PGC_USERSET', group => 'QUERY_TUNING_METHOD',
+  short_desc => 'Enables the planner\'s use of sort-based grouping and aggregation plans.',
+  flags => 'GUC_EXPLAIN',
+  variable => 'enable_groupagg',
+  boot_val => 'true',
+},
+
 { name => 'enable_hashagg', type => 'bool', context => 'PGC_USERSET', group => 'QUERY_TUNING_METHOD',
   short_desc => 'Enables the planner\'s use of hashed aggregation plans.',
   flags => 'GUC_EXPLAIN',
@@ -1253,7 +1259,7 @@
   variable => 'huge_page_size',
   boot_val => '0',
   min => '0',
-  max => 'INT_MAX',
+  max => 'MAX_KILOBYTES',
   check_hook => 'check_huge_page_size',
 },
 
@@ -1869,6 +1875,16 @@
   options => 'log_statement_options',
 },
 
+{ name => 'log_statement_max_length', type => 'int', context => 'PGC_SUSET', group => 'LOGGING_WHAT',
+  short_desc => 'Sets the maximum length in bytes of logged statement text.',
+  long_desc => '-1 means log statement in full; 0 means log only an ellipsis.',
+  flags => 'GUC_UNIT_BYTE',
+  variable => 'log_statement_max_length',
+  boot_val => '-1',
+  min => '-1',
+  max => 'INT_MAX / 2',
+},
+
 { name => 'log_statement_sample_rate', type => 'real', context => 'PGC_SUSET', group => 'LOGGING_WHEN',
   short_desc => 'Fraction of statements exceeding "log_min_duration_sample" to be logged.',
   long_desc => 'Use a value between 0.0 (never log) and 1.0 (always log).',
@@ -2309,6 +2325,15 @@
   ifdef => 'DEBUG_BOUNDED_SORT',
 },
 
+{ name => 'output_plugin_libraries', type => 'string', context => 'PGC_SUSET', group => 'REPLICATION_SENDING',
+  short_desc => 'Lists libraries that may be named as logical decoding output plugins.',
+  long_desc => 'Users with REPLICATION privileges may only use plugins in this list when creating logical replication slots.',
+  # Note that src/bin/pg_upgrade/check.c assumes GUC_LIST_QUOTE here.
+  flags => 'GUC_LIST_INPUT | GUC_LIST_QUOTE | GUC_SUPERUSER_ONLY',
+  variable => 'output_plugin_libraries_string',
+  boot_val => '"pgoutput, test_decoding"',
+},
+
 { name => 'parallel_leader_participation', type => 'bool', context => 'PGC_USERSET', group => 'RESOURCES_WORKER_PROCESSES',
   short_desc => 'Controls whether Gather and Gather Merge also run subplans.',
   long_desc => 'Should gather nodes also run subplans or just gather tuples?',
@@ -2456,7 +2481,6 @@
   variable => 'recovery_target_string',
   boot_val => '""',
   check_hook => 'check_recovery_target',
-  assign_hook => 'assign_recovery_target',
 },
 
 { name => 'recovery_target_action', type => 'enum', context => 'PGC_POSTMASTER', group => 'WAL_RECOVERY_TARGET',
@@ -2482,10 +2506,9 @@
 
 { name => 'recovery_target_name', type => 'string', context => 'PGC_POSTMASTER', group => 'WAL_RECOVERY_TARGET',
   short_desc => 'Sets the named restore point up to which recovery will proceed.',
-  variable => 'recovery_target_name_string',
+  variable => 'recoveryTargetName',
   boot_val => '""',
   check_hook => 'check_recovery_target_name',
-  assign_hook => 'assign_recovery_target_name',
 },
 
 { name => 'recovery_target_time', type => 'string', context => 'PGC_POSTMASTER', group => 'WAL_RECOVERY_TARGET',
@@ -2493,7 +2516,6 @@
   variable => 'recovery_target_time_string',
   boot_val => '""',
   check_hook => 'check_recovery_target_time',
-  assign_hook => 'assign_recovery_target_time',
 },
 
 { name => 'recovery_target_timeline', type => 'string', context => 'PGC_POSTMASTER', group => 'WAL_RECOVERY_TARGET',
@@ -2627,7 +2649,6 @@
   variable => 'send_abort_for_kill',
   boot_val => 'false',
 },
-
 
 { name => 'seq_page_cost', type => 'real', context => 'PGC_USERSET', group => 'QUERY_TUNING_COST',
   short_desc => 'Sets the planner\'s estimate of the cost of a sequentially fetched disk page.',
@@ -3560,7 +3581,7 @@
 
 { name => 'wal_sender_shutdown_timeout', type => 'int', context => 'PGC_USERSET', group => 'REPLICATION_SENDING',
   short_desc => 'Sets the maximum time the server waits during shutdown for all WAL data to be replicated to the receiver.',
-  long_desc => '-1 disables the timeout',
+  long_desc => '-1 disables the timeout and waits for the receiver to catch up; 0 does not wait for the receiver to catch up.',
   flags => 'GUC_UNIT_MS',
   variable => 'wal_sender_shutdown_timeout',
   boot_val => '-1',

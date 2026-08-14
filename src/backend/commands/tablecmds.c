@@ -211,6 +211,7 @@ typedef struct AlteredTableInfo
 	char	   *clusterOnIndex; /* index to use for CLUSTER */
 	List	   *changedStatisticsOids;	/* OIDs of statistics to rebuild */
 	List	   *changedStatisticsDefs;	/* string definitions of same */
+	List	   *changedStatisticsOwners;	/* owners of same */
 } AlteredTableInfo;
 
 /* Struct describing one new constraint to check in Phase 3 scan */
@@ -437,6 +438,7 @@ static bool ATExecAlterFKConstrEnforceability(List **wqueue, ATAlterConstraint *
 static bool ATExecAlterCheckConstrEnforceability(List **wqueue, ATAlterConstraint *cmdcon,
 												 Relation conrel, HeapTuple contuple,
 												 bool recurse, bool recursing,
+												 List *changing_conids,
 												 LOCKMODE lockmode);
 static bool ATExecAlterConstrDeferrability(List **wqueue, ATAlterConstraint *cmdcon,
 										   Relation conrel, Relation tgrel, Relation rel,
@@ -459,6 +461,7 @@ static void AlterFKConstrEnforceabilityRecurse(List **wqueue, ATAlterConstraint 
 static void AlterCheckConstrEnforceabilityRecurse(List **wqueue, ATAlterConstraint *cmdcon,
 												  Relation conrel, Oid conrelid,
 												  bool recurse, bool recursing,
+												  List *changing_conids,
 												  LOCKMODE lockmode);
 static void AlterConstrDeferrabilityRecurse(List **wqueue, ATAlterConstraint *cmdcon,
 											Relation conrel, Relation tgrel, Relation rel,
@@ -466,6 +469,10 @@ static void AlterConstrDeferrabilityRecurse(List **wqueue, ATAlterConstraint *cm
 											List **otherrelids, LOCKMODE lockmode);
 static void AlterConstrUpdateConstraintEntry(ATAlterConstraint *cmdcon, Relation conrel,
 											 HeapTuple contuple);
+static bool ATCheckCheckConstrHasEnforcedParent(Relation conrel, Relation rel,
+												HeapTuple contuple,
+												List *changing_conids,
+												Oid *enforced_parentoid);
 static ObjectAddress ATExecValidateConstraint(List **wqueue,
 											  Relation rel, char *constrName,
 											  bool recurse, bool recursing, LOCKMODE lockmode);
@@ -477,6 +484,7 @@ static void QueueCheckConstraintValidation(List **wqueue, Relation conrel, Relat
 static void QueueNNConstraintValidation(List **wqueue, Relation conrel, Relation rel,
 										HeapTuple contuple, bool recurse, bool recursing,
 										LOCKMODE lockmode);
+static bool constraints_equivalent(HeapTuple a, HeapTuple b, TupleDesc tupleDesc);
 static int	transformColumnNameList(Oid relId, List *colList,
 									int16 *attnums, Oid *atttypids, Oid *attcollids);
 static int	transformFkeyGetPrimaryKey(Relation pkrel, Oid *indexOid,
@@ -540,7 +548,7 @@ static void add_column_collation_dependency(Oid relid, int32 attnum, Oid collid)
 static ObjectAddress ATExecDropNotNull(Relation rel, const char *colName, bool recurse,
 									   LOCKMODE lockmode);
 static void set_attnotnull(List **wqueue, Relation rel, AttrNumber attnum,
-						   bool is_valid, bool queue_validation);
+						   bool queue_validation);
 static ObjectAddress ATExecSetNotNull(List **wqueue, Relation rel,
 									  char *conName, char *colName,
 									  bool recurse, bool recursing,
@@ -686,12 +694,13 @@ static ObjectAddress ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 										   AlterTableCmd *cmd, LOCKMODE lockmode);
 static void RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 											  Relation rel, AttrNumber attnum, const char *colName);
+static void RememberWholeRowDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype, Relation rel);
 static void RememberConstraintForRebuilding(Oid conoid, AlteredTableInfo *tab);
 static void RememberIndexForRebuilding(Oid indoid, AlteredTableInfo *tab);
 static void RememberStatisticsForRebuilding(Oid stxoid, AlteredTableInfo *tab);
 static void ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab,
 								   LOCKMODE lockmode);
-static void ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId,
+static void ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, Oid ownerId,
 								 char *cmd, List **wqueue, LOCKMODE lockmode,
 								 bool rewrite);
 static void RebuildConstraintComment(AlteredTableInfo *tab, AlterTablePass pass,
@@ -1014,6 +1023,14 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 						stmt->relation->relpersistence,
 						stmt->partbound != NULL,
 						&old_constraints, &old_notnulls);
+
+	/*
+	 * NB: The defaults and constraints we just inherited are already cooked,
+	 * so they don't get the USAGE checks that AddRelationNewConstraints()
+	 * applies to raw ones.  That's intentional: the parent's own catalog
+	 * entries already depend on those types, so copying them pins nothing
+	 * new, and creating a child requires owning the parent, anyway.
+	 */
 
 	/*
 	 * Create a tuple descriptor from the relation schema.  Note that this
@@ -1403,7 +1420,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	nncols = AddRelationNotNullConstraints(rel, stmt->nnconstraints,
 										   old_notnulls, connames);
 	foreach_int(attrnum, nncols)
-		set_attnotnull(NULL, rel, attrnum, true, false);
+		set_attnotnull(NULL, rel, attrnum, false);
 
 	ObjectAddressSet(address, RelationRelationId, relationId);
 
@@ -2457,9 +2474,11 @@ truncate_check_rel(Oid relid, Form_pg_class reltuple)
 	 * pg_largeobject and pg_largeobject_metadata to be truncated as part of
 	 * pg_upgrade, because we need to change its relfilenode to match the old
 	 * cluster, and allowing a TRUNCATE command to be executed is the easiest
-	 * way of doing that.
+	 * way of doing that. We also allow TRUNCATE on the conflict log tables,
+	 * to permit users to manually prune conflict data to manage disk space.
 	 */
-	if (!allowSystemTableMods && IsSystemClass(relid, reltuple)
+	if (!allowSystemTableMods && IsSystemClass(relid, reltuple) &&
+		!IsConflictLogTableClass(reltuple)
 		&& (!IsBinaryUpgrade ||
 			(relid != LargeObjectRelationId &&
 			 relid != LargeObjectMetadataRelationId)))
@@ -2747,6 +2766,18 @@ MergeAttributes(List *columns, const List *supers, char relpersistence,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("cannot inherit from partition \"%s\"",
 							RelationGetRelationName(relation))));
+
+		/*
+		 * Conflict log tables are managed by the system for logical
+		 * replication and should not be used as parent tables, as inheritance
+		 * could interfere with the logging behavior.
+		 */
+		if (IsConflictLogTableNamespace(relation->rd_rel->relnamespace))
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("cannot inherit from conflict log table \"%s\"",
+							RelationGetRelationName(relation)),
+					 errdetail("Conflict log tables are system-managed tables for logical replication conflicts.")));
 
 		if (relation->rd_rel->relkind != RELKIND_RELATION &&
 			relation->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&
@@ -3885,6 +3916,19 @@ renameatt_check(Oid myrelid, Form_pg_class classform, bool recursing)
 	if (!object_ownercheck(RelationRelationId, myrelid, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(get_rel_relkind(myrelid)),
 					   NameStr(classform->relname));
+
+	/*
+	 * Conflict log tables are used internally for logical replication
+	 * conflict logging and should not be modified directly, as it could
+	 * disrupt conflict logging.
+	 */
+	if (IsConflictLogTableClass(classform))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot rename columns of conflict log table \"%s\"",
+						NameStr(classform->relname)),
+				 errdetail("Conflict log tables are system-managed tables for logical replication conflicts.")));
+
 	if (!allowSystemTableMods && IsSystemClass(myrelid, classform))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
@@ -5547,7 +5591,7 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 			address =
 				AlterDomainAddConstraint(((AlterDomainStmt *) cmd->def)->typeName,
 										 ((AlterDomainStmt *) cmd->def)->def,
-										 NULL);
+										 NULL, true);
 			break;
 		case AT_ReAddComment:	/* Re-add existing comment */
 			address = CommentObject((CommentStmt *) cmd->def);
@@ -6887,6 +6931,22 @@ ATSimplePermissions(AlterTableType cmdtype, Relation rel, int allowed_targets)
 		aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(rel->rd_rel->relkind),
 					   RelationGetRelationName(rel));
 
+	/*
+	 * Conflict log tables are used internally for logical replication
+	 * conflict logging and should not be altered directly, as it could
+	 * disrupt conflict logging. Direct ALTER commands are already rejected
+	 * during relation lookup in RangeVarCallbackForAlterRelation(), and
+	 * AlterTableMoveAll() skips these tables, so a conflict log table does
+	 * not normally reach here; this check guards any internal caller that
+	 * arrives via AlterTableInternal().
+	 */
+	if (IsConflictLogTableClass(rel->rd_rel))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot alter conflict log table \"%s\"",
+						RelationGetRelationName(rel)),
+				 errdetail("Conflict log tables are system-managed tables for logical replication conflicts.")));
+
 	if (!allowSystemTableMods && IsSystemRelation(rel))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
@@ -7928,10 +7988,9 @@ ATExecDropNotNull(Relation rel, const char *colName, bool recurse,
  */
 static void
 set_attnotnull(List **wqueue, Relation rel, AttrNumber attnum,
-			   bool is_valid, bool queue_validation)
+			   bool queue_validation)
 {
 	Form_pg_attribute attr;
-	CompactAttribute *thisatt;
 
 	Assert(!queue_validation || wqueue);
 
@@ -7956,9 +8015,6 @@ set_attnotnull(List **wqueue, Relation rel, AttrNumber attnum,
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for attribute %d of relation %u",
 				 attnum, RelationGetRelid(rel));
-
-		thisatt = TupleDescCompactAttr(RelationGetDescr(rel), attnum - 1);
-		thisatt->attnullability = ATTNULLABLE_VALID;
 
 		attr = (Form_pg_attribute) GETSTRUCT(tuple);
 
@@ -8141,7 +8197,7 @@ ATExecSetNotNull(List **wqueue, Relation rel, char *conName, char *colName,
 	ObjectAddressSet(address, ConstraintRelationId, ccon->conoid);
 
 	/* Mark pg_attribute.attnotnull for the column and queue validation */
-	set_attnotnull(wqueue, rel, attnum, true, true);
+	set_attnotnull(wqueue, rel, attnum, true);
 
 	InvokeObjectPostAlterHook(RelationRelationId,
 							  RelationGetRelid(rel), attnum);
@@ -8303,7 +8359,14 @@ ATExecCookedColumnDefault(Relation rel, AttrNumber attnum,
 {
 	ObjectAddress address;
 
-	/* We assume no checking is required */
+	/*
+	 * This is used for a cooked default copied by CREATE TABLE ... LIKE,
+	 * which adds new type dependencies.  Such a default doesn't go through
+	 * AddRelationNewConstraints(), and StoreAttrDefault() leaves the
+	 * privilege checks to its caller, so we must check for USAGE on the types
+	 * here.
+	 */
+	CheckUsageOnTypesInSingleRelExpr(newDefault, RelationGetRelid(rel), GetUserId());
 
 	/*
 	 * Remove any old default for the column.  We use RESTRICT here for
@@ -8767,6 +8830,13 @@ ATExecSetExpression(AlteredTableInfo *tab, Relation rel, const char *colName,
 	RememberAllDependentForRebuilding(tab, AT_SetExpression, rel, attnum, colName);
 
 	/*
+	 * Find whole-row referenced objects that depend on the column
+	 * (constraints, indexes, etc.), and record enough information to let us
+	 * recreate the objects.
+	 */
+	RememberWholeRowDependentForRebuilding(tab, AT_SetExpression, rel);
+
+	/*
 	 * Drop the dependency records of the GENERATED expression, in particular
 	 * its INTERNAL dependency on the column, which would otherwise cause
 	 * dependency.c to refuse to perform the deletion.
@@ -8833,17 +8903,12 @@ static void
 ATPrepDropExpression(Relation rel, AlterTableCmd *cmd, bool recurse, bool recursing, LOCKMODE lockmode)
 {
 	/*
-	 * Reject ONLY if there are child tables.  We could implement this, but it
-	 * is a bit complicated.  GENERATED clauses must be attached to the column
-	 * definition and cannot be added later like DEFAULT, so if a child table
-	 * has a generation expression that the parent does not have, the child
-	 * column will necessarily be an attislocal column.  So to implement ONLY
-	 * here, we'd need extra code to update attislocal of the direct child
-	 * tables, somewhat similar to how DROP COLUMN does it, so that the
-	 * resulting state can be properly dumped and restored.
+	 * Reject ONLY if there are child tables -- but only, of course, at the
+	 * top of the tree, otherwise it'd be impossible to run this command with
+	 * trees deeper than two levels.  Caller already got lock.
 	 */
-	if (!recurse &&
-		find_inheritance_children(RelationGetRelid(rel), lockmode))
+	if (!recurse && !recursing &&
+		find_inheritance_children(RelationGetRelid(rel), NoLock))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("ALTER TABLE / DROP EXPRESSION must be applied to child tables too")));
@@ -9768,7 +9833,11 @@ ATExecAddStatistics(AlteredTableInfo *tab, Relation rel,
 	/* The CreateStatsStmt has already been through transformStatsStmt */
 	Assert(stmt->transformed);
 
-	address = CreateStatistics(stmt, !is_rebuild);
+	/* The owner must be set to the original statistics owner */
+	Assert(OidIsValid(stmt->owner));
+
+	address = CreateStatistics(list_make1_oid(RelationGetRelid(rel)),
+							   stmt, !is_rebuild);
 
 	return address;
 }
@@ -10055,7 +10124,6 @@ ATAddCheckNNConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		 */
 		if (constr->contype == CONSTR_NOTNULL)
 			set_attnotnull(wqueue, rel, ccon->attnum,
-						   !constr->skip_validation,
 						   !constr->skip_validation);
 
 		ObjectAddressSet(address, ConstraintRelationId, ccon->conoid);
@@ -10195,6 +10263,18 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("referenced relation \"%s\" is not a table",
 						RelationGetRelationName(pkrel))));
+
+	/*
+	 * Conflict log tables are used internally for logical replication
+	 * conflict logging and should not be referenced by foreign keys, as it
+	 * could disrupt conflict logging.
+	 */
+	if (IsConflictLogTableClass(pkrel->rd_rel))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot reference conflict log table \"%s\"",
+						RelationGetRelationName(pkrel)),
+				 errdetail("Conflict log tables are system-managed tables for logical replication conflicts.")));
 
 	if (!allowSystemTableMods && IsSystemRelation(pkrel))
 		ereport(ERROR,
@@ -12459,7 +12539,7 @@ ATExecAlterConstraintInternal(List **wqueue, ATAlterConstraint *cmdcon,
 		else if (currcon->contype == CONSTRAINT_CHECK)
 			changed = ATExecAlterCheckConstrEnforceability(wqueue, cmdcon, conrel,
 														   contuple, recurse, false,
-														   lockmode);
+														   NIL, lockmode);
 	}
 	else if (cmdcon->alterDeferrability &&
 			 ATExecAlterConstrDeferrability(wqueue, cmdcon, conrel, tgrel, rel,
@@ -12646,12 +12726,16 @@ ATExecAlterFKConstrEnforceability(List **wqueue, ATAlterConstraint *cmdcon,
 static bool
 ATExecAlterCheckConstrEnforceability(List **wqueue, ATAlterConstraint *cmdcon,
 									 Relation conrel, HeapTuple contuple,
-									 bool recurse, bool recursing, LOCKMODE lockmode)
+									 bool recurse, bool recursing,
+									 List *changing_conids,
+									 LOCKMODE lockmode)
 {
 	Form_pg_constraint currcon;
 	Relation	rel;
 	bool		changed = false;
 	List	   *children = NIL;
+	bool		target_enforced = cmdcon->is_enforced;
+	Oid			enforced_parentoid = InvalidOid;
 
 	/* Since this function recurses, it could be driven to stack overflow */
 	check_stack_depth();
@@ -12668,16 +12752,57 @@ ATExecAlterCheckConstrEnforceability(List **wqueue, ATAlterConstraint *cmdcon,
 	 */
 	rel = table_open(currcon->conrelid, NoLock);
 
-	if (currcon->conenforced != cmdcon->is_enforced)
+	/*
+	 * When setting a constraint to NOT ENFORCED, check whether any matching
+	 * parent constraint remains ENFORCED and is not part of this ALTER.
+	 *
+	 * For a direct ALTER of an inherited constraint, reject the command,
+	 * because the child cannot be weakened while its parent remains enforced.
+	 *
+	 * During recursion, another parent outside this ALTER may still enforce
+	 * the same constraint in a regular inheritance hierarchy. In that case,
+	 * keep the child constraint ENFORCED so that its merged enforceability
+	 * still reflects the remaining enforced parent. Partitions do not need
+	 * this recursive parent check because a partition can have only one
+	 * direct parent.
+	 */
+	if (!cmdcon->is_enforced &&
+		(!recursing || !rel->rd_rel->relispartition) &&
+		ATCheckCheckConstrHasEnforcedParent(conrel, rel, contuple,
+											changing_conids,
+											&enforced_parentoid))
 	{
-		AlterConstrUpdateConstraintEntry(cmdcon, conrel, contuple);
+		if (!recursing)
+			ereport(ERROR,
+					errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					errmsg("cannot mark inherited constraint \"%s\" as %s",
+						   NameStr(currcon->conname),
+						   "NOT ENFORCED"),
+					errdetail("The matching constraint on parent table \"%s\" is %s.",
+							  get_rel_name(enforced_parentoid), "ENFORCED"));
+
+		target_enforced = true;
+	}
+
+	/*
+	 * Update to the merged enforceability if needed. This may differ from the
+	 * requested enforceability when another matching parent constraint
+	 * remains enforced.
+	 */
+	if (currcon->conenforced != target_enforced)
+	{
+		ATAlterConstraint updatecon = *cmdcon;
+
+		updatecon.is_enforced = target_enforced;
+		AlterConstrUpdateConstraintEntry(&updatecon, conrel, contuple);
 		changed = true;
 	}
 
 	/*
 	 * Note that we must recurse even when trying to change a check constraint
 	 * to not enforced if it is already not enforced, in case descendant
-	 * constraints might be enforced and need to be changed to not enforced.
+	 * constraints might be enforced and need to be changed to not enforced,
+	 * unless they still inherit an enforced constraint from another parent.
 	 * Conversely, we should do nothing if a constraint is being set to
 	 * enforced and is already enforced, as descendant constraints cannot be
 	 * different in that case.
@@ -12690,28 +12815,66 @@ ATExecAlterCheckConstrEnforceability(List **wqueue, ATAlterConstraint *cmdcon,
 		 * try to look for it in the children.
 		 */
 		if (!recursing && !currcon->connoinherit)
+		{
+			Assert(changing_conids == NIL);
+
 			children = find_all_inheritors(RelationGetRelid(rel),
 										   lockmode, NULL);
+
+			/*
+			 * When setting NOT ENFORCED, build the set of equivalent CHECK
+			 * constraints that this command will attempt to change before
+			 * visiting descendants. The root itself has already been checked
+			 * above.
+			 */
+			if (!cmdcon->is_enforced)
+				changing_conids = list_make1_oid(currcon->oid);
+
+			foreach_oid(childoid, children)
+			{
+				if (childoid == RelationGetRelid(rel))
+					continue;
+
+				/*
+				 * If we are told not to recurse, there had better not be any
+				 * child tables, because we can't change constraint
+				 * enforceability on the parent unless we have changed
+				 * enforceability for all child.
+				 */
+				if (!recurse)
+					ereport(ERROR,
+							errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+							errmsg("constraint must be altered on child tables too"),
+							errhint("Do not specify the ONLY keyword."));
+
+				/*
+				 * It is sufficient to look up the constraint by name here.
+				 * Supported DDL ensures that inheritable CHECK constraints
+				 * with the same name have equivalent definitions when they
+				 * are propagated to children or when inheritance is
+				 * established.  All descendants returned by
+				 * find_all_inheritors must have this constraint: inherited
+				 * CHECK constraints propagate to all children at
+				 * inheritance-link creation time and cannot be dropped
+				 * independently on child tables.
+				 */
+				if (!cmdcon->is_enforced)
+					changing_conids =
+						list_append_unique_oid(changing_conids,
+											   get_relation_constraint_oid(childoid,
+																		   cmdcon->conname,
+																		   false));
+			}
+		}
 
 		foreach_oid(childoid, children)
 		{
 			if (childoid == RelationGetRelid(rel))
 				continue;
 
-			/*
-			 * If we are told not to recurse, there had better not be any
-			 * child tables, because we can't change constraint enforceability
-			 * on the parent unless we have changed enforceability for all
-			 * child.
-			 */
-			if (!recurse)
-				ereport(ERROR,
-						errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-						errmsg("constraint must be altered on child tables too"),
-						errhint("Do not specify the ONLY keyword."));
-
 			AlterCheckConstrEnforceabilityRecurse(wqueue, cmdcon, conrel,
 												  childoid, false, true,
+												  changing_conids,
 												  lockmode);
 		}
 	}
@@ -12723,7 +12886,7 @@ ATExecAlterCheckConstrEnforceability(List **wqueue, ATAlterConstraint *cmdcon,
 	 */
 	if (rel->rd_rel->relkind == RELKIND_RELATION &&
 		!currcon->conenforced &&
-		cmdcon->is_enforced)
+		target_enforced)
 	{
 		AlteredTableInfo *tab;
 		NewConstraint *newcon;
@@ -12763,6 +12926,7 @@ static void
 AlterCheckConstrEnforceabilityRecurse(List **wqueue, ATAlterConstraint *cmdcon,
 									  Relation conrel, Oid conrelid,
 									  bool recurse, bool recursing,
+									  List *changing_conids,
 									  LOCKMODE lockmode)
 {
 	SysScanDesc pscan;
@@ -12792,9 +12956,136 @@ AlterCheckConstrEnforceabilityRecurse(List **wqueue, ATAlterConstraint *cmdcon,
 					   cmdcon->conname, get_rel_name(conrelid)));
 
 	ATExecAlterCheckConstrEnforceability(wqueue, cmdcon, conrel, childtup,
-										 recurse, recursing, lockmode);
+										 recurse, recursing, changing_conids,
+										 lockmode);
 
 	systable_endscan(pscan);
+}
+
+/*
+ * When setting an inherited CHECK constraint to NOT ENFORCED, look for a
+ * matching parent constraint that remains ENFORCED and is not part of the same
+ * ALTER.
+ */
+static bool
+ATCheckCheckConstrHasEnforcedParent(Relation conrel, Relation rel,
+									HeapTuple contuple,
+									List *changing_conids,
+									Oid *enforced_parentoid)
+{
+	Form_pg_constraint currcon;
+	Relation	inhrel;
+	SysScanDesc scan;
+	ScanKeyData skey;
+	HeapTuple	inheritsTuple;
+
+	/* Since this function recurses, it could be driven to stack overflow */
+	check_stack_depth();
+
+	currcon = (Form_pg_constraint) GETSTRUCT(contuple);
+	Assert(currcon->contype == CONSTRAINT_CHECK);
+
+	if (currcon->coninhcount <= 0)
+		return false;
+
+	inhrel = table_open(InheritsRelationId, AccessShareLock);
+
+	ScanKeyInit(&skey,
+				Anum_pg_inherits_inhrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(RelationGetRelid(rel)));
+	scan = systable_beginscan(inhrel, InheritsRelidSeqnoIndexId,
+							  true, NULL, 1, &skey);
+
+	while (HeapTupleIsValid(inheritsTuple = systable_getnext(scan)))
+	{
+		Oid			parentoid;
+		Relation	parentrel = NULL;
+		SysScanDesc pscan;
+		ScanKeyData pkey[3];
+		HeapTuple	parenttup;
+
+		parentoid = ((Form_pg_inherits) GETSTRUCT(inheritsTuple))->inhparent;
+
+		ScanKeyInit(&pkey[0],
+					Anum_pg_constraint_conrelid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(parentoid));
+		ScanKeyInit(&pkey[1],
+					Anum_pg_constraint_contypid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(InvalidOid));
+		ScanKeyInit(&pkey[2],
+					Anum_pg_constraint_conname,
+					BTEqualStrategyNumber, F_NAMEEQ,
+					NameGetDatum(&currcon->conname));
+
+		pscan = systable_beginscan(conrel, ConstraintRelidTypidNameIndexId,
+								   true, NULL, 3, pkey);
+
+		/*
+		 * ConstraintRelidTypidNameIndexId is unique on (conrelid, contypid,
+		 * conname), so this loop body executes at most once per parent.
+		 */
+		while (HeapTupleIsValid(parenttup = systable_getnext(pscan)))
+		{
+			Form_pg_constraint parentcon;
+
+			parentcon = (Form_pg_constraint) GETSTRUCT(parenttup);
+
+			if (parentcon->contype != CONSTRAINT_CHECK ||
+				parentcon->connoinherit ||
+				!parentcon->conenforced)
+				continue;
+
+			if (!constraints_equivalent(parenttup, contuple,
+										RelationGetDescr(conrel)))
+				elog(ERROR, "child table \"%s\" has different definition for check constraint \"%s\"",
+					 RelationGetRelationName(rel),
+					 NameStr(parentcon->conname));
+
+			/*
+			 * A parent listed in changing_conids is being changed by the same
+			 * ALTER, but it may not have been updated yet.  For regular
+			 * inheritance, recurse upward to check whether an equivalent
+			 * enforced parent outside the ALTER will make it remain enforced.
+			 * Partitions cannot have multiple parents, so they do not need
+			 * this check.
+			 */
+			if (!rel->rd_rel->relispartition &&
+				list_member_oid(changing_conids, parentcon->oid))
+			{
+				Oid			parent_enforced_parentoid = InvalidOid;
+
+				if (parentrel == NULL)
+					parentrel = table_open(parentoid, NoLock);
+
+				if (!ATCheckCheckConstrHasEnforcedParent(conrel,
+														 parentrel,
+														 parenttup,
+														 changing_conids,
+														 &parent_enforced_parentoid))
+					continue;
+			}
+
+			*enforced_parentoid = parentoid;
+			if (parentrel != NULL)
+				table_close(parentrel, NoLock);
+			systable_endscan(pscan);
+			systable_endscan(scan);
+			table_close(inhrel, AccessShareLock);
+			return true;
+		}
+
+		if (parentrel != NULL)
+			table_close(parentrel, NoLock);
+		systable_endscan(pscan);
+	}
+
+	systable_endscan(scan);
+	table_close(inhrel, AccessShareLock);
+
+	return false;
 }
 
 /*
@@ -13545,7 +13836,7 @@ QueueNNConstraintValidation(List **wqueue, Relation conrel, Relation rel,
 	}
 
 	/* Set attnotnull appropriately without queueing another validation */
-	set_attnotnull(NULL, rel, attnum, true, false);
+	set_attnotnull(NULL, rel, attnum, false);
 
 	tab = ATGetQueueEntry(wqueue, rel);
 	tab->verify_new_notnull = true;
@@ -15383,7 +15674,7 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 							 errmsg("cannot alter type of a column used by a function or procedure"),
-							 errdetail("%s depends on column \"%s\"",
+							 errdetail("%s depends on column \"%s\".",
 									   getObjectDescription(&foundObject, false),
 									   colName)));
 				break;
@@ -15398,7 +15689,7 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 							 errmsg("cannot alter type of a column used by a view or rule"),
-							 errdetail("%s depends on column \"%s\"",
+							 errdetail("%s depends on column \"%s\".",
 									   getObjectDescription(&foundObject, false),
 									   colName)));
 				break;
@@ -15418,7 +15709,7 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 							 errmsg("cannot alter type of a column used in a trigger definition"),
-							 errdetail("%s depends on column \"%s\"",
+							 errdetail("%s depends on column \"%s\".",
 									   getObjectDescription(&foundObject, false),
 									   colName)));
 				break;
@@ -15437,7 +15728,7 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 							 errmsg("cannot alter type of a column used in a policy definition"),
-							 errdetail("%s depends on column \"%s\"",
+							 errdetail("%s depends on column \"%s\".",
 									   getObjectDescription(&foundObject, false),
 									   colName)));
 				break;
@@ -15496,7 +15787,7 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 							 errmsg("cannot alter type of a column used by a publication WHERE clause"),
-							 errdetail("%s depends on column \"%s\"",
+							 errdetail("%s depends on column \"%s\".",
 									   getObjectDescription(&foundObject, false),
 									   colName)));
 				break;
@@ -15515,6 +15806,174 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 
 	systable_endscan(scan);
 	table_close(depRel, NoLock);
+}
+
+/*
+ * Record information about dependencies between objects with whole-row Var
+ * references (indexes, check constraints, etc.) and the relation.
+ *
+ * See also RememberAllDependentForRebuilding, which handles non-whole-row Var
+ * references.
+ *
+ * This function currently applies only to ALTER COLUMN SET EXPRESSION.
+ */
+static void
+RememberWholeRowDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype, Relation rel)
+{
+	ScanKeyData skey;
+	Relation	pg_constraint;
+	Relation	pg_index;
+	SysScanDesc conscan;
+	SysScanDesc indscan;
+	HeapTuple	constrTuple;
+	HeapTuple	indexTuple;
+	bool		isnull;
+
+	Assert(subtype == AT_SetExpression);
+
+	/*
+	 * Check CHECK constraints with whole-row references first.
+	 */
+	if (RelationGetDescr(rel)->constr &&
+		RelationGetDescr(rel)->constr->num_check > 0)
+	{
+		pg_constraint = table_open(ConstraintRelationId, AccessShareLock);
+
+		ScanKeyInit(&skey,
+					Anum_pg_constraint_conrelid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(RelationGetRelid(rel)));
+
+		conscan = systable_beginscan(pg_constraint,
+									 ConstraintRelidTypidNameIndexId,
+									 true,
+									 NULL,
+									 1,
+									 &skey);
+
+		while (HeapTupleIsValid(constrTuple = systable_getnext(conscan)))
+		{
+			Form_pg_constraint conform = (Form_pg_constraint) GETSTRUCT(constrTuple);
+			Datum		exprDatum;
+
+			if (conform->contype != CONSTRAINT_CHECK)
+				continue;
+
+			exprDatum = heap_getattr(constrTuple,
+									 Anum_pg_constraint_conbin,
+									 RelationGetDescr(pg_constraint),
+									 &isnull);
+			if (isnull)
+				elog(ERROR, "null conbin for relation \"%s\"",
+					 RelationGetRelationName(rel));
+			else
+			{
+				char	   *exprString;
+				Node	   *expr;
+				Bitmapset  *expr_attrs = NULL;
+
+				exprString = TextDatumGetCString(exprDatum);
+				expr = stringToNode(exprString);
+				pfree(exprString);
+
+				/* Find all attributes referenced */
+				pull_varattnos(expr, 1, &expr_attrs);
+
+				/*
+				 * If the CHECK constraint contains whole-row reference then
+				 * remember it.
+				 */
+				if (bms_is_member(InvalidAttrNumber - FirstLowInvalidHeapAttributeNumber, expr_attrs))
+				{
+					RememberConstraintForRebuilding(conform->oid, tab);
+				}
+			}
+		}
+		systable_endscan(conscan);
+		table_close(pg_constraint, AccessShareLock);
+	}
+
+	/*
+	 * Now check indexes with whole-row references. Prepare to scan pg_index
+	 * for entries having indrelid matching this relation.
+	 */
+	ScanKeyInit(&skey,
+				Anum_pg_index_indrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(RelationGetRelid(rel)));
+
+	pg_index = table_open(IndexRelationId, AccessShareLock);
+
+	indscan = systable_beginscan(pg_index,
+								 IndexIndrelidIndexId,
+								 true,
+								 NULL,
+								 1,
+								 &skey);
+
+	while (HeapTupleIsValid(indexTuple = systable_getnext(indscan)))
+	{
+		Form_pg_index index = (Form_pg_index) GETSTRUCT(indexTuple);
+		Datum		exprDatum;
+
+		exprDatum = heap_getattr(indexTuple,
+								 Anum_pg_index_indexprs,
+								 RelationGetDescr(pg_index),
+								 &isnull);
+		if (!isnull)
+		{
+			char	   *exprString;
+			Node	   *expr;
+			Bitmapset  *expr_attrs = NULL;
+
+			exprString = TextDatumGetCString(exprDatum);
+			expr = stringToNode(exprString);
+			pfree(exprString);
+
+			/* Find all attributes referenced */
+			pull_varattnos(expr, 1, &expr_attrs);
+
+			/*
+			 * If the index expression contains a whole-row reference then
+			 * remember it.
+			 */
+			if (bms_is_member(InvalidAttrNumber - FirstLowInvalidHeapAttributeNumber, expr_attrs))
+			{
+				RememberIndexForRebuilding(index->indexrelid, tab);
+				continue;
+			}
+		}
+
+		exprDatum = heap_getattr(indexTuple,
+								 Anum_pg_index_indpred,
+								 RelationGetDescr(pg_index),
+								 &isnull);
+		if (!isnull)
+		{
+			char	   *exprString;
+			Node	   *expr;
+			Bitmapset  *expr_attrs = NULL;
+
+			exprString = TextDatumGetCString(exprDatum);
+			expr = stringToNode(exprString);
+			pfree(exprString);
+
+			/* Find all attributes referenced */
+			pull_varattnos(expr, 1, &expr_attrs);
+
+			/*
+			 * If the index predicate expression contains a whole-row
+			 * reference then remember it.
+			 */
+			if (bms_is_member(InvalidAttrNumber - FirstLowInvalidHeapAttributeNumber, expr_attrs))
+			{
+				RememberIndexForRebuilding(index->indexrelid, tab);
+			}
+		}
+	}
+
+	systable_endscan(indscan);
+	table_close(pg_index, AccessShareLock);
 }
 
 /*
@@ -15673,11 +16132,25 @@ RememberStatisticsForRebuilding(Oid stxoid, AlteredTableInfo *tab)
 	{
 		/* OK, capture the statistics object's existing definition string */
 		char	   *defstring = pg_get_statisticsobjdef_string(stxoid);
+		HeapTuple	tup;
+		Form_pg_statistic_ext statext;
+
+		tup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(stxoid));
+
+		if (!HeapTupleIsValid(tup)) /* should not happen */
+			elog(ERROR, "cache lookup failed for statistics object %u", stxoid);
+
+		statext = (Form_pg_statistic_ext) GETSTRUCT(tup);
 
 		tab->changedStatisticsOids = lappend_oid(tab->changedStatisticsOids,
 												 stxoid);
 		tab->changedStatisticsDefs = lappend(tab->changedStatisticsDefs,
 											 defstring);
+
+		tab->changedStatisticsOwners = lappend_oid(tab->changedStatisticsOwners,
+												   statext->stxowner);
+
+		ReleaseSysCache(tup);
 	}
 }
 
@@ -15695,6 +16168,7 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 	ObjectAddresses *objects;
 	ListCell   *def_item;
 	ListCell   *oid_item;
+	ListCell   *owner_item;
 
 	/*
 	 * Collect all the constraints and indexes to drop so we can process them
@@ -15768,7 +16242,7 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 		if (relid != tab->relid)
 			LockRelationOid(relid, AccessExclusiveLock);
 
-		ATPostAlterTypeParse(oldId, relid, confrelid,
+		ATPostAlterTypeParse(oldId, relid, confrelid, InvalidOid,
 							 (char *) lfirst(def_item),
 							 wqueue, lockmode, tab->rewrite);
 	}
@@ -15787,7 +16261,7 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 		if (relid != tab->relid)
 			LockRelationOid(relid, AccessExclusiveLock);
 
-		ATPostAlterTypeParse(oldId, relid, InvalidOid,
+		ATPostAlterTypeParse(oldId, relid, InvalidOid, InvalidOid,
 							 (char *) lfirst(def_item),
 							 wqueue, lockmode, tab->rewrite);
 
@@ -15796,8 +16270,9 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 	}
 
 	/* add dependencies for new statistics */
-	forboth(oid_item, tab->changedStatisticsOids,
-			def_item, tab->changedStatisticsDefs)
+	forthree(oid_item, tab->changedStatisticsOids,
+			 def_item, tab->changedStatisticsDefs,
+			 owner_item, tab->changedStatisticsOwners)
 	{
 		Oid			oldId = lfirst_oid(oid_item);
 		Oid			relid;
@@ -15817,7 +16292,7 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 		if (relid != tab->relid)
 			LockRelationOid(relid, ShareUpdateExclusiveLock);
 
-		ATPostAlterTypeParse(oldId, relid, InvalidOid,
+		ATPostAlterTypeParse(oldId, relid, InvalidOid, lfirst_oid(owner_item),
 							 (char *) lfirst(def_item),
 							 wqueue, lockmode, tab->rewrite);
 
@@ -15881,8 +16356,9 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
  * operator that's not available for the new column type.
  */
 static void
-ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
-					 List **wqueue, LOCKMODE lockmode, bool rewrite)
+ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, Oid ownerId,
+					 char *cmd, List **wqueue, LOCKMODE lockmode,
+					 bool rewrite)
 {
 	List	   *raw_parsetree_list;
 	List	   *querytree_list;
@@ -15922,10 +16398,14 @@ ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
 			querytree_list = list_concat(querytree_list, afterStmts);
 		}
 		else if (IsA(stmt, CreateStatsStmt))
-			querytree_list = lappend(querytree_list,
-									 transformStatsStmt(oldRelId,
-														(CreateStatsStmt *) stmt,
-														cmd));
+		{
+			CreateStatsStmt *csstmt;
+
+			csstmt = transformStatsStmt(oldRelId, (CreateStatsStmt *) stmt, cmd);
+			csstmt->owner = ownerId;
+
+			querytree_list = lappend(querytree_list, csstmt);
+		}
 		else
 			querytree_list = lappend(querytree_list, stmt);
 	}
@@ -17321,13 +17801,19 @@ AlterTableMoveAll(AlterTableMoveAllStmt *stmt)
 		 * really wishes to do so, they can issue the individual ALTER
 		 * commands directly.
 		 *
-		 * Also, explicitly avoid any shared tables, temp tables, or TOAST
-		 * (TOAST will be moved with the main table).
+		 * Also, explicitly avoid any shared tables, temp tables, TOAST (TOAST
+		 * will be moved with the main table).
+		 *
+		 * Conflict log tables are system-managed for logical replication and
+		 * cannot be altered directly, so skip them as well; otherwise a
+		 * single such table in the source tablespace would abort the whole
+		 * bulk move.
 		 */
 		if (IsCatalogNamespace(relForm->relnamespace) ||
 			relForm->relisshared ||
 			isAnyTempNamespace(relForm->relnamespace) ||
-			IsToastNamespace(relForm->relnamespace))
+			IsToastNamespace(relForm->relnamespace) ||
+			IsConflictLogTableNamespace(relForm->relnamespace))
 			continue;
 
 		/* Only move the object type requested */
@@ -18478,12 +18964,17 @@ ATExecAddOf(Relation rel, const TypeName *ofTypename, LOCKMODE lockmode)
 	ObjectAddress tableobj,
 				typeobj;
 	HeapTuple	classtuple;
+	AclResult	aclresult;
 
 	/* Validate the type. */
 	typetuple = typenameType(NULL, ofTypename, NULL);
 	check_of_type(typetuple);
 	typeform = (Form_pg_type) GETSTRUCT(typetuple);
 	typeid = typeform->oid;
+
+	aclresult = object_aclcheck(TypeRelationId, typeid, GetUserId(), ACL_USAGE);
+	if (aclresult != ACLCHECK_OK)
+		aclcheck_error_type(aclresult, typeid);
 
 	/* Fail if the table has any inheritance parents. */
 	inheritsRelation = table_open(InheritsRelationId, AccessShareLock);
@@ -18818,6 +19309,8 @@ ATExecReplicaIdentity(Relation rel, ReplicaIdentityStmt *stmt, LOCKMODE lockmode
 	{
 		int16		attno = indexRel->rd_index->indkey.values[key];
 		Form_pg_attribute attr;
+		HeapTuple	contup;
+		Form_pg_constraint conForm;
 
 		/*
 		 * Reject any other system columns.  (Going forward, we'll disallow
@@ -18837,6 +19330,26 @@ ATExecReplicaIdentity(Relation rel, ReplicaIdentityStmt *stmt, LOCKMODE lockmode
 					 errmsg("index \"%s\" cannot be used as replica identity because column \"%s\" is nullable",
 							RelationGetRelationName(indexRel),
 							NameStr(attr->attname))));
+
+		/*
+		 * Verify that the not-null constraint for the column is valid.
+		 */
+		contup = findNotNullConstraintAttnum(RelationGetRelid(rel), attno);
+		if (!HeapTupleIsValid(contup))
+			elog(ERROR, "cache lookup failed for not-null constraint on column \"%s\" of relation \"%s\"",
+				 NameStr(attr->attname), RelationGetRelationName(rel));
+		conForm = (Form_pg_constraint) GETSTRUCT(contup);
+		if (!conForm->convalidated)
+			ereport(ERROR,
+					errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("cannot use index \"%s\" as replica identity",
+						   RelationGetRelationName(indexRel)),
+			/*- translator: third %s is a constraint characteristic such as NOT VALID */
+					errdetail("The constraint \"%s\" on column \"%s\" is marked %s.",
+							  NameStr(conForm->conname), NameStr(attr->attname), "NOT VALID"),
+					errhint("You might need to validate it using %s.",
+							"ALTER TABLE ... VALIDATE CONSTRAINT"));
+		heap_freetuple(contup);
 	}
 
 	/* This index is suitable for use as a replica identity. Mark it. */
@@ -19816,6 +20329,18 @@ RangeVarCallbackOwnsRelation(const RangeVar *relation,
 		aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(get_rel_relkind(relId)),
 					   relation->relname);
 
+	/*
+	 * Conflict log tables are used internally for logical replication
+	 * conflict logging and should not be modified directly, as it could
+	 * disrupt conflict logging.
+	 */
+	if (IsConflictLogTableClass((Form_pg_class) GETSTRUCT(tuple)))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot change conflict log table \"%s\"",
+						relation->relname),
+				 errdetail("Conflict log tables are system-managed tables for logical replication conflicts.")));
+
 	if (!allowSystemTableMods &&
 		IsSystemClass(relId, (Form_pg_class) GETSTRUCT(tuple)))
 		ereport(ERROR,
@@ -19850,6 +20375,18 @@ RangeVarCallbackForAlterRelation(const RangeVar *rv, Oid relid, Oid oldrelid,
 	/* Must own relation. */
 	if (!object_ownercheck(RelationRelationId, relid, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(get_rel_relkind(relid)), rv->relname);
+
+	/*
+	 * Conflict log tables are used internally for logical replication
+	 * conflict logging and should not be altered directly, as it could
+	 * disrupt conflict logging.
+	 */
+	if (IsConflictLogTableClass(classform))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot alter conflict log table \"%s\"",
+						rv->relname),
+				 errdetail("Conflict log tables are system-managed tables for logical replication conflicts.")));
 
 	/* No system table modifications unless explicitly allowed. */
 	if (!allowSystemTableMods && IsSystemClass(relid, classform))
@@ -22584,7 +23121,7 @@ createTableConstraints(List **wqueue, AlteredTableInfo *tab,
 				elog(ERROR, "cannot convert whole-row table reference");
 
 			/* Add a pre-cooked default expression. */
-			StoreAttrDefault(newRel, num, def, true);
+			StoreAttrDefault(newRel, num, def, false);
 
 			/*
 			 * Stored generated column expressions in parent_rel might
@@ -22652,7 +23189,7 @@ createTableConstraints(List **wqueue, AlteredTableInfo *tab,
 
 	/* Install all CHECK constraints. */
 	cookedConstraints = AddRelationNewConstraints(newRel, NIL, constraints,
-												  false, true, true, NULL);
+												  false, true, false, NULL);
 
 	/* Make the additional catalog changes visible. */
 	CommandCounterIncrement();
@@ -22714,7 +23251,7 @@ createTableConstraints(List **wqueue, AlteredTableInfo *tab,
 		 * We already set pg_attribute.attnotnull in createPartitionTable. No
 		 * need call set_attnotnull again.
 		 */
-		AddRelationNewConstraints(newRel, NIL, nnconstraints, false, true, true, NULL);
+		AddRelationNewConstraints(newRel, NIL, nnconstraints, false, true, false, NULL);
 	}
 }
 
@@ -22735,6 +23272,7 @@ createPartitionTable(List **wqueue, RangeVar *newPartName,
 	Relation	newRel;
 	Oid			newRelId;
 	Oid			existingRelid;
+	Oid			tablespaceId;
 	TupleDesc	descriptor;
 	List	   *colList = NIL;
 	Oid			relamId;
@@ -22786,10 +23324,38 @@ createPartitionTable(List **wqueue, RangeVar *newPartName,
 				errmsg("cannot create a permanent relation as partition of temporary relation \"%s\"",
 					   RelationGetRelationName(parent_rel)));
 
+	/*
+	 * Select the tablespace for the new partition.  Mirror the logic that
+	 * CREATE TABLE foo PARTITION OF ... uses in DefineRelation: take the
+	 * partitioned parent's explicit tablespace if it has one, otherwise take
+	 * default_tablespace into account, and finally use the database default.
+	 */
+	tablespaceId = parent_relform->reltablespace;
+	if (!OidIsValid(tablespaceId))
+		tablespaceId = GetDefaultTablespace(newPartName->relpersistence, false);
+
+	/* Check permissions except when using database's default */
+	if (OidIsValid(tablespaceId) && tablespaceId != MyDatabaseTableSpace)
+	{
+		AclResult	aclresult;
+
+		aclresult = object_aclcheck(TableSpaceRelationId, tablespaceId,
+									GetUserId(), ACL_CREATE);
+		if (aclresult != ACLCHECK_OK)
+			aclcheck_error(aclresult, OBJECT_TABLESPACE,
+						   get_tablespace_name(tablespaceId));
+	}
+
+	/* In all cases disallow placing user relations in pg_global */
+	if (tablespaceId == GLOBALTABLESPACE_OID)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("only shared relations can be placed in pg_global tablespace")));
+
 	/* Create the relation. */
 	newRelId = heap_create_with_catalog(newPartName->relname,
 										namespaceId,
-										parent_relform->reltablespace,
+										tablespaceId,
 										InvalidOid,
 										InvalidOid,
 										InvalidOid,
@@ -22805,7 +23371,7 @@ createPartitionTable(List **wqueue, RangeVar *newPartName,
 										(Datum) 0,
 										true,
 										allowSystemTableMods,
-										true,
+										false,	/* is_internal */
 										InvalidOid,
 										NULL);
 
@@ -23377,7 +23943,7 @@ ATExecMergePartitions(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		object.classId = RelationRelationId;
 		object.objectSubId = 0;
 
-		performDeletionCheck(&object, DROP_RESTRICT, PERFORM_DELETION_INTERNAL);
+		performDeletionCheck(&object, DROP_RESTRICT, 0);
 	}
 
 	/*
@@ -23791,7 +24357,7 @@ ATExecSplitPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	object.objectId = splitRelOid;
 	object.classId = RelationRelationId;
 	object.objectSubId = 0;
-	performDeletionCheck(&object, DROP_RESTRICT, PERFORM_DELETION_INTERNAL);
+	performDeletionCheck(&object, DROP_RESTRICT, 0);
 
 	/*
 	 * If a new partition has the same name as the split partition, then we

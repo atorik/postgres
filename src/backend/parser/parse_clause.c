@@ -946,6 +946,9 @@ transformRangeGraphTable(ParseState *pstate, RangeGraphTable *rgt)
 	ListCell   *lc;
 	int			resno = 0;
 	bool		saved_hasSublinks;
+	bool		saved_hasAggs;
+	bool		saved_hasWindowFuncs;
+	bool		saved_hasTargetSRFs;
 
 	rel = parserOpenPropGraph(pstate, rgt->graph_name, AccessShareLock);
 
@@ -966,6 +969,13 @@ transformRangeGraphTable(ParseState *pstate, RangeGraphTable *rgt)
 
 	saved_hasSublinks = pstate->p_hasSubLinks;
 	pstate->p_hasSubLinks = false;
+
+	saved_hasAggs = pstate->p_hasAggs;
+	pstate->p_hasAggs = false;
+	saved_hasWindowFuncs = pstate->p_hasWindowFuncs;
+	pstate->p_hasWindowFuncs = false;
+	saved_hasTargetSRFs = pstate->p_hasTargetSRFs;
+	pstate->p_hasTargetSRFs = false;
 
 	gp = transformGraphPattern(pstate, rgt->graph_pattern);
 
@@ -1005,6 +1015,10 @@ transformRangeGraphTable(ParseState *pstate, RangeGraphTable *rgt)
 		columns = lappend(columns, te);
 	}
 
+	/* resolve any still-unresolved output columns as being type text */
+	if (pstate->p_resolve_unknowns)
+		resolveTargetListUnknowns(pstate, columns);
+
 	/*
 	 * Assign collations to column expressions now since
 	 * assign_query_collations() does not process rangetable entries.
@@ -1026,6 +1040,26 @@ transformRangeGraphTable(ParseState *pstate, RangeGraphTable *rgt)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("subqueries within GRAPH_TABLE reference are not supported")));
 	pstate->p_hasSubLinks = saved_hasSublinks;
+
+	/*
+	 * GRAPH_TABLE cannot yet evaluate aggregate, window, or set-returning
+	 * functions in its COLUMNS list, so prohibit them for now.
+	 */
+	if (pstate->p_hasAggs)
+		ereport(ERROR,
+				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("aggregate functions in GRAPH_TABLE COLUMNS are not supported"));
+	if (pstate->p_hasWindowFuncs)
+		ereport(ERROR,
+				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("window functions in GRAPH_TABLE COLUMNS are not supported"));
+	if (pstate->p_hasTargetSRFs)
+		ereport(ERROR,
+				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("set-returning functions in GRAPH_TABLE COLUMNS are not supported"));
+	pstate->p_hasAggs = saved_hasAggs;
+	pstate->p_hasWindowFuncs = saved_hasWindowFuncs;
+	pstate->p_hasTargetSRFs = saved_hasTargetSRFs;
 
 	return addRangeTableEntryForGraphTable(pstate, graphid, castNode(GraphPattern, gp), columns, colnames, rgt->alias, false, true);
 }
@@ -2742,9 +2776,6 @@ transformGroupingSet(List **flatresult,
  * GROUP BY items will be added to the targetlist (as resjunk columns)
  * if not already present, so the targetlist must be passed by reference.
  *
- * If GROUP BY ALL is specified, the groupClause will be inferred to be all
- * non-aggregate, non-window expressions in the targetlist.
- *
  * This is also used for window PARTITION BY clauses (which act almost the
  * same, but are always interpreted per SQL99 rules).
  *
@@ -2769,7 +2800,6 @@ transformGroupingSet(List **flatresult,
  *
  * pstate		ParseState
  * grouplist	clause to transform
- * groupByAll	is this a GROUP BY ALL statement?
  * groupingSets reference to list to contain the grouping set tree
  * targetlist	reference to TargetEntry list
  * sortClause	ORDER BY clause (SortGroupClause nodes)
@@ -2777,8 +2807,7 @@ transformGroupingSet(List **flatresult,
  * useSQL99		SQL99 rather than SQL92 syntax
  */
 List *
-transformGroupClause(ParseState *pstate, List *grouplist, bool groupByAll,
-					 List **groupingSets,
+transformGroupClause(ParseState *pstate, List *grouplist, List **groupingSets,
 					 List **targetlist, List *sortClause,
 					 ParseExprKind exprKind, bool useSQL99)
 {
@@ -2788,63 +2817,6 @@ transformGroupClause(ParseState *pstate, List *grouplist, bool groupByAll,
 	ListCell   *gl;
 	bool		hasGroupingSets = false;
 	Bitmapset  *seen_local = NULL;
-
-	/* Handle GROUP BY ALL */
-	if (groupByAll)
-	{
-		/* There cannot have been any explicit grouplist items */
-		Assert(grouplist == NIL);
-
-		/* Iterate over targets, adding acceptable ones to the result list */
-		foreach_ptr(TargetEntry, tle, *targetlist)
-		{
-			/* Ignore junk TLEs */
-			if (tle->resjunk)
-				continue;
-
-			/*
-			 * TLEs containing aggregates are not okay to add to GROUP BY
-			 * (compare checkTargetlistEntrySQL92).  But the SQL standard
-			 * directs us to skip them, so it's fine.
-			 */
-			if (pstate->p_hasAggs &&
-				contain_aggs_of_level((Node *) tle->expr, 0))
-				continue;
-
-			/*
-			 * Likewise, TLEs containing window functions are not okay to add
-			 * to GROUP BY.  At this writing, the SQL standard is silent on
-			 * what to do with them, but by analogy to aggregates we'll just
-			 * skip them.
-			 */
-			if (pstate->p_hasWindowFuncs &&
-				contain_windowfuncs((Node *) tle->expr))
-				continue;
-
-			/*
-			 * Otherwise, add the TLE to the result using default sort/group
-			 * semantics.  We specify the parse location as the TLE's
-			 * location, despite the comment for addTargetToGroupList
-			 * discouraging that.  The only other thing we could point to is
-			 * the ALL keyword, which seems unhelpful when there are multiple
-			 * TLEs.
-			 */
-			result = addTargetToGroupList(pstate, tle,
-										  result, *targetlist,
-										  exprLocation((Node *) tle->expr));
-		}
-
-		/* If we found any acceptable targets, we're done */
-		if (result != NIL)
-			return result;
-
-		/*
-		 * Otherwise, the SQL standard says to treat it like "GROUP BY ()".
-		 * Build a representation of that, and let the rest of this function
-		 * handle it.
-		 */
-		grouplist = list_make1(makeGroupingSet(GROUPING_SET_EMPTY, NIL, -1));
-	}
 
 	/*
 	 * Recursively flatten implicit RowExprs. (Technically this is only needed
@@ -3024,7 +2996,6 @@ transformWindowDefinitions(ParseState *pstate,
 										  true /* force SQL99 rules */ );
 		partitionClause = transformGroupClause(pstate,
 											   windef->partitionClause,
-											   false /* not GROUP BY ALL */ ,
 											   NULL,
 											   targetlist,
 											   orderClause,

@@ -314,6 +314,18 @@ CreateTriggerFiringOn(const CreateTrigStmt *stmt, const char *queryString,
 						RelationGetRelationName(rel)),
 				 errdetail_relkind_not_supported(rel->rd_rel->relkind)));
 
+	/*
+	 * Conflict log tables are used internally for logical replication
+	 * conflict logging and should not have triggers, as it could disrupt
+	 * conflict logging.
+	 */
+	if (IsConflictLogTableClass(rel->rd_rel))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot create trigger on conflict log table \"%s\"",
+						RelationGetRelationName(rel)),
+				 errdetail("Conflict log tables are system-managed tables for logical replication conflicts.")));
+
 	if (!allowSystemTableMods && IsSystemRelation(rel))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
@@ -1132,8 +1144,13 @@ CreateTriggerFiringOn(const CreateTrigStmt *stmt, const char *queryString,
 	 * expression (eg, functions, as well as any columns used).
 	 */
 	if (whenRtable != NIL)
+	{
+		if (!isInternal)
+			CheckUsageOnTypesInExpr(whenClause, whenRtable, GetUserId());
+
 		recordDependencyOnExpr(&myself, whenClause, whenRtable,
 							   DEPENDENCY_NORMAL);
+	}
 
 	/* Post creation hook for new trigger */
 	InvokeObjectPostCreateHookArg(TriggerRelationId, trigoid, 0,
@@ -1443,6 +1460,19 @@ RangeVarCallbackForRenameTrigger(const RangeVar *rv, Oid relid, Oid oldrelid,
 	/* you must own the table to rename one of its triggers */
 	if (!object_ownercheck(RelationRelationId, relid, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(get_rel_relkind(relid)), rv->relname);
+
+	/*
+	 * Conflict log tables are used internally for logical replication
+	 * conflict logging and should not have triggers, as it could disrupt
+	 * conflict logging.
+	 */
+	if (IsConflictLogTableClass(form))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot rename trigger on conflict log table \"%s\"",
+						rv->relname),
+				 errdetail("Conflict log tables are system-managed tables for logical replication conflicts.")));
+
 	if (!allowSystemTableMods && IsSystemClass(relid, form))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
@@ -5355,12 +5385,22 @@ AfterTriggerFireDeferred(void)
 	{
 		CommandId	firing_id = afterTriggers.firing_counter++;
 
-		if (afterTriggerInvokeEvents(events, firing_id, NULL, true))
-			break;				/* all fired */
-	}
+		(void) afterTriggerInvokeEvents(events, firing_id, NULL, true);
 
-	/* Flush any fast-path batches accumulated by the triggers just fired. */
-	FireAfterTriggerBatchCallbacks(afterTriggers.batch_callbacks);
+		/*
+		 * Flush any fast-path FK-check batches accumulated by the triggers
+		 * just fired.  A batch callback runs user-supplied cast or equality
+		 * functions, whose DML can queue further deferred trigger events.
+		 * Flush inside the loop so afterTriggerMarkEvents() sees any such
+		 * events on the next iteration and fires them; flushing after the
+		 * loop would leave them unfired, silently skipping e.g. a deferred FK
+		 * check and letting a violating row commit.  (The former "all fired"
+		 * break is therefore gone: the loop now terminates only when
+		 * afterTriggerMarkEvents() finds nothing left, including events
+		 * queued by the flush.)
+		 */
+		FireAfterTriggerBatchCallbacks(afterTriggers.batch_callbacks);
+	}
 
 	afterTriggers.firing_depth--;
 

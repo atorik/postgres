@@ -1784,7 +1784,7 @@ ExecGrant_Attribute(InternalGrant *istmt, Oid relOid, const char *relname,
 }
 
 /*
- *	This processes both sequences and non-sequences.
+ * This processes all pg_class entries including sequences and property graphs.
  */
 static void
 ExecGrant_Relation(InternalGrant *istmt)
@@ -1891,6 +1891,18 @@ ExecGrant_Relation(InternalGrant *istmt)
 					this_privileges &= (AclMode) ACL_ALL_RIGHTS_SEQUENCE;
 				}
 			}
+			else if (pg_class_tuple->relkind == RELKIND_PROPGRAPH)
+			{
+				/*
+				 * Do not allow GRANT ... TABLE on property graph. We allowed
+				 * it on sequences for backward compatibility but there is no
+				 * reason to continue that further.
+				 */
+				ereport(ERROR,
+						errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						errmsg("\"%s\" is a property graph", NameStr(pg_class_tuple->relname)),
+						errhint("Use GRANT ... ON PROPERTY GRAPH instead."));
+			}
 			else
 			{
 				if (this_privileges & ~((AclMode) ACL_ALL_RIGHTS_RELATION))
@@ -1995,6 +2007,9 @@ ExecGrant_Relation(InternalGrant *istmt)
 			{
 				case RELKIND_SEQUENCE:
 					objtype = OBJECT_SEQUENCE;
+					break;
+				case RELKIND_PROPGRAPH:
+					objtype = OBJECT_PROPGRAPH;
 					break;
 				default:
 					objtype = OBJECT_TABLE;
@@ -3337,25 +3352,39 @@ pg_class_aclmask_ext(Oid table_oid, Oid roleid, AclMode mask,
 
 	classForm = (Form_pg_class) GETSTRUCT(tuple);
 
-	/*
-	 * Deny anyone permission to update a system catalog unless
-	 * pg_authid.rolsuper is set.
-	 *
-	 * As of 7.4 we have some updatable system views; those shouldn't be
-	 * protected in this way.  Assume the view rules can take care of
-	 * themselves.  ACL_USAGE is if we ever have system sequences.
-	 */
-	if ((mask & (ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE | ACL_USAGE)) &&
-		IsSystemClass(table_oid, classForm) &&
-		classForm->relkind != RELKIND_VIEW &&
-		!superuser_arg(roleid))
-		mask &= ~(ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE | ACL_USAGE);
-
-	/*
-	 * Otherwise, superusers bypass all permission-checking.
-	 */
-	if (superuser_arg(roleid))
+	if (!superuser_arg(roleid))
 	{
+		if (mask & (ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE | ACL_USAGE))
+		{
+			if (IsConflictLogTableClass(classForm))
+			{
+				/*
+				 * For conflict log tables, allow non-superusers to perform
+				 * DELETE and TRUNCATE for cleanup and maintenance, while
+				 * still restricting INSERT, UPDATE, and USAGE.
+				 */
+				mask &= ~(ACL_INSERT | ACL_UPDATE | ACL_USAGE);
+			}
+			else if (IsSystemClass(table_oid, classForm) &&
+					 classForm->relkind != RELKIND_VIEW)
+			{
+				/*
+				 * Deny anyone permission to update a system catalog unless
+				 * pg_authid.rolsuper is set.
+				 *
+				 * As of 7.4 we have some updatable system views; those
+				 * shouldn't be protected in this way.  Assume the view rules
+				 * can take care of themselves.  ACL_USAGE is if we ever have
+				 * system sequences.
+				 */
+				mask &= ~(ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE |
+						  ACL_USAGE);
+			}
+		}
+	}
+	else
+	{
+		/* Superusers bypass all permission-checking. */
 		ReleaseSysCache(tuple);
 		return mask;
 	}
@@ -3374,6 +3403,9 @@ pg_class_aclmask_ext(Oid table_oid, Oid roleid, AclMode mask,
 		{
 			case RELKIND_SEQUENCE:
 				acl = acldefault(OBJECT_SEQUENCE, ownerId);
+				break;
+			case RELKIND_PROPGRAPH:
+				acl = acldefault(OBJECT_PROPGRAPH, ownerId);
 				break;
 			default:
 				acl = acldefault(OBJECT_TABLE, ownerId);
@@ -3419,8 +3451,8 @@ pg_class_aclmask_ext(Oid table_oid, Oid roleid, AclMode mask,
 	/*
 	 * Check if ACL_MAINTAIN is being checked and, if so, and not already set
 	 * as part of the result, then check if the user is a member of the
-	 * pg_maintain role, which allows VACUUM, ANALYZE, CLUSTER, REFRESH
-	 * MATERIALIZED VIEW, REINDEX, and LOCK TABLE on all relations.
+	 * pg_maintain role, which allows VACUUM, ANALYZE, CLUSTER, REPACK,
+	 * REFRESH MATERIALIZED VIEW, REINDEX, and LOCK TABLE on all relations.
 	 */
 	if (mask & ACL_MAINTAIN &&
 		!(result & ACL_MAINTAIN) &&
@@ -3659,6 +3691,14 @@ pg_namespace_aclmask_ext(Oid nsp_oid, Oid roleid,
 	bool		isNull;
 	Acl		   *acl;
 	Oid			ownerId;
+
+	/*
+	 * Disallow creation in the conflict schema for everyone, including
+	 * superusers, unless in binary-upgrade mode.
+	 */
+	if (!IsBinaryUpgrade && (mask & ACL_CREATE) &&
+		IsConflictLogTableNamespace(nsp_oid))
+		mask &= ~ACL_CREATE;
 
 	/* Superusers bypass all permission checking. */
 	if (superuser_arg(roleid))

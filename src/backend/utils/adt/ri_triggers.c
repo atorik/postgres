@@ -32,6 +32,7 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/index.h"
+#include "catalog/pg_am_d.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_namespace.h"
@@ -142,6 +143,7 @@ typedef struct RI_ConstraintInfo
 
 	Oid			conindid;
 	bool		pk_is_partitioned;
+	bool		pk_index_is_btree;	/* is conindid a btree index? */
 
 	FastPathMeta *fpmeta;
 } RI_ConstraintInfo;
@@ -228,7 +230,7 @@ typedef struct RI_CompareHashEntry
  * relations are held open with locks for the transaction duration, preventing
  * relcache invalidation.  The entry itself is torn down at batch end by
  * ri_FastPathEndBatch(); on abort, ResourceOwner releases the cached
- * relations and the XactCallback NULLs the static cache pointer to prevent
+ * relations and AtEOXact_RI() NULLs the static cache pointer to prevent
  * any subsequent access.
  */
 typedef struct RI_FastPathEntry
@@ -308,7 +310,7 @@ static RI_ConstraintInfo *ri_FetchConstraintInfo(Trigger *trigger,
 												 Relation trig_rel, bool rel_is_pk);
 static RI_ConstraintInfo *ri_LoadConstraintInfo(Oid constraintOid);
 static Oid	get_ri_constraint_root(Oid constrOid);
-static SPIPlanPtr ri_PlanCheck(const char *querystr, int nargs, Oid *argtypes,
+static SPIPlanPtr ri_PlanCheck(const char *querystr, int nargs, const Oid *argtypes,
 							   RI_QueryKey *qkey, Relation fk_rel, Relation pk_rel);
 static bool ri_PerformCheck(const RI_ConstraintInfo *riinfo,
 							RI_QueryKey *qkey, SPIPlanPtr qplan,
@@ -2503,6 +2505,8 @@ ri_LoadConstraintInfo(Oid constraintOid)
 	riinfo->conindid = conForm->conindid;
 	riinfo->pk_is_partitioned =
 		(get_rel_relkind(riinfo->pk_relid) == RELKIND_PARTITIONED_TABLE);
+	riinfo->pk_index_is_btree =
+		(get_rel_relam(riinfo->conindid) == BTREE_AM_OID);
 
 	ReleaseSysCache(tup);
 
@@ -2605,7 +2609,7 @@ InvalidateConstraintCacheCallBack(Datum arg, SysCacheIdentifier cacheid,
  * Prepare execution plan for a query to enforce an RI restriction
  */
 static SPIPlanPtr
-ri_PlanCheck(const char *querystr, int nargs, Oid *argtypes,
+ri_PlanCheck(const char *querystr, int nargs, const Oid *argtypes,
 			 RI_QueryKey *qkey, Relation fk_rel, Relation pk_rel)
 {
 	SPIPlanPtr	qplan;
@@ -2795,9 +2799,6 @@ ri_PerformCheck(const RI_ConstraintInfo *riinfo,
  *
  * If no matching PK row exists, report the violation via ri_ReportViolation(),
  * otherwise, the function returns normally.
- *
- * Note: This is only used by the ALTER TABLE validation path. Other paths use
- * ri_FastPathBatchAdd().
  */
 static void
 ri_FastPathCheck(RI_ConstraintInfo *riinfo,
@@ -2827,10 +2828,6 @@ ri_FastPathCheck(RI_ConstraintInfo *riinfo,
 	idx_rel = index_open(riinfo->conindid, AccessShareLock);
 
 	slot = table_slot_create(pk_rel, NULL);
-	scandesc = index_beginscan(pk_rel, idx_rel,
-							   snapshot, NULL,
-							   riinfo->nkeys, 0,
-							   SO_NONE);
 
 	GetUserIdAndSecContext(&saved_userid, &saved_sec_context);
 	SetUserIdAndSecContext(RelationGetForm(pk_rel)->relowner,
@@ -2838,6 +2835,17 @@ ri_FastPathCheck(RI_ConstraintInfo *riinfo,
 						   SECURITY_LOCAL_USERID_CHANGE |
 						   SECURITY_NOFORCE_RLS);
 	ri_CheckPermissions(pk_rel);
+
+	/*
+	 * Begin the scan under the switched user id, so that any access method
+	 * code invoked by index_beginscan() runs as the PK relation's owner.  For
+	 * btree this has no functional consequence, but it keeps the ordering
+	 * correct for out-of-tree access methods.
+	 */
+	scandesc = index_beginscan(pk_rel, idx_rel,
+							   snapshot, NULL,
+							   riinfo->nkeys, 0,
+							   SO_NONE);
 
 	if (riinfo->fpmeta == NULL)
 	{
@@ -2964,9 +2972,6 @@ ri_FastPathBatchFlush(RI_FastPathEntry *fpentry, Relation fk_rel,
 	 */
 	oldcxt = MemoryContextSwitchTo(fpentry->flush_cxt);
 
-	scandesc = index_beginscan(pk_rel, idx_rel, snapshot, NULL,
-							   riinfo->nkeys, 0, SO_NONE);
-
 	GetUserIdAndSecContext(&saved_userid, &saved_sec_context);
 	SetUserIdAndSecContext(RelationGetForm(pk_rel)->relowner,
 						   saved_sec_context |
@@ -2981,6 +2986,15 @@ ri_FastPathBatchFlush(RI_FastPathEntry *fpentry, Relation fk_rel,
 	 * ri_FastPathCheck().
 	 */
 	ri_CheckPermissions(pk_rel);
+
+	/*
+	 * Begin the scan under the switched user id, so that any access method
+	 * code invoked by index_beginscan() runs as the PK relation's owner.  For
+	 * btree this has no functional consequence, but it keeps the ordering
+	 * correct for out-of-tree access methods.
+	 */
+	scandesc = index_beginscan(pk_rel, idx_rel, snapshot, NULL,
+							   riinfo->nkeys, 0, SO_NONE);
 
 	if (riinfo->fpmeta == NULL)
 	{
@@ -3153,7 +3167,8 @@ ri_FastPathFlushArray(RI_FastPathEntry *fpentry, TupleTableSlot *fk_slot,
 	 * Build scan key with SK_SEARCHARRAY.  The index AM code will internally
 	 * sort and deduplicate, then walk leaf pages in order.
 	 *
-	 * PK indexes are always btree, which supports SK_SEARCHARRAY.
+	 * ri_fastpath_is_applicable() restricts the fast path to btree indexes,
+	 * which support SK_SEARCHARRAY.
 	 *
 	 * This path handles single-column FKs only, so index_attnos[0] == 1.
 	 */
@@ -3184,9 +3199,19 @@ ri_FastPathFlushArray(RI_FastPathEntry *fpentry, TupleTableSlot *fk_slot,
 		if (!ri_LockPKTuple(pk_rel, pk_slot, snapshot, &concurrently_updated))
 			continue;
 
-		/* Extract the PK value from the matched and locked tuple */
+		/*
+		 * Extract the PK value from the matched and locked tuple.
+		 *
+		 * A foreign key may reference a nullable unique column, not just a
+		 * NOT NULL primary key.  If ri_LockPKTuple() chased an update chain
+		 * to a version whose referenced key is now NULL, that version cannot
+		 * equal any buffered (non-null) FK value, so skip it.  This mirrors
+		 * the SPI path, where the requalifying "pkatt = $n" yields NULL and
+		 * the row is not returned.
+		 */
 		found_val = slot_getattr(pk_slot, riinfo->pk_attnums[0], &found_null);
-		Assert(!found_null);
+		if (found_null)
+			continue;
 
 		if (concurrently_updated)
 		{
@@ -3362,6 +3387,17 @@ ri_fastpath_is_applicable(const RI_ConstraintInfo *riinfo)
 	if (riinfo->hasperiod)
 		return false;
 
+	/*
+	 * The fast path probes the referenced index directly and, for
+	 * single-column keys, uses SK_SEARCHARRAY.  A foreign key's referenced
+	 * index need not be a primary key; transformFkeyCheckAttrs() accepts any
+	 * unique index, so an out-of-tree amcanunique access method could reach
+	 * here.  Restrict the fast path to btree, which is what the direct probe
+	 * and SK_SEARCHARRAY assume; other access methods fall back to SPI.
+	 */
+	if (!riinfo->pk_index_is_btree)
+		return false;
+
 	return true;
 }
 
@@ -3427,9 +3463,14 @@ recheck_matched_pk_tuple(Relation idxrel, ScanKeyData *skeys, int nkeys,
 	{
 		ScanKeyData *skey = &skeys[i];
 
-		/* A PK column can never be set to NULL. */
-		Assert(!isnull[i]);
-		if (!DatumGetBool(FunctionCall2Coll(&skey->sk_func,
+		/*
+		 * A foreign key may reference a nullable unique column, so the
+		 * version we chased the update chain to may have a NULL in a key
+		 * column.  A NULL never equals the value we searched for, so treat it
+		 * as no match, as the SPI path's requalification would.
+		 */
+		if (isnull[i] ||
+			!DatumGetBool(FunctionCall2Coll(&skey->sk_func,
 											skey->sk_collation,
 											values[i],
 											skey->sk_argument)))
@@ -4187,8 +4228,8 @@ RI_FKey_trigger_type(Oid tgfoid)
  * Registered as an AfterTriggerBatchCallback.  Note: the flush can
  * do real work (CCI, security context switch, index probes) and can
  * throw ERROR on a constraint violation.  If that happens,
- * ri_FastPathTeardown never runs; ResourceOwner + XactCallback
- * handle resource cleanup on the abort path.
+ * ri_FastPathTeardown never runs; ResourceOwner releases the cached
+ * relations and AtEOXact_RI() resets the static state on the abort path.
  */
 static void
 ri_FastPathEndBatch(void *arg)
@@ -4273,15 +4314,47 @@ ri_FastPathTeardown(void)
 	ri_fastpath_callback_registered = false;
 }
 
-static bool ri_fastpath_xact_callback_registered = false;
-
-static void
-ri_FastPathXactCallback(XactEvent event, void *arg)
+/*
+ * AtEOXact_RI
+ *		Reset fast-path batching state at end of transaction.
+ *
+ * Called from CommitTransaction() and PrepareTransaction() with isCommit
+ * true, and from AbortTransaction() with isCommit false.
+ *
+ * By the time we get here on a clean commit or prepare, the fast-path cache
+ * has already been flushed and torn down by ri_FastPathEndBatch() (an
+ * AfterTriggerBatchCallback fired from AfterTriggerFireDeferred(), well before
+ * this point), so the static pointers are already clear and the reset below is
+ * a no-op.  A surviving cache at commit means a trigger batch was never
+ * flushed, which would have silently skipped FK checks, so we complain.
+ *
+ * On abort, ri_FastPathEndBatch()/ri_FastPathTeardown() may not have run (a
+ * flush can error out partway): the ResourceOwner releases the cached
+ * relations and the TopTransactionContext reset frees the cache memory, but
+ * the process-local static pointers below would dangle into the next
+ * transaction.  This resets them so they don't.
+ *
+ * The reset touches only backend-local static state (no relations, locks,
+ * buffers or catalog access), so it has no ordering dependency on the
+ * surrounding ResourceOwnerRelease() / AtEOXact_* steps.
+ */
+void
+AtEOXact_RI(bool isCommit)
 {
 	/*
-	 * On abort, ResourceOwner already released relations; on commit,
-	 * ri_FastPathTeardown already ran.  Either way, just NULL the static
-	 * pointers so they don't dangle into the next transaction.
+	 * The cache must be empty on a clean commit or prepare; a survivor means
+	 * a trigger batch went unflushed.  Assert for assert-enabled builds and,
+	 * since the transaction is already committed by now and FK checks may
+	 * have been skipped, also warn in production builds.
+	 */
+	Assert(ri_fastpath_cache == NULL || !isCommit);
+	if (isCommit && ri_fastpath_cache != NULL)
+		elog(WARNING, "RI fast-path cache not flushed at end of transaction");
+
+	/*
+	 * Clear the static pointers/flags.  The cache memory lives in
+	 * TopTransactionContext and is freed by the end-of-transaction
+	 * memory-context reset; here we only drop the references to it.
 	 */
 	ri_fastpath_cache = NULL;
 	ri_fastpath_callback_registered = false;
@@ -4315,12 +4388,6 @@ ri_FastPathGetEntry(const RI_ConstraintInfo *riinfo, Relation fk_rel)
 	if (ri_fastpath_cache == NULL)
 	{
 		HASHCTL		ctl;
-
-		if (!ri_fastpath_xact_callback_registered)
-		{
-			RegisterXactCallback(ri_FastPathXactCallback, NULL);
-			ri_fastpath_xact_callback_registered = true;
-		}
 
 		ctl.keysize = sizeof(Oid);
 		ctl.entrysize = sizeof(RI_FastPathEntry);

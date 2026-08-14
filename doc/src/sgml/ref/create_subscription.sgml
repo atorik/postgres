@@ -22,7 +22,7 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceable>
-    { SERVER <replaceable class="parameter">servername</replaceable> | CONNECTION '<replaceable class="parameter">conninfo</replaceable>' }
+    { SERVER <replaceable class="parameter">server_name</replaceable> | CONNECTION '<replaceable class="parameter">conninfo</replaceable>' }
     PUBLICATION <replaceable class="parameter">publication_name</replaceable> [, ...]
     [ WITH ( <replaceable class="parameter">subscription_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
 </synopsis>
@@ -78,7 +78,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
    </varlistentry>
 
    <varlistentry id="sql-createsubscription-params-server">
-    <term><literal>SERVER <replaceable class="parameter">servername</replaceable></literal></term>
+    <term><literal>SERVER <replaceable class="parameter">server_name</replaceable></literal></term>
     <listitem>
      <para>
       A foreign server to use for the connection.  The server's foreign data
@@ -86,7 +86,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
       registered, and a user mapping for the subscription owner on the server
       must exist.  Additionally, the subscription owner must have
       <literal>USAGE</literal> privileges on
-      <replaceable>servername</replaceable>.
+      <replaceable>server_name</replaceable>.
      </para>
     </listitem>
    </varlistentry>
@@ -257,6 +257,55 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
           If the publisher is a <productname>PostgreSQL</productname> version
           before 16, then any initial table synchronization will use text format
           even if <literal>binary = true</literal>.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry id="sql-createsubscription-params-with-conflict-log-destination">
+        <term><literal>conflict_log_destination</literal> (<type>enum</type>)</term>
+        <listitem>
+         <para>
+          Specifies the destination for recording logical replication conflicts.
+          The available values are:
+          <variablelist>
+           <varlistentry>
+            <term><literal>log</literal></term>
+            <listitem>
+             <para>
+              Conflict details are recorded in the server log.
+              This is the default behavior.
+             </para>
+            </listitem>
+           </varlistentry>
+           <varlistentry>
+            <term><literal>table</literal></term>
+            <listitem>
+             <para>
+              The system automatically creates a structured table named
+              <literal>pg_conflict_log_&lt;subid&gt;</literal> in the
+              <literal>pg_conflict</literal> schema. This allows for easy
+              querying and analysis of conflicts.
+             </para>
+             <caution>
+              <para>
+               The conflict log table is strictly tied to the lifecycle of the
+               subscription or the <literal>conflict_log_destination</literal> setting. If
+               the subscription is dropped, or if the destination is changed to
+               <literal>log</literal>, the table is <emphasis>dropped</emphasis>.
+              </para>
+             </caution>
+            </listitem>
+           </varlistentry>
+           <varlistentry>
+            <term><literal>all</literal></term>
+            <listitem>
+             <para>
+              This is equivalent to configuring both destinations <literal>log</literal>
+              and <literal>table</literal> together.
+             </para>
+            </listitem>
+           </varlistentry>
+          </variablelist>
          </para>
         </listitem>
        </varlistentry>

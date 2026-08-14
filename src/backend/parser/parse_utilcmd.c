@@ -1484,6 +1484,16 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 								   ccname,
 								   RelationGetRelationName(relation))));
 
+			/*
+			 * Copying a CHECK constraint adds new references.  Since the
+			 * constraint arrives pre-cooked, it bypasses the checks in
+			 * AddRelationNewConstraints(), so we must check for USAGE on
+			 * types here.
+			 */
+			CheckUsageOnTypesInSingleRelExpr(stringToNode(ccbin),
+											 RelationGetRelid(relation),
+											 GetUserId());
+
 			n = makeNode(Constraint);
 			n->contype = CONSTR_CHECK;
 			n->conname = pstrdup(ccname);
@@ -3105,11 +3115,7 @@ transformIndexStmt(Oid relid, IndexStmt *stmt, const char *queryString)
 
 		if (ielem->expr)
 		{
-			/* Extract preliminary index col name before transforming expr */
-			if (ielem->indexcolname == NULL)
-				ielem->indexcolname = FigureIndexColname(ielem->expr);
-
-			/* Now do parse transformation of the expression */
+			/* Do parse transformation of the expression */
 			ielem->expr = transformExpr(pstate, ielem->expr,
 										EXPR_KIND_INDEX_EXPRESSION);
 
@@ -3123,6 +3129,26 @@ transformIndexStmt(Oid relid, IndexStmt *stmt, const char *queryString)
 			 *
 			 * DefineIndex() will make more checks.
 			 */
+		}
+	}
+
+	/*
+	 * Likewise take care of any expressions in INCLUDING.  (At this writing,
+	 * those will be rejected later on, but probably someday we'll wish to
+	 * support them.)
+	 */
+	foreach(l, stmt->indexIncludingParams)
+	{
+		IndexElem  *ielem = (IndexElem *) lfirst(l);
+
+		if (ielem->expr)
+		{
+			/* Do parse transformation of the expression */
+			ielem->expr = transformExpr(pstate, ielem->expr,
+										EXPR_KIND_INDEX_EXPRESSION);
+
+			/* We have to fix its collations too */
+			assign_expr_collations(pstate, ielem->expr);
 		}
 	}
 

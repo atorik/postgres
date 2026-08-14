@@ -382,7 +382,9 @@ CREATE TABLE people (
    A generated column cannot be written to directly.  In
    <command>INSERT</command> or <command>UPDATE</command> commands, a value
    cannot be specified for a generated column, but the keyword
-   <literal>DEFAULT</literal> may be specified.
+   <literal>DEFAULT</literal> may be specified.  Also, a generated column
+   cannot be used in the <literal>FOR PORTION OF</literal> clause of an
+   <command>UPDATE</command> or <command>DELETE</command> command.
   </para>
 
   <para>
@@ -2394,7 +2396,11 @@ REVOKE ALL ON accounts FROM PUBLIC;
      <listitem>
       <para>
        Allows creation of a foreign key constraint referencing a
-       table, or specific column(s) of a table.
+       table, or specific column(s) of a table. Great care should be taken when
+       granting this privilege, since a user who creates a foreign key can arrange
+       for enforcement of that foreign key to call an arbitrary function, such as
+       a cast function, and such functions will be called with the privileges of
+       the table owner.
       </para>
      </listitem>
     </varlistentry>
@@ -2403,7 +2409,9 @@ REVOKE ALL ON accounts FROM PUBLIC;
      <term><literal>TRIGGER</literal></term>
      <listitem>
       <para>
-       Allows creation of a trigger on a table, view, etc.
+       Allows creation of a trigger on a table, view, etc. Great care should be
+       taken when granting this privilege, since any triggers added to a table
+       or view will be executed with the privileges of users who modify it.
       </para>
      </listitem>
     </varlistentry>
@@ -2536,7 +2544,8 @@ REVOKE ALL ON accounts FROM PUBLIC;
     <listitem>
      <para>
       Allows <command>VACUUM</command>, <command>ANALYZE</command>,
-      <command>CLUSTER</command>, <command>REFRESH MATERIALIZED VIEW</command>,
+      <command>CLUSTER</command>, <command>REPACK</command>,
+      <command>REFRESH MATERIALIZED VIEW</command>,
       <command>REINDEX</command>, <command>LOCK TABLE</command>,
       and database object statistics manipulation functions
       (see <xref linkend="functions-admin-statsmod"/>) on a relation.
@@ -2606,6 +2615,7 @@ REVOKE ALL ON accounts FROM PUBLIC;
       <entry><literal>r</literal> (<quote>read</quote>)</entry>
       <entry>
        <literal>LARGE OBJECT</literal>,
+       <literal>PROPERTY GRAPH</literal>,
        <literal>SEQUENCE</literal>,
        <literal>TABLE</literal> (and table-like objects),
        table column
@@ -2773,6 +2783,12 @@ REVOKE ALL ON accounts FROM PUBLIC;
       <entry><literal>sA</literal></entry>
       <entry>none</entry>
       <entry><literal>\dconfig+</literal></entry>
+     </row>
+     <row>
+      <entry><literal>PROPERTY GRAPH</literal></entry>
+      <entry><literal>r</literal></entry>
+      <entry>none</entry>
+      <entry><literal>\dp</literal></entry>
      </row>
      <row>
       <entry><literal>SCHEMA</literal></entry>
@@ -3759,6 +3775,26 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
    </para>
   </sect2>
 
+  <sect2 id="ddl-schemas-conflict">
+   <title>The Conflict Schema</title>
+
+   <indexterm zone="ddl-schemas-conflict">
+    <primary>conflict</primary>
+    <secondary>schema</secondary>
+   </indexterm>
+
+   <para>
+    The <literal>pg_conflict</literal> schema (sometimes referred to as the
+    <emphasis>conflict schema</emphasis>) contains system-managed conflict
+    log tables used for logical replication conflict tracking.
+    These tables are created and maintained by the system and are not intended for
+    direct user manipulation. Unlike <literal>pg_catalog</literal>, the
+    <literal>pg_conflict</literal> schema is not implicitly included in the
+    search path, so objects within it must be referenced explicitly or by
+    adjusting the search path.
+   </para>
+  </sect2>
+
   <sect2 id="ddl-schemas-patterns">
    <title>Usage Patterns</title>
 
@@ -4090,7 +4126,9 @@ VALUES ('Albany', NULL, NULL, 'NY');
    similar fashion.  Thus, for example, a merged column will be marked
    not-null if any one of the column definitions it came from is marked
    not-null.  Check constraints are merged if they have the same name,
-   and the merge will fail if their conditions are different.
+   and the merge will fail if their conditions are different.  For merged
+   check constraints, stricter enforceability is preserved: if any inherited
+   copy is enforced, the merged constraint is enforced.
   </para>
 
   <para>
@@ -4104,8 +4142,9 @@ VALUES ('Albany', NULL, NULL, 'NY');
    To do this the new child table must already include columns with
    the same names and types as the columns of the parent. It must also include
    check constraints with the same names and check expressions as those of the
-   parent. Similarly an inheritance link can be removed from a child using the
-   <literal>NO INHERIT</literal> variant of <command>ALTER TABLE</command>.
+   parent, as well as matching not-null constraints. Similarly an inheritance
+   link can be removed from a child using the <literal>NO INHERIT</literal>
+   variant of <command>ALTER TABLE</command>.
    Dynamically adding and removing inheritance links like this can be useful
    when the inheritance relationship is being used for table
    partitioning (see <xref linkend="ddl-partitioning"/>).
@@ -4124,21 +4163,23 @@ VALUES ('Albany', NULL, NULL, 'NY');
 
   <para>
    A parent table cannot be dropped while any of its children remain. Neither
-   can columns or check constraints of child tables be dropped or altered
-   if they are inherited
-   from any parent tables. If you wish to remove a table and all of its
-   descendants, one easy way is to drop the parent table with the
-   <literal>CASCADE</literal> option (see <xref linkend="ddl-depend"/>).
+   can inherited columns or inherited check and not-null constraints of child
+   tables be dropped directly.  Some properties of inherited constraints can
+   be altered, but each resulting constraint must remain compatible with all
+   parent constraints from which it is inherited.  If you wish to remove a
+   table and all of its descendants, one easy way is to drop the parent table
+   with the <literal>CASCADE</literal> option (see <xref linkend="ddl-depend"/>).
   </para>
 
   <para>
    <command>ALTER TABLE</command> will
-   propagate any changes in column data definitions and check
-   constraints down the inheritance hierarchy.  Again, dropping
-   columns that are depended on by other tables is only possible when using
-   the <literal>CASCADE</literal> option. <command>ALTER
-   TABLE</command> follows the same rules for duplicate column merging
-   and rejection that apply during <command>CREATE TABLE</command>.
+   propagate changes in column definitions and in inheritable constraints
+   (check and not-null constraints) down the inheritance hierarchy.  Again,
+   dropping columns that are depended on by other tables is only possible
+   when using the <literal>CASCADE</literal> option. <command>ALTER
+   TABLE</command> follows the same rules for merging or rejecting duplicate
+   inherited column and constraint definitions that apply during
+   <command>CREATE TABLE</command>.
   </para>
 
   <para>
@@ -5715,7 +5756,7 @@ EXPLAIN SELECT count(*) FROM measurement WHERE logdate &gt;= DATE '2008-01-01';
    relational databases.  PostgreSQL implements SQL/PGQ<footnote><para>Here, PGQ
    stands for <quote>property graph query</quote>.  In the jargon of graph
    databases, <quote>property graph</quote> is normally abbreviated as PG, which
-   is clearly confusing for practioners of PostgreSQL, also usually abbreviated
+   is clearly confusing for practitioners of PostgreSQL, also usually abbreviated
    as PG.</para></footnote>, which is part of the SQL standard, where a property
    graph is defined as a kind of read-only view over relational tables.  So the
    actual data is still in tables or table-like objects, but is exposed as a
@@ -5894,7 +5935,7 @@ CREATE PROPERTY GRAPH myshop
     VERTEX TABLES (
         products LABEL product,
         customers LABEL customer LABEL person PROPERTIES (name),
-        orders LABEL order,
+        orders LABEL "order",
         employees LABEL employee LABEL person PROPERTIES (employee_name AS name)
     )
     EDGE TABLES (

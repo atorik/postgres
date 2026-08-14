@@ -548,12 +548,12 @@ pushValue_internal(TSQueryParserState state, pg_crc32 valcrc, int distance, int 
 {
 	QueryOperand *tmp;
 
-	if (distance >= MAXSTRPOS)
+	if (distance > MAXSTRPOS)
 		ereturn(state->escontext,,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("value is too big in tsquery: \"%s\"",
 						state->buffer)));
-	if (lenval >= MAXSTRLEN)
+	if (lenval > MAXSTRLEN)
 		ereturn(state->escontext,,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("operand is too long in tsquery: \"%s\"",
@@ -581,7 +581,7 @@ pushValue(TSQueryParserState state, char *strval, int lenval, int16 weight, bool
 {
 	pg_crc32	valcrc;
 
-	if (lenval >= MAXSTRLEN)
+	if (lenval > MAXSTRLEN)
 		ereturn(state->escontext,,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("word is too long in tsquery: \"%s\"",
@@ -1227,8 +1227,7 @@ tsqueryrecv(PG_FUNCTION_ARGS)
 {
 	StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
 	TSQuery		query;
-	int			i,
-				len;
+	int			len;
 	QueryItem  *item;
 	int			datalen;
 	char	   *ptr;
@@ -1250,7 +1249,7 @@ tsqueryrecv(PG_FUNCTION_ARGS)
 	item = GETQUERY(query);
 
 	datalen = 0;
-	for (i = 0; i < size; i++)
+	for (uint32 i = 0; i < size; i++)
 	{
 		item->type = (int8) pq_getmsgint(buf, sizeof(int8));
 
@@ -1335,7 +1334,7 @@ tsqueryrecv(PG_FUNCTION_ARGS)
 	Assert(!needcleanup);
 
 	/* Copy operands to output struct */
-	for (i = 0; i < size; i++)
+	for (uint32 i = 0; i < size; i++)
 	{
 		if (item->type == QI_VAL)
 		{
