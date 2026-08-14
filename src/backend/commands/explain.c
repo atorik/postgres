@@ -526,7 +526,9 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	int			eflags;
 	int			instrument_option = 0;
 	SerializeMetrics serializeMetrics = {0};
+	StorageIOUsage storageio = {0};
 	StorageIOUsage storageio_start;
+	StorageIOUsage storageio_end;
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
 
@@ -621,6 +623,18 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 		/* We can't run ExecutorEnd 'till we're done printing the stats... */
 		totaltime += elapsed_time(&starttime);
+
+		/*
+		 * Accumulate I/O through ExecutorFinish.  The ExecutorEnd phase is
+		 * measured separately below.
+		 */
+		if (es->io)
+		{
+			GetStorageIOUsage(&storageio_end);
+			StorageIOUsageAccumDiff(&storageio, &storageio_end,
+									&storageio_start);
+			StorageIOUsageAdd(&storageio, &pgStorageIOUsageParallel);
+		}
 	}
 
 	/* grab serialization metrics before we destroy the DestReceiver */
@@ -696,6 +710,9 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	 * Close down the query and free resources.  Include time for this in the
 	 * total execution time (although it should be pretty minimal).
 	 */
+	/* Restart I/O measurement for the ExecutorEnd phase. */
+	if (es->io)
+		GetStorageIOUsage(&storageio_start);
 	INSTR_TIME_SET_CURRENT(starttime);
 
 	ExecutorEnd(queryDesc);
@@ -713,11 +730,9 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	/* Show storage I/O usage in execution */
 	if (es->io)
 	{
-		StorageIOUsage storageio;
-
-		GetStorageIOUsage(&storageio);
-		StorageIOUsageDiff(&storageio, &storageio_start);
-		StorageIOUsageAdd(&storageio, &pgStorageIOUsageParallel);
+		GetStorageIOUsage(&storageio_end);
+		StorageIOUsageAccumDiff(&storageio, &storageio_end,
+								&storageio_start);
 
 		if (peek_storageio_usage(es, &storageio))
 		{
