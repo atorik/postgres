@@ -746,12 +746,13 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 						   mul_size(sizeof(WalUsage), pcxt->nworkers));
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
-	/*
-	 * Same thing for StorageIOUsage.
-	 */
-	shm_toc_estimate_chunk(&pcxt->estimator,
-						   mul_size(sizeof(StorageIOUsage), pcxt->nworkers));
-	shm_toc_estimate_keys(&pcxt->estimator, 1);
+	/* Estimate space for StorageIOUsage. */
+	if (estate->es_instrument & INSTRUMENT_IO)
+	{
+		shm_toc_estimate_chunk(&pcxt->estimator,
+							   mul_size(sizeof(StorageIOUsage), pcxt->nworkers));
+		shm_toc_estimate_keys(&pcxt->estimator, 1);
+	}
 
 	/* Estimate space for tuple queues. */
 	shm_toc_estimate_chunk(&pcxt->estimator,
@@ -849,10 +850,14 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	pei->wal_usage = walusage_space;
 
 	/* Same for StorageIOUsage. */
-	storageiousage_space = shm_toc_allocate(pcxt->toc,
-											mul_size(sizeof(StorageIOUsage), pcxt->nworkers));
-	shm_toc_insert(pcxt->toc, PARALLEL_KEY_STORAGEIO_USAGE, storageiousage_space);
-	pei->storageio_usage = storageiousage_space;
+	if (estate->es_instrument & INSTRUMENT_IO)
+	{
+		storageiousage_space = shm_toc_allocate(pcxt->toc,
+												mul_size(sizeof(StorageIOUsage), pcxt->nworkers));
+		shm_toc_insert(pcxt->toc, PARALLEL_KEY_STORAGEIO_USAGE,
+					   storageiousage_space);
+		pei->storageio_usage = storageiousage_space;
+	}
 
 	/* Set up the tuple queues that the workers will write into. */
 	pei->tqueue = ExecParallelSetupTupleQueues(pcxt, false);
@@ -1274,7 +1279,9 @@ ExecParallelFinish(ParallelExecutorInfo *pei)
 	 * for the workers to finish, or we might get incomplete data.)
 	 */
 	for (i = 0; i < nworkers; i++)
-		InstrAccumParallelQuery(&pei->buffer_usage[i], &pei->storageio_usage[i], &pei->wal_usage[i]);
+		InstrAccumParallelQuery(&pei->buffer_usage[i],
+								pei->storageio_usage ? &pei->storageio_usage[i] : NULL,
+								&pei->wal_usage[i]);
 
 	pei->finished = true;
 }
@@ -1530,7 +1537,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 {
 	FixedParallelExecutorState *fpes;
 	BufferUsage *buffer_usage;
-	StorageIOUsage *storageio_usage;
+	StorageIOUsage *storageio_usage = NULL;
 	StorageIOUsage storageio_usage_start;
 	WalUsage   *wal_usage;
 	DestReceiver *receiver;
@@ -1538,6 +1545,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	SharedExecutorInstrumentation *instrumentation;
 	SharedJitInstrumentation *jit_instrumentation;
 	int			instrument_options = 0;
+	bool		track_storage_io;
 	void	   *area_space;
 	dsa_area   *area;
 	ParallelWorkerContext pwcxt;
@@ -1550,6 +1558,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	instrumentation = shm_toc_lookup(toc, PARALLEL_KEY_INSTRUMENTATION, true);
 	if (instrumentation != NULL)
 		instrument_options = instrumentation->instrument_options;
+	track_storage_io = (instrument_options & INSTRUMENT_IO) != 0;
 	jit_instrumentation = shm_toc_lookup(toc, PARALLEL_KEY_JIT_INSTRUMENTATION,
 										 true);
 	queryDesc = ExecParallelGetQueryDesc(toc, receiver, instrument_options);
@@ -1592,7 +1601,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	 * leader, which also doesn't count buffer accesses and WAL activity that
 	 * occur during executor startup.
 	 */
-	InstrStartParallelQuery(&storageio_usage_start);
+	InstrStartParallelQuery(track_storage_io ? &storageio_usage_start : NULL);
 
 	/*
 	 * Run the plan.  If we specified a tuple bound, be careful not to demand
@@ -1607,12 +1616,14 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 
 	/* Report buffer, WAL, and storage I/O usage during parallel execution. */
 	buffer_usage = shm_toc_lookup(toc, PARALLEL_KEY_BUFFER_USAGE, false);
-	storageio_usage = shm_toc_lookup(toc, PARALLEL_KEY_STORAGEIO_USAGE, false);
+	if (track_storage_io)
+		storageio_usage = shm_toc_lookup(toc, PARALLEL_KEY_STORAGEIO_USAGE, false);
 	wal_usage = shm_toc_lookup(toc, PARALLEL_KEY_WAL_USAGE, false);
 	InstrEndParallelQuery(&buffer_usage[ParallelWorkerNumber],
-						  &storageio_usage[ParallelWorkerNumber],
+						  track_storage_io ?
+						  &storageio_usage[ParallelWorkerNumber] : NULL,
 						  &wal_usage[ParallelWorkerNumber],
-						  &storageio_usage_start);
+						  track_storage_io ? &storageio_usage_start : NULL);
 
 	/* Report instrumentation data if any instrumentation options are set. */
 	if (instrumentation != NULL)
