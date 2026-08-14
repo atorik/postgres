@@ -44,7 +44,7 @@ if (have_io_uring())
 	$node_io_uring->init;
 	$node_io_uring->append_conf('postgresql.conf', "io_method = 'io_uring'");
 	$node_io_uring->start;
-	
+
 	my $xml_io_uring = $node_io_uring->safe_psql(
 		'postgres',
 		q{
@@ -52,13 +52,13 @@ if (have_io_uring())
 		SELECT * FROM pg_class;
 		}
 	);
-	
+
 	like(
 		$xml_io_uring,
 		qr/<Storage-I-O-Read>\d+<\/Storage-I-O-Read>/,
 		"Storage-I-O-Read is shown in EXPLAIN XML (io_method=io_uring)"
 	);
-	
+
 	like(
 		$xml_io_uring,
 		qr/<Storage-I-O-Write>\d+<\/Storage-I-O-Write>/,
