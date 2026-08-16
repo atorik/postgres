@@ -321,7 +321,9 @@ ROLLBACK;
       write operations performed on storage during these phases.
       These values are obtained from the <function>getrusage()</function> system
       call for the backend process executing the query and for any parallel
-      query worker processes involved in the query.
+      query worker processes involved in the query.  Unlike the per-node I/O
+      information described above, these values cover the entire query and
+      are not limited to I/O performed by scan nodes.
       On platforms where <function>getrusage()</function> does not provide
       storage I/O counters, such as Windows, the values are always zero even
       if reads or writes actually occur.  Also, when
