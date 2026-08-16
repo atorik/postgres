@@ -141,7 +141,6 @@ extern Instrumentation *InstrAlloc(int instrument_options);
 extern void InstrInitOptions(Instrumentation *instr, int instrument_options);
 extern void InstrStart(Instrumentation *instr);
 extern void InstrStop(Instrumentation *instr);
-extern void InstrInit(Instrumentation *instr, int instrument_options);
 
 extern NodeInstrumentation *InstrAllocNode(int instrument_options,
 										   bool async_mode);
