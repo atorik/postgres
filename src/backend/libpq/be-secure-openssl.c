@@ -333,7 +333,7 @@ be_tls_init(bool isServerStart)
 	 */
 	else if (res == HOSTSFILE_DISABLED || res == HOSTSFILE_EMPTY || res == HOSTSFILE_MISSING)
 	{
-		HostsLine  *pgconf = palloc0(sizeof(HostsLine));
+		HostsLine  *pgconf = palloc0_object(HostsLine);
 
 #ifdef USE_ASSERT_CHECKING
 		if (res == HOSTSFILE_DISABLED)
@@ -366,7 +366,7 @@ be_tls_init(bool isServerStart)
 				errcode(ERRCODE_CONFIG_FILE_ERROR),
 				errmsg("no SSL configurations loaded"),
 		/*- translator: The two %s contain filenames */
-				errhint("If ssl_sni is enabled then add configuration to \"%s\", else \"%s\"",
+				errhint("If ssl_sni is enabled then add configuration to \"%s\", else \"%s\".",
 						HostsFileName, "postgresql.conf"));
 		goto error;
 	}
