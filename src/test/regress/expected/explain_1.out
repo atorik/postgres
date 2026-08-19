@@ -364,17 +364,11 @@ select explain_filter('explain (analyze, buffers, format json) select * from int
        "Local I/O Read Time": N.N,  +
        "Local I/O Write Time": N.N, +
        "Temp I/O Read Time": N.N,   +
-       "Temp I/O Write Time": N.N,  +
-       "Storage I/O Read": N,       +
-       "Storage I/O Write": N       +
+       "Temp I/O Write Time": N.N   +
      },                             +
      "Planning Time": N.N,          +
      "Triggers": [                  +
      ],                             +
-     "Execution": {                 +
-       "Storage I/O Read": N,       +
-       "Storage I/O Write": N       +
-     },                             +
      "Execution Time": N.N          +
    }                                +
  ]
@@ -494,18 +488,12 @@ select explain_filter('explain (memory, analyze, format json) select * from int8
        "Local Written Blocks": N,  +
        "Temp Read Blocks": N,      +
        "Temp Written Blocks": N,   +
-       "Storage I/O Read": N,      +
-       "Storage I/O Write": N,     +
        "Memory Used": N,           +
        "Memory Allocated": N       +
      },                            +
      "Planning Time": N.N,         +
      "Triggers": [                 +
      ],                            +
-     "Execution": {                +
-       "Storage I/O Read": N,      +
-       "Storage I/O Write": N      +
-     },                            +
      "Execution Time": N.N         +
    }                               +
  ]
@@ -718,11 +706,9 @@ select jsonb_pretty(
          },                                                 +
          "Planning": {                                      +
              "Local Hit Blocks": 0,                         +
-             "Storage I/O Read": 0,                         +
              "Temp Read Blocks": 0,                         +
              "Local Read Blocks": 0,                        +
              "Shared Hit Blocks": 0,                        +
-             "Storage I/O Write": 0,                        +
              "Shared Read Blocks": 0,                       +
              "Temp Written Blocks": 0,                      +
              "Local Dirtied Blocks": 0,                     +
@@ -732,10 +718,6 @@ select jsonb_pretty(
          },                                                 +
          "Triggers": [                                      +
          ],                                                 +
-         "Execution": {                                     +
-             "Storage I/O Read": 0,                         +
-             "Storage I/O Write": 0                         +
-         },                                                 +
          "Planning Time": 0.0,                              +
          "Execution Time": 0.0                              +
      }                                                      +
