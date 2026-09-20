@@ -43,10 +43,9 @@ typedef struct
 } ManyTestResource;
 
 /*
- * Current release phase, and priority of last call to the release callback.
+ * Priority of last call to the release callback.
  * This is used to check that the resources are released in correct order.
  */
-static ResourceReleasePhase current_release_phase;
 static uint32 last_release_priority = 0;
 
 /* prototypes for local functions */
@@ -226,7 +225,7 @@ test_resowner_many(PG_FUNCTION_ARGS)
 		elog(ERROR, "nforget_al must between 0 and 'nremember_al'");
 
 	/* Initialize all the different resource kinds to use */
-	before_kinds = palloc(nkinds * sizeof(ManyTestResourceKind));
+	before_kinds = palloc_array(ManyTestResourceKind, nkinds);
 	for (int i = 0; i < nkinds; i++)
 	{
 		InitManyTestResourceKind(&before_kinds[i],
@@ -234,7 +233,7 @@ test_resowner_many(PG_FUNCTION_ARGS)
 								 RESOURCE_RELEASE_BEFORE_LOCKS,
 								 RELEASE_PRIO_FIRST + i);
 	}
-	after_kinds = palloc(nkinds * sizeof(ManyTestResourceKind));
+	after_kinds = palloc_array(ManyTestResourceKind, nkinds);
 	for (int i = 0; i < nkinds; i++)
 	{
 		InitManyTestResourceKind(&after_kinds[i],
@@ -272,18 +271,15 @@ test_resowner_many(PG_FUNCTION_ARGS)
 
 	/* Start releasing */
 	elog(NOTICE, "releasing resources before locks");
-	current_release_phase = RESOURCE_RELEASE_BEFORE_LOCKS;
 	last_release_priority = 0;
 	ResourceOwnerRelease(resowner, RESOURCE_RELEASE_BEFORE_LOCKS, false, false);
 	Assert(GetTotalResourceCount(before_kinds, nkinds) == 0);
 
 	elog(NOTICE, "releasing locks");
-	current_release_phase = RESOURCE_RELEASE_LOCKS;
 	last_release_priority = 0;
 	ResourceOwnerRelease(resowner, RESOURCE_RELEASE_LOCKS, false, false);
 
 	elog(NOTICE, "releasing resources after locks");
-	current_release_phase = RESOURCE_RELEASE_AFTER_LOCKS;
 	last_release_priority = 0;
 	ResourceOwnerRelease(resowner, RESOURCE_RELEASE_AFTER_LOCKS, false, false);
 	Assert(GetTotalResourceCount(before_kinds, nkinds) == 0);

@@ -492,7 +492,7 @@ MarkAsPreparingGuts(GlobalTransaction gxact, FullTransactionId fxid,
 	gxact->locking_backend = MyProcNumber;
 	gxact->valid = false;
 	gxact->inredo = false;
-	strcpy(gxact->gid, gid);
+	strlcpy(gxact->gid, gid, GIDSIZE);
 
 	/*
 	 * Remember that we have this GlobalTransaction entry locked for us. If we
@@ -2012,12 +2012,12 @@ PrescanPreparedTransactions(TransactionId **xids_p, int *nxids_p)
 				if (nxids == 0)
 				{
 					allocsize = 10;
-					xids = palloc(allocsize * sizeof(TransactionId));
+					xids = palloc_array(TransactionId, allocsize);
 				}
 				else
 				{
 					allocsize = allocsize * 2;
-					xids = repalloc(xids, allocsize * sizeof(TransactionId));
+					xids = repalloc_array(xids, TransactionId, allocsize);
 				}
 			}
 			xids[nxids++] = xid;
@@ -2597,7 +2597,7 @@ PrepareRedoAdd(FullTransactionId fxid, char *buf,
 	gxact->valid = false;
 	gxact->ondisk = !XLogRecPtrIsValid(start_lsn);
 	gxact->inredo = true;		/* yes, added in redo */
-	strcpy(gxact->gid, gid);
+	strlcpy(gxact->gid, gid, GIDSIZE);
 
 	/* And insert it into the active array */
 	Assert(TwoPhaseState->numPrepXacts < max_prepared_xacts);

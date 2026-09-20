@@ -737,7 +737,7 @@ lookup_var_attr_stats(Bitmapset *attrs, List *exprs,
 
 	natts = bms_num_members(attrs) + list_length(exprs);
 
-	stats = (VacAttrStats **) palloc(natts * sizeof(VacAttrStats *));
+	stats = palloc_array(VacAttrStats *, natts);
 
 	/* lookup VacAttrStats info for the requested columns (same attnum) */
 	while ((x = bms_next_member(attrs, x)) >= 0)
@@ -1040,7 +1040,7 @@ build_sorted_items(StatsBuildData *data, int *nitems,
 	Size		len;
 	SortItem   *items;
 	Datum	   *values;
-	bool	   *isnull;
+	bool	   *nulls;
 	char	   *ptr;
 	int		   *typlen;
 
@@ -1060,7 +1060,7 @@ build_sorted_items(StatsBuildData *data, int *nitems,
 	values = (Datum *) ptr;
 	ptr += nvalues * sizeof(Datum);
 
-	isnull = (bool *) ptr;
+	nulls = (bool *) ptr;
 	ptr += nvalues * sizeof(bool);
 
 	/* make sure we consumed the whole buffer exactly */
@@ -1071,7 +1071,7 @@ build_sorted_items(StatsBuildData *data, int *nitems,
 	for (i = 0; i < data->numrows; i++)
 	{
 		items[nrows].values = &values[nrows * numattrs];
-		items[nrows].isnull = &isnull[nrows * numattrs];
+		items[nrows].isnull = &nulls[nrows * numattrs];
 
 		nrows++;
 	}
@@ -2175,8 +2175,8 @@ compute_expr_stats(Relation onerel, AnlExprData *exprdata, int nexprs,
 		econtext->ecxt_scantuple = slot;
 
 		/* Compute and save expression values */
-		exprvals = (Datum *) palloc(numrows * sizeof(Datum));
-		exprnulls = (bool *) palloc(numrows * sizeof(bool));
+		exprvals = palloc_array(Datum, numrows);
+		exprnulls = palloc_array(bool, numrows);
 
 		tcnt = 0;
 		for (i = 0; i < numrows; i++)
@@ -2293,7 +2293,7 @@ build_expr_data(List *exprs, int stattarget)
 	AnlExprData *exprdata;
 	ListCell   *lc;
 
-	exprdata = (AnlExprData *) palloc0(nexprs * sizeof(AnlExprData));
+	exprdata = palloc0_array(AnlExprData, nexprs);
 
 	idx = 0;
 	foreach(lc, exprs)
@@ -2386,7 +2386,7 @@ serialize_expr_stats(AnlExprData *exprdata, int nexprs)
 			if (nnum > 0)
 			{
 				int			n;
-				Datum	   *numdatums = (Datum *) palloc(nnum * sizeof(Datum));
+				Datum	   *numdatums = palloc_array(Datum, nnum);
 				ArrayType  *arry;
 
 				for (n = 0; n < nnum; n++)

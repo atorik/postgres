@@ -271,8 +271,12 @@ make_subplan(PlannerInfo *root, Query *orig_subquery,
 		{
 			char	   *plan_name;
 
-			/* Generate Paths for the ANY subquery; we'll need all rows */
-			plan_name = choose_plan_name(root->glob, sublinkstr, true);
+			/*
+			 * Generate Paths for the ANY subquery; we'll need all rows. Use a
+			 * distinct prefix for this user-visible name, since this is an
+			 * ANY implementation of the original EXISTS subplan.
+			 */
+			plan_name = choose_plan_name(root->glob, "exists_to_any", true);
 			subroot = subquery_planner(root->glob, subquery, plan_name,
 									   root, subroot, false, 0.0, NULL);
 
@@ -367,13 +371,14 @@ build_subplan(PlannerInfo *root, Plan *plan, Path *path,
 		 * already been adjusted to have the correct varlevelsup, phlevelsup,
 		 * agglevelsup, or retlevelsup.
 		 *
-		 * If it's a PlaceHolderVar, Aggref, GroupingFunc, or ReturningExpr,
-		 * its arguments might contain SubLinks, which have not yet been
-		 * processed (see the comments for SS_replace_correlation_vars).  Do
-		 * that now.
+		 * If it's an Aggref, GroupingFunc, or ReturningExpr, its arguments
+		 * might contain SubLinks, which have not yet been processed (see the
+		 * comments for SS_replace_correlation_vars).  Do that now.  A
+		 * PlaceHolderVar needs no such treatment: subquery_planner already
+		 * preprocessed the PHVs of its owning level, so its expression is
+		 * fully processed and may already contain SubPlans.
 		 */
-		if (IsA(arg, PlaceHolderVar) ||
-			IsA(arg, Aggref) ||
+		if (IsA(arg, Aggref) ||
 			IsA(arg, GroupingFunc) ||
 			IsA(arg, ReturningExpr))
 			arg = SS_process_sublinks(root, arg, false);
@@ -2250,9 +2255,10 @@ process_sublinks_mutator(Node *node, process_sublinks_context *context)
 	/*
 	 * Don't recurse into the arguments of an outer PHV, Aggref, GroupingFunc,
 	 * or ReturningExpr here.  Any SubLinks in the arguments have to be dealt
-	 * with at the outer query level; they'll be handled when build_subplan
-	 * collects the PHV, Aggref, GroupingFunc, or ReturningExpr into the
-	 * arguments to be passed down to the current subplan.
+	 * with at the outer query level; for an Aggref, GroupingFunc, or
+	 * ReturningExpr they'll be handled when build_subplan collects it into
+	 * the arguments to be passed down to the current subplan, while an outer
+	 * PHV's expression has already been preprocessed by its owning level.
 	 */
 	if (IsA(node, PlaceHolderVar))
 	{

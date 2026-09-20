@@ -54,6 +54,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/injection_point.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_lsn.h"
@@ -139,7 +140,6 @@ static void check_publications_origin_sequences(WalReceiverConn *wrconn,
 												Oid *subrel_local_oids,
 												int subrel_count,
 												char *subname);
-static void check_pub_dead_tuple_retention(WalReceiverConn *wrconn);
 static void check_duplicates_in_publist(List *publist, Datum *datums);
 static List *merge_publications(List *oldpublist, List *newpublist, bool addpub, const char *subname);
 static void ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, char *err);
@@ -372,7 +372,7 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 			if (opts->maxretention < 0)
 				ereport(ERROR,
 						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						errmsg("max_retention_duration cannot be negative"));
+						errmsg("option \"%s\" cannot be negative", "max_retention_duration"));
 		}
 		else if (IsSet(supported_opts, SUBOPT_ORIGIN) &&
 				 strcmp(defel->defname, "origin") == 0)
@@ -677,8 +677,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	Datum		values[Natts_pg_subscription];
 	Oid			owner = GetUserId();
 	HeapTuple	tup;
-	Oid			serverid;
-	char	   *conninfo;
+	Oid			serverid = InvalidOid;
+	char	   *conninfo = NULL;
 	char		originname[NAMEDATALEN];
 	List	   *publications;
 	uint32		supported_opts;
@@ -799,29 +799,46 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 		ForeignServer *server;
 
 		Assert(!stmt->conninfo);
-		conninfo = NULL;
 
 		server = GetForeignServerByName(stmt->servername, false);
-		aclresult = object_aclcheck(ForeignServerRelationId, server->serverid, owner, ACL_USAGE);
+		serverid = server->serverid;
+
+		/* check USAGE privileges on server */
+		aclresult = object_aclcheck(ForeignServerRelationId, serverid, owner, ACL_USAGE);
 		if (aclresult != ACLCHECK_OK)
 			aclcheck_error(aclresult, OBJECT_FOREIGN_SERVER, server->servername);
 
-		/* make sure a user mapping exists */
-		GetUserMapping(owner, server->serverid);
+		/* check user mapping */
+		GetUserMappingExtended(owner, server->serverid, WARNING);
 
-		serverid = server->serverid;
-		conninfo = ForeignServerConnectionString(owner, server);
+		/*
+		 * Check conninfo if connecting; otherwise only check that the
+		 * server's FDW supports connections.
+		 */
+		if (opts.connect)
+		{
+			conninfo = ForeignServerConnectionString(owner, server);
+			walrcv_check_conninfo(conninfo, opts.passwordrequired && !superuser());
+		}
+		else
+		{
+			ForeignDataWrapper *fdw = GetForeignDataWrapper(server->fdwid);
+
+			if (!OidIsValid(fdw->fdwconnection))
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("foreign-data wrapper \"%s\" does not support subscription connections",
+								fdw->fdwname),
+						 errdetail("Foreign-data wrapper must be defined with CONNECTION specified.")));
+		}
 	}
 	else
 	{
 		Assert(stmt->conninfo);
 
-		serverid = InvalidOid;
 		conninfo = stmt->conninfo;
+		walrcv_check_conninfo(conninfo, opts.passwordrequired && !superuser());
 	}
-
-	/* Check the connection info string. */
-	walrcv_check_conninfo(conninfo, opts.passwordrequired && !superuser());
 
 	publications = stmt->publication;
 
@@ -855,11 +872,17 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	values[Anum_pg_subscription_subretentionactive - 1] =
 		BoolGetDatum(opts.retaindeadtuples);
 	values[Anum_pg_subscription_subserver - 1] = ObjectIdGetDatum(serverid);
-	if (!OidIsValid(serverid))
+	if (stmt->conninfo)
+	{
+		Assert(stmt->conninfo == conninfo && !OidIsValid(serverid));
 		values[Anum_pg_subscription_subconninfo - 1] =
-			CStringGetTextDatum(conninfo);
+			CStringGetTextDatum(stmt->conninfo);
+	}
 	else
+	{
+		Assert(OidIsValid(serverid));
 		nulls[Anum_pg_subscription_subconninfo - 1] = true;
+	}
 	if (opts.slot_name)
 		values[Anum_pg_subscription_subslotname - 1] =
 			DirectFunctionCall1(namein, CStringGetDatum(opts.slot_name));
@@ -977,7 +1000,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 												NULL, 0, stmt->subname);
 
 			if (opts.retaindeadtuples)
-				check_pub_dead_tuple_retention(wrconn);
+				CheckPubDeadTupleRetention(wrconn);
 
 			/*
 			 * Set sync state based on if we were asked to do data copy or
@@ -1088,7 +1111,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 
 static void
 AlterSubscription_refresh(Subscription *sub, bool copy_data,
-						  List *validate_publications)
+						  List *validate_publications, char *conninfo)
 {
 	char	   *err;
 	List	   *pubrels = NIL;
@@ -1112,12 +1135,19 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 	WalReceiverConn *wrconn;
 	bool		must_use_password;
 
+	/*
+	 * Should not happen: CREATE/ALTER/DROP SUBSCRIPTION did not call
+	 * SubscriptionConninfo() in a path where it's required.
+	 */
+	if (!conninfo)
+		elog(ERROR, "no connection string provided for subscription");
+
 	/* Load the library providing us libpq calls. */
 	load_file("libpqwalreceiver", false);
 
 	/* Try to connect to the publisher. */
 	must_use_password = sub->passwordrequired && !sub->ownersuperuser;
-	wrconn = walrcv_connect(sub->conninfo, true, true, must_use_password,
+	wrconn = walrcv_connect(conninfo, true, true, must_use_password,
 							sub->name, &err);
 	if (!wrconn)
 		ereport(ERROR,
@@ -1137,6 +1167,9 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 		subrel_states = GetSubscriptionRelations(sub->oid, true, true, false);
 		subrel_count = list_length(subrel_states);
 
+		/* Allow a test to drop a subscribed relation before the origin check. */
+		INJECTION_POINT("subscription-refresh-before-origin-check", NULL);
+
 		/*
 		 * Build qsorted arrays of local table oids and sequence oids for
 		 * faster lookup. This can potentially contain all tables and
@@ -1146,8 +1179,8 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 		 * allocate separate arrays for table OIDs and sequence OIDs based on
 		 * the total number of relations (subrel_count).
 		 */
-		subrel_local_oids = palloc(subrel_count * sizeof(Oid));
-		subseq_local_oids = palloc(subrel_count * sizeof(Oid));
+		subrel_local_oids = palloc_array(Oid, subrel_count);
+		subseq_local_oids = palloc_array(Oid, subrel_count);
 		foreach(lc, subrel_states)
 		{
 			SubscriptionRelState *relstate = (SubscriptionRelState *) lfirst(lc);
@@ -1179,7 +1212,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 		 * step.
 		 */
 		off = 0;
-		pubrel_local_oids = palloc(list_length(pubrels) * sizeof(Oid));
+		pubrel_local_oids = palloc_array(Oid, list_length(pubrels));
 
 		foreach_ptr(PublicationRelKind, pubrelinfo, pubrels)
 		{
@@ -1289,34 +1322,6 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 		}
 
 		/*
-		 * Drop the tablesync slots associated with removed tables. This has
-		 * to be at the end because otherwise if there is an error while doing
-		 * the database operations we won't be able to rollback dropped slots.
-		 */
-		foreach_ptr(SubRemoveRels, sub_remove_rel, sub_remove_rels)
-		{
-			if (sub_remove_rel->state != SUBREL_STATE_READY &&
-				sub_remove_rel->state != SUBREL_STATE_SYNCDONE)
-			{
-				char		syncslotname[NAMEDATALEN] = {0};
-
-				/*
-				 * For READY/SYNCDONE states we know the tablesync slot has
-				 * already been dropped by the tablesync worker.
-				 *
-				 * For other states, there is no certainty, maybe the slot
-				 * does not exist yet. Also, if we fail after removing some of
-				 * the slots, next time, it will again try to drop already
-				 * dropped slots and fail. For these reasons, we allow
-				 * missing_ok = true for the drop.
-				 */
-				ReplicationSlotNameForTablesync(sub->oid, sub_remove_rel->relid,
-												syncslotname, sizeof(syncslotname));
-				ReplicationSlotDropAtPubNode(wrconn, syncslotname, true);
-			}
-		}
-
-		/*
 		 * Next remove state for sequences we should not care about anymore
 		 * using the data we collected above
 		 */
@@ -1343,6 +1348,34 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 										sub->name));
 			}
 		}
+
+		/*
+		 * Drop the tablesync slots associated with removed tables. This has
+		 * to be at the end because otherwise if there is an error while doing
+		 * the database operations we won't be able to rollback dropped slots.
+		 */
+		foreach_ptr(SubRemoveRels, sub_remove_rel, sub_remove_rels)
+		{
+			if (sub_remove_rel->state != SUBREL_STATE_READY &&
+				sub_remove_rel->state != SUBREL_STATE_SYNCDONE)
+			{
+				char		syncslotname[NAMEDATALEN] = {0};
+
+				/*
+				 * For READY/SYNCDONE states we know the tablesync slot has
+				 * already been dropped by the tablesync worker.
+				 *
+				 * For other states, there is no certainty, maybe the slot
+				 * does not exist yet. Also, if we fail after removing some of
+				 * the slots, next time, it will again try to drop already
+				 * dropped slots and fail. For these reasons, we allow
+				 * missing_ok = true for the drop.
+				 */
+				ReplicationSlotNameForTablesync(sub->oid, sub_remove_rel->relid,
+												syncslotname, sizeof(syncslotname));
+				ReplicationSlotDropAtPubNode(wrconn, syncslotname, true);
+			}
+		}
 	}
 	PG_FINALLY();
 	{
@@ -1358,19 +1391,26 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
  * Marks all sequences with INIT state.
  */
 static void
-AlterSubscription_refresh_seq(Subscription *sub)
+AlterSubscription_refresh_seq(Subscription *sub, char *conninfo)
 {
 	char	   *err = NULL;
 	WalReceiverConn *wrconn;
 	bool		must_use_password;
 	List	   *subrel_states;
 
+	/*
+	 * Should not happen: CREATE/ALTER/DROP SUBSCRIPTION did not call
+	 * SubscriptionConninfo() in a path where it's required.
+	 */
+	if (!conninfo)
+		elog(ERROR, "no connection string provided for subscription");
+
 	/* Load the library providing us libpq calls. */
 	load_file("libpqwalreceiver", false);
 
 	/* Try to connect to the publisher. */
 	must_use_password = sub->passwordrequired && !sub->ownersuperuser;
-	wrconn = walrcv_connect(sub->conninfo, true, true, must_use_password,
+	wrconn = walrcv_connect(conninfo, true, true, must_use_password,
 							sub->name, &err);
 	if (!wrconn)
 		ereport(ERROR,
@@ -1381,6 +1421,16 @@ AlterSubscription_refresh_seq(Subscription *sub)
 	/* The publisher connection is only needed for the origin check. */
 	PG_TRY();
 	{
+		/*
+		 * Sequence synchronization depends on publisher-side functionality
+		 * introduced in PostgreSQL 19, so it cannot work against an older
+		 * publisher.
+		 */
+		if (walrcv_server_version(wrconn) < 190000)
+			ereport(ERROR,
+					errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("cannot synchronize sequences if the publisher is running a version earlier than PostgreSQL 19"));
+
 		check_publications_origin_sequences(wrconn, sub->publications, true,
 											sub->origin, NULL, 0, sub->name);
 	}
@@ -1608,7 +1658,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 	Datum		values[Natts_pg_subscription];
 	HeapTuple	tup;
 	Oid			subid;
-	bool		orig_conninfo_needed = true;
+	bool		orig_conninfo_needed = false;
 	bool		update_tuple = false;
 	bool		update_failover = false;
 	bool		update_two_phase = false;
@@ -1617,6 +1667,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 	int			max_retention;
 	bool		retention_active;
 	char	   *new_conninfo = NULL;
+	char	   *orig_conninfo = NULL;
 	char	   *origin;
 	Subscription *sub;
 	Form_pg_subscription form;
@@ -1689,44 +1740,63 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 	if (supported_opts > 0)
 		parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
 
-	/*
-	 * Ensure that ALTER SUBSCRIPTION commands that could be used to fix a
-	 * broken connection or prepare to drop a broken subscription don't
-	 * attempt to construct the conninfo. Otherwise, we might encounter the
-	 * error the user is trying to fix.
-	 *
-	 * Specifically, ALTER SUBSCRIPTION DISABLE, ALTER SUBSCRIPTION SERVER,
-	 * ALTER SUBSCRIPTION CONNECTION, or ALTER SUBSCRIPTION SET
-	 * (slot_name=NONE).
-	 *
-	 * NB: if the user specifies multiple SET options, then we may still need
-	 * to construct conninfo even if slot_name is set to NONE.
-	 */
-	if (stmt->kind == ALTER_SUBSCRIPTION_ENABLED)
-	{
-		if (opts.specified_opts == SUBOPT_ENABLED && !opts.enabled)
-			orig_conninfo_needed = false;
-	}
-	else if (stmt->kind == ALTER_SUBSCRIPTION_SERVER ||
-			 stmt->kind == ALTER_SUBSCRIPTION_CONNECTION)
-	{
-		orig_conninfo_needed = false;
-	}
-	else if (stmt->kind == ALTER_SUBSCRIPTION_OPTIONS)
-	{
-		/* ... SET (slot_name = NONE) with no other options */
-		if (opts.specified_opts == SUBOPT_SLOT_NAME && !opts.slot_name)
-			orig_conninfo_needed = false;
-	}
+	sub = GetSubscription(subid, false);
 
 	/*
-	 * Skip ACL checks on the subscription's foreign server, if any. If
-	 * changing the server (or replacing it with a raw connection), then the
-	 * old one will be removed anyway. If changing something unrelated,
-	 * there's no need to do an additional ACL check here; that will be done
-	 * by the subscription worker.
+	 * Determine in advance whether we need the original conninfo or not, so
+	 * that errors are generated consistently in cases where we do need it;
+	 * and not generated at all if we don't.
 	 */
-	sub = GetSubscription(subid, false, orig_conninfo_needed, false);
+
+	/* conninfo needed when refreshing */
+	switch (stmt->kind)
+	{
+		case ALTER_SUBSCRIPTION_REFRESH_PUBLICATION:
+		case ALTER_SUBSCRIPTION_REFRESH_SEQUENCES:
+			orig_conninfo_needed = true;
+			break;
+
+		case ALTER_SUBSCRIPTION_SET_PUBLICATION:
+		case ALTER_SUBSCRIPTION_ADD_PUBLICATION:
+		case ALTER_SUBSCRIPTION_DROP_PUBLICATION:
+			/* opts.refresh defaults to true when the option is supported */
+			orig_conninfo_needed = opts.refresh;
+			break;
+
+		case ALTER_SUBSCRIPTION_OPTIONS:
+			{
+				if (sub->slotname)
+				{
+					if (IsSet(opts.specified_opts, SUBOPT_FAILOVER))
+						orig_conninfo_needed = true;
+					if (IsSet(opts.specified_opts, SUBOPT_TWOPHASE_COMMIT) &&
+						!opts.twophase)
+						orig_conninfo_needed = true;
+				}
+
+				if (IsSet(opts.specified_opts, SUBOPT_RETAIN_DEAD_TUPLES) &&
+					opts.retaindeadtuples)
+					orig_conninfo_needed = true;
+
+				if (IsSet(opts.specified_opts, SUBOPT_ORIGIN))
+				{
+					bool		rdt;
+
+					rdt = IsSet(opts.specified_opts, SUBOPT_RETAIN_DEAD_TUPLES) ?
+						opts.retaindeadtuples : sub->retaindeadtuples;
+
+					if (rdt && pg_strcasecmp(opts.origin, LOGICALREP_ORIGIN_ANY) == 0)
+						orig_conninfo_needed = true;
+				}
+			}
+			break;
+
+		default:
+			break;
+	}
+
+	if (orig_conninfo_needed)
+		orig_conninfo = SubscriptionConninfo(sub);
 
 	retain_dead_tuples = sub->retaindeadtuples;
 	origin = sub->origin;
@@ -1954,7 +2024,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					if (logicalrep_workers_find(subid, true, true))
 						ereport(ERROR,
 								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-								 errmsg("cannot alter retain_dead_tuples when logical replication worker is still running"),
+								 errmsg("cannot alter option \"%s\" when logical replication worker is still running",
+										"retain_dead_tuples"),
 								 errhint("Try again after some time.")));
 
 					/*
@@ -2074,14 +2145,6 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					ApplyLauncherWakeupAtCommit();
 
 				update_tuple = true;
-
-				/*
-				 * The subscription might be initially created with
-				 * connect=false and retain_dead_tuples=true, meaning the
-				 * remote server's status may not be checked. Ensure this
-				 * check is conducted now.
-				 */
-				check_pub_rdt = sub->retaindeadtuples && opts.enabled;
 				break;
 			}
 
@@ -2122,8 +2185,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 								   GetUserNameFromId(form->subowner, false),
 								   new_server->servername));
 
-				/* make sure a user mapping exists */
-				GetUserMapping(form->subowner, new_server->serverid);
+				/* check user mapping */
+				GetUserMappingExtended(form->subowner, new_server->serverid, WARNING);
 
 				new_conninfo = ForeignServerConnectionString(form->subowner,
 															 new_server);
@@ -2217,7 +2280,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					sub->publications = stmt->publication;
 
 					AlterSubscription_refresh(sub, opts.copy_data,
-											  stmt->publication);
+											  stmt->publication,
+											  orig_conninfo);
 				}
 
 				break;
@@ -2272,7 +2336,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					sub->publications = publist;
 
 					AlterSubscription_refresh(sub, opts.copy_data,
-											  validate_publications);
+											  validate_publications,
+											  orig_conninfo);
 				}
 
 				break;
@@ -2311,7 +2376,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 
 				PreventInTransactionBlock(isTopLevel, "ALTER SUBSCRIPTION ... REFRESH PUBLICATION");
 
-				AlterSubscription_refresh(sub, opts.copy_data, NULL);
+				AlterSubscription_refresh(sub, opts.copy_data, NULL,
+										  orig_conninfo);
 
 				break;
 			}
@@ -2324,7 +2390,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 							errmsg("%s is not allowed for disabled subscriptions",
 								   "ALTER SUBSCRIPTION ... REFRESH SEQUENCES"));
 
-				AlterSubscription_refresh_seq(sub);
+				AlterSubscription_refresh_seq(sub, orig_conninfo);
 
 				break;
 			}
@@ -2396,7 +2462,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 		char	   *err;
 		WalReceiverConn *wrconn;
 
-		Assert(new_conninfo || orig_conninfo_needed);
+		Assert(new_conninfo || orig_conninfo);
 
 		/* Load the library providing us libpq calls. */
 		load_file("libpqwalreceiver", false);
@@ -2406,7 +2472,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 		 * available.
 		 */
 		must_use_password = sub->passwordrequired && !sub->ownersuperuser;
-		wrconn = walrcv_connect(new_conninfo ? new_conninfo : sub->conninfo,
+		wrconn = walrcv_connect(new_conninfo ? new_conninfo : orig_conninfo,
 								true, true, must_use_password, sub->name,
 								&err);
 		if (!wrconn)
@@ -2418,7 +2484,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 		PG_TRY();
 		{
 			if (retain_dead_tuples)
-				check_pub_dead_tuple_retention(wrconn);
+				CheckPubDeadTupleRetention(wrconn);
 
 			check_publications_origin_tables(wrconn, sub->publications, false,
 											 retain_dead_tuples, origin, NULL, 0,
@@ -2938,25 +3004,15 @@ AlterSubscriptionOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 					   get_database_name(MyDatabaseId));
 
 	/*
-	 * If the subscription uses a server, check that the new owner has USAGE
-	 * privileges on the server and that a user mapping exists. Note: does not
-	 * re-check the resulting connection string.
+	 * The privileges will be checked before the connection is actually used,
+	 * so it does not need to be done here. Avoid unnecessary risk of errors
+	 * here, which could interfere with restore.
+	 *
+	 * However, it is convenient to check if a user mapping exists, and raise
+	 * a WARNING if not.
 	 */
 	if (OidIsValid(form->subserver))
-	{
-		ForeignServer *server = GetForeignServer(form->subserver);
-
-		aclresult = object_aclcheck(ForeignServerRelationId, server->serverid, newOwnerId, ACL_USAGE);
-		if (aclresult != ACLCHECK_OK)
-			ereport(ERROR,
-					errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					errmsg("new subscription owner \"%s\" does not have permission on foreign server \"%s\"",
-						   GetUserNameFromId(newOwnerId, false),
-						   server->servername));
-
-		/* make sure a user mapping exists */
-		GetUserMapping(newOwnerId, server->serverid);
-	}
+		GetUserMappingExtended(newOwnerId, form->subserver, WARNING);
 
 	form->subowner = newOwnerId;
 	CatalogTupleUpdate(rel, &tup->t_self, tup);
@@ -3136,10 +3192,22 @@ check_publications_origin_tables(WalReceiverConn *wrconn, List *publications,
 		for (i = 0; i < subrel_count; i++)
 		{
 			Oid			relid = subrel_local_oids[i];
-			char	   *schemaname = get_namespace_name(get_rel_namespace(relid));
-			char	   *tablename = get_rel_name(relid);
-			char	   *schemaname_lit = quote_literal_cstr(schemaname);
-			char	   *tablename_lit = quote_literal_cstr(tablename);
+			char	   *schemaname;
+			char	   *tablename;
+			char	   *schemaname_lit;
+			char	   *tablename_lit;
+
+			/* The table may have been dropped concurrently; skip if gone. */
+			tablename = get_rel_name(relid);
+			if (tablename == NULL)
+				continue;
+
+			schemaname = get_namespace_name(get_rel_namespace(relid));
+			if (schemaname == NULL)
+				continue;
+
+			schemaname_lit = quote_literal_cstr(schemaname);
+			tablename_lit = quote_literal_cstr(tablename);
 
 			appendStringInfo(&cmd, "AND NOT (N.nspname = %s AND C.relname = %s)\n",
 							 schemaname_lit, tablename_lit);
@@ -3263,10 +3331,22 @@ check_publications_origin_sequences(WalReceiverConn *wrconn, List *publications,
 	for (int i = 0; i < subrel_count; i++)
 	{
 		Oid			relid = subrel_local_oids[i];
-		char	   *schemaname = get_namespace_name(get_rel_namespace(relid));
-		char	   *seqname = get_rel_name(relid);
-		char	   *schemaname_lit = quote_literal_cstr(schemaname);
-		char	   *seqname_lit = quote_literal_cstr(seqname);
+		char	   *schemaname;
+		char	   *seqname;
+		char	   *schemaname_lit;
+		char	   *seqname_lit;
+
+		/* The sequence may have been dropped concurrently; skip if gone. */
+		seqname = get_rel_name(relid);
+		if (seqname == NULL)
+			continue;
+
+		schemaname = get_namespace_name(get_rel_namespace(relid));
+		if (schemaname == NULL)
+			continue;
+
+		schemaname_lit = quote_literal_cstr(schemaname);
+		seqname_lit = quote_literal_cstr(seqname);
 
 		appendStringInfo(&cmd,
 						 "AND NOT (N.nspname = %s AND C.relname = %s)\n",
@@ -3314,12 +3394,12 @@ check_publications_origin_sequences(WalReceiverConn *wrconn, List *publications,
 
 		ereport(WARNING,
 				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				errmsg("subscription \"%s\" requested copy_data with origin = NONE but might copy data that had a different origin",
+				errmsg("subscription \"%s\" requested origin = NONE but might synchronize sequence values that had a different origin",
 					   subname),
-				errdetail_plural("The subscription subscribes to a publication (%s) that contains sequences that are written to by other subscriptions.",
-								 "The subscription subscribes to publications (%s) that contain sequences that are written to by other subscriptions.",
+				errdetail_plural("The subscription subscribes to a publication (%s) that contains sequences that are synchronized from other subscriptions.",
+								 "The subscription subscribes to publications (%s) that contain sequences that are synchronized from other subscriptions.",
 								 list_length(publist), pubnames.data),
-				errhint("Verify that initial data copied from the publisher sequences did not come from other origins."));
+				errhint("Verify that the initial values copied from the publisher sequences did not come from other origins."));
 	}
 
 	ExecDropSingleTupleTableSlot(slot);
@@ -3335,10 +3415,15 @@ check_publications_origin_sequences(WalReceiverConn *wrconn, List *publications,
  * than the PG19, or if the publisher is in recovery (i.e., it is a standby
  * server).
  *
+ * This is used both at DDL time (as a convenience, when a connection to the
+ * publisher is already being made) and by the apply worker when it connects,
+ * which is the authoritative check because the publisher's version and
+ * recovery status can change after the DDL command.
+ *
  * See comments atop worker.c for a detailed explanation.
  */
-static void
-check_pub_dead_tuple_retention(WalReceiverConn *wrconn)
+void
+CheckPubDeadTupleRetention(WalReceiverConn *wrconn)
 {
 	WalRcvExecResult *res;
 	Oid			RecoveryRow[1] = {BOOLOID};

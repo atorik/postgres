@@ -959,6 +959,22 @@ DefineIndex(ParseState *pstate,
 					  &root_save_nestlevel);
 
 	/*
+	 * The below call to index_create() creates the dependencies on types.  We
+	 * are responsible for checking USAGE.
+	 */
+	if (check_rights)
+	{
+		if (indexInfo->ii_Expressions)
+			CheckUsageOnTypesInSingleRelExpr((Node *) indexInfo->ii_Expressions,
+											 tableId,
+											 root_save_userid);
+		if (indexInfo->ii_Predicate)
+			CheckUsageOnTypesInSingleRelExpr((Node *) indexInfo->ii_Predicate,
+											 tableId,
+											 root_save_userid);
+	}
+
+	/*
 	 * Extra checks when creating a PRIMARY KEY index.
 	 */
 	if (stmt->primary)
@@ -2874,6 +2890,9 @@ ChooseIndexExpressionName(Relation rel, Node *indexExpr)
 	context.buf = &buf;
 	/* Walk the tree, stopping when we have enough text */
 	(void) ChooseIndexExpressionName_walker(indexExpr, &context);
+	/* Fall back to "expr" if the walk found nothing, to avoid an empty name */
+	if (buf.len == 0)
+		appendStringInfoString(&buf, "expr");
 	/* Ensure generated names are shorter than NAMEDATALEN */
 	nlen = pg_mbcliplen(buf.data, buf.len, NAMEDATALEN - 1);
 	buf.data[nlen] = '\0';
@@ -2891,19 +2910,29 @@ ChooseIndexExpressionName_walker(Node *node,
 	{
 		Var		   *var = (Var *) node;
 		TupleDesc	tupdesc = RelationGetDescr(context->rel);
-		Form_pg_attribute att;
+		const char *varname;
 
 		/* Paranoia: ignore the Var if it looks fishy */
 		if (var->varno != 1 || var->varlevelsup != 0 ||
-			var->varattno <= 0 || var->varattno > tupdesc->natts)
+			var->varattno < 0 || var->varattno > tupdesc->natts)
 			return false;
-		att = TupleDescAttr(tupdesc, var->varattno - 1);
-		if (att->attisdropped)
-			return false;		/* even more paranoia; shouldn't happen */
+		if (var->varattno > 0)
+		{
+			Form_pg_attribute att = TupleDescAttr(tupdesc, var->varattno - 1);
+
+			if (att->attisdropped)
+				return false;	/* even more paranoia; shouldn't happen */
+			varname = NameStr(att->attname);
+		}
+		else
+		{
+			/* Whole-row Var: use the table's name */
+			varname = RelationGetRelationName(context->rel);
+		}
 
 		if (context->buf->len > 0)
 			appendStringInfoChar(context->buf, '_');
-		appendStringInfoString(context->buf, NameStr(att->attname));
+		appendStringInfoString(context->buf, varname);
 
 		/* Done if we've already reached NAMEDATALEN */
 		return (context->buf->len >= NAMEDATALEN);
@@ -4283,6 +4312,8 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		CommitTransactionCommand();
 	}
 
+	INJECTION_POINT("reindex-conc-index-built", NULL);
+
 	StartTransactionCommand();
 
 	/*
@@ -4508,6 +4539,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 	 * Drop the old indexes.
 	 */
 
+	INJECTION_POINT("reindex-relation-concurrently-before-drop", NULL);
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
 								 PROGRESS_CREATEIDX_PHASE_WAIT_5);
 	WaitForLockersMultiple(lockTags, AccessExclusiveLock, true);

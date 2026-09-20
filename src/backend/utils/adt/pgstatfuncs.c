@@ -108,6 +108,40 @@ PG_STAT_GET_RELENTRY_INT64(tuples_updated)
 /* pg_stat_get_vacuum_count */
 PG_STAT_GET_RELENTRY_INT64(vacuum_count)
 
+/*
+ * Accessor macro for index stats entries (PgStat_StatIdxEntry).
+ */
+#define PG_STAT_GET_IDXENTRY_INT64(stat)						\
+Datum															\
+CppConcat(pg_stat_get_idx_,stat)(PG_FUNCTION_ARGS)				\
+{																\
+	Oid			relid = PG_GETARG_OID(0);						\
+	int64		result;											\
+	PgStat_StatIdxEntry *idxentry;								\
+																\
+	if ((idxentry = pgstat_fetch_stat_idxentry(relid)) == NULL)	\
+		result = 0;												\
+	else														\
+		result = (int64) (idxentry->stat);						\
+																\
+	PG_RETURN_INT64(result);									\
+}
+
+/* pg_stat_get_idx_numscans */
+PG_STAT_GET_IDXENTRY_INT64(numscans)
+
+/* pg_stat_get_idx_tuples_returned */
+PG_STAT_GET_IDXENTRY_INT64(tuples_returned)
+
+/* pg_stat_get_idx_tuples_fetched */
+PG_STAT_GET_IDXENTRY_INT64(tuples_fetched)
+
+/* pg_stat_get_idx_blocks_fetched */
+PG_STAT_GET_IDXENTRY_INT64(blocks_fetched)
+
+/* pg_stat_get_idx_blocks_hit */
+PG_STAT_GET_IDXENTRY_INT64(blocks_hit)
+
 #define PG_STAT_GET_RELENTRY_FLOAT8(stat)						\
 Datum															\
 CppConcat(pg_stat_get_,stat)(PG_FUNCTION_ARGS)					\
@@ -172,6 +206,34 @@ PG_STAT_GET_RELENTRY_TIMESTAMPTZ(lastscan)
 
 /* pg_stat_get_stat_reset_time */
 PG_STAT_GET_RELENTRY_TIMESTAMPTZ(stat_reset_time)
+
+/*
+ * Accessor macro for index timestamp fields.
+ */
+#define PG_STAT_GET_IDXENTRY_TIMESTAMPTZ(stat)					\
+Datum															\
+CppConcat(pg_stat_get_idx_,stat)(PG_FUNCTION_ARGS)				\
+{																\
+	Oid			relid = PG_GETARG_OID(0);						\
+	TimestampTz result;											\
+	PgStat_StatIdxEntry *idxentry;								\
+																\
+	if ((idxentry = pgstat_fetch_stat_idxentry(relid)) == NULL)	\
+		result = 0;												\
+	else														\
+		result = idxentry->stat;								\
+																\
+	if (result == 0)											\
+		PG_RETURN_NULL();										\
+	else														\
+		PG_RETURN_TIMESTAMPTZ(result);							\
+}
+
+/* pg_stat_get_idx_lastscan */
+PG_STAT_GET_IDXENTRY_TIMESTAMPTZ(lastscan)
+
+/* pg_stat_get_idx_stat_reset_time */
+PG_STAT_GET_IDXENTRY_TIMESTAMPTZ(stat_reset_time)
 
 Datum
 pg_stat_get_function_calls(PG_FUNCTION_ARGS)
@@ -770,7 +832,7 @@ pg_stat_get_backend_subxact(PG_FUNCTION_ARGS)
 	tupdesc = CreateTemplateTupleDesc(PG_STAT_GET_SUBXACT_COLS);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "subxact_count",
 					   INT4OID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "subxact_overflow",
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "subxact_overflowed",
 					   BOOLOID, -1, 0);
 
 	TupleDescFinalize(tupdesc);
@@ -1860,51 +1922,87 @@ pg_stat_get_slru(PG_FUNCTION_ARGS)
 	return (Datum) 0;
 }
 
-#define PG_STAT_GET_XACT_RELENTRY_INT64(stat)			\
+#define PG_STAT_GET_XACT_RELENTRY_INT64(member, stat)	\
 Datum													\
 CppConcat(pg_stat_get_xact_,stat)(PG_FUNCTION_ARGS)		\
 {														\
 	Oid         relid = PG_GETARG_OID(0);				\
 	int64       result;									\
-	PgStat_TableStatus *tabentry;						\
+	PgStat_RelationStatus *tabentry;						\
 														\
-	if ((tabentry = find_tabstat_entry(relid)) == NULL)	\
+	if ((tabentry = find_relstat_entry_kind(PGSTAT_KIND_RELATION, \
+											relid)) == NULL)	\
 		result = 0;										\
 	else												\
-		result = (int64) (tabentry->counts.stat);		\
+		result = (int64) (tabentry->tab.member.stat);	\
 														\
 	PG_RETURN_INT64(result);							\
 }
 
 /* pg_stat_get_xact_numscans */
-PG_STAT_GET_XACT_RELENTRY_INT64(numscans)
+PG_STAT_GET_XACT_RELENTRY_INT64(counts, numscans)
 
 /* pg_stat_get_xact_tuples_returned */
-PG_STAT_GET_XACT_RELENTRY_INT64(tuples_returned)
+PG_STAT_GET_XACT_RELENTRY_INT64(counts, tuples_returned)
 
 /* pg_stat_get_xact_tuples_fetched */
-PG_STAT_GET_XACT_RELENTRY_INT64(tuples_fetched)
+PG_STAT_GET_XACT_RELENTRY_INT64(counts, tuples_fetched)
 
 /* pg_stat_get_xact_tuples_hot_updated */
-PG_STAT_GET_XACT_RELENTRY_INT64(tuples_hot_updated)
+PG_STAT_GET_XACT_RELENTRY_INT64(counts_xact, tuples_hot_updated)
 
 /* pg_stat_get_xact_tuples_newpage_updated */
-PG_STAT_GET_XACT_RELENTRY_INT64(tuples_newpage_updated)
+PG_STAT_GET_XACT_RELENTRY_INT64(counts_xact, tuples_newpage_updated)
 
 /* pg_stat_get_xact_blocks_fetched */
-PG_STAT_GET_XACT_RELENTRY_INT64(blocks_fetched)
+PG_STAT_GET_XACT_RELENTRY_INT64(counts, blocks_fetched)
 
 /* pg_stat_get_xact_blocks_hit */
-PG_STAT_GET_XACT_RELENTRY_INT64(blocks_hit)
+PG_STAT_GET_XACT_RELENTRY_INT64(counts, blocks_hit)
 
 /* pg_stat_get_xact_tuples_inserted */
-PG_STAT_GET_XACT_RELENTRY_INT64(tuples_inserted)
+PG_STAT_GET_XACT_RELENTRY_INT64(counts_xact, tuples_inserted)
 
 /* pg_stat_get_xact_tuples_updated */
-PG_STAT_GET_XACT_RELENTRY_INT64(tuples_updated)
+PG_STAT_GET_XACT_RELENTRY_INT64(counts_xact, tuples_updated)
 
 /* pg_stat_get_xact_tuples_deleted */
-PG_STAT_GET_XACT_RELENTRY_INT64(tuples_deleted)
+PG_STAT_GET_XACT_RELENTRY_INT64(counts_xact, tuples_deleted)
+
+/*
+ * Accessor macro for in-transaction index stats.
+ */
+#define PG_STAT_GET_XACT_IDXENTRY_INT64(stat)			\
+Datum													\
+CppConcat(pg_stat_get_xact_idx_,stat)(PG_FUNCTION_ARGS) \
+{														\
+	Oid         relid = PG_GETARG_OID(0);				\
+	int64       result;									\
+	PgStat_RelationStatus *tabentry;						\
+														\
+	tabentry = find_relstat_entry_kind(PGSTAT_KIND_INDEX, relid); \
+	if (!tabentry)										\
+		result = 0;										\
+	else												\
+		result = (int64) (tabentry->idx.stat);		\
+														\
+	PG_RETURN_INT64(result);							\
+}
+
+/* pg_stat_get_xact_idx_numscans */
+PG_STAT_GET_XACT_IDXENTRY_INT64(numscans)
+
+/* pg_stat_get_xact_idx_tuples_returned */
+PG_STAT_GET_XACT_IDXENTRY_INT64(tuples_returned)
+
+/* pg_stat_get_xact_idx_tuples_fetched */
+PG_STAT_GET_XACT_IDXENTRY_INT64(tuples_fetched)
+
+/* pg_stat_get_xact_idx_blocks_fetched */
+PG_STAT_GET_XACT_IDXENTRY_INT64(blocks_fetched)
+
+/* pg_stat_get_xact_idx_blocks_hit */
+PG_STAT_GET_XACT_IDXENTRY_INT64(blocks_hit)
 
 Datum
 pg_stat_get_xact_function_calls(PG_FUNCTION_ARGS)
@@ -2043,6 +2141,17 @@ pg_stat_reset_single_table_counters(PG_FUNCTION_ARGS)
 	Oid			dboid = (IsSharedRelation(taboid) ? InvalidOid : MyDatabaseId);
 
 	pgstat_reset(PGSTAT_KIND_RELATION, dboid, taboid);
+
+	PG_RETURN_VOID();
+}
+
+Datum
+pg_stat_reset_single_index_counters(PG_FUNCTION_ARGS)
+{
+	Oid			idxoid = PG_GETARG_OID(0);
+	Oid			dboid = (IsSharedRelation(idxoid) ? InvalidOid : MyDatabaseId);
+
+	pgstat_reset(PGSTAT_KIND_INDEX, dboid, idxoid);
 
 	PG_RETURN_VOID();
 }

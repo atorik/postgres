@@ -65,10 +65,13 @@
 #define PqMsg_CopyData				'd'
 
 
-/* These are the codes sent by parallel workers to leader processes. */
+/* Additional codes sent by parallel workers to leader processes. */
 
-#define PqMsg_Progress              'P'
+#define PqParallelMsg_Progress		'P'
 
+/* Additional codes sent by repack workers to their steering process */
+
+#define PqRepackMsg_Terminate		'X'
 
 /* Replication codes sent by the primary (wrapped in CopyData messages). */
 

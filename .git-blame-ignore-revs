@@ -14,6 +14,21 @@
 #
 # $ git log --pretty=format:"%H # %cd%n# %s" $PGINDENTGITHASH -1 --date=iso
 
+978772cf5dd642b093382e9ff4b3a353e8a5d1a2 # 2026-09-02 09:27:56 +0200
+# pgindent fix for a63df2664225d06d5be
+
+de8370d631aabed163f563037fc370bce0864a89 # 2026-08-15 23:15:31 +0900
+# pgindent fix for commit 7b7c4a8dcc9
+
+d34f9505353dbf3888b3f7000ce2b666bac928d7 # 2026-08-07 17:38:26 +0900
+# Fix indentation issue introduced by commit 291a4bd2ca
+
+b43e8f4b3dc5b361e78f237b136c9c1f817e13c4 # 2026-07-29 22:02:57 +0200
+# pgindent fix for a84eca6627f
+
+a5422fe3bd7ecd9c64cf4a8acf5f510b8da676c5 # 2026-07-03 12:31:15 +0900
+# pgindent fix for commit 53e6f51ee
+
 fdad19e1cfe4564230092e034c0b2185e4a04909 # 2026-07-02 08:49:37 +0530
 # pgindent fix for commit a5918fddf1.
 

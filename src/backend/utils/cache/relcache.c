@@ -881,8 +881,7 @@ RelationBuildRuleLock(Relation relation)
 		if (numlocks >= maxlocks)
 		{
 			maxlocks *= 2;
-			rules = (RewriteRule **)
-				repalloc(rules, sizeof(RewriteRule *) * maxlocks);
+			rules = repalloc_array(rules, RewriteRule *, maxlocks);
 		}
 		rules[numlocks++] = rule;
 	}
@@ -1098,8 +1097,7 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 		int			allocsize;
 
 		allocsize = in_progress_list_maxlen * 2;
-		in_progress_list = repalloc(in_progress_list,
-									allocsize * sizeof(*in_progress_list));
+		in_progress_list = repalloc_array(in_progress_list, InProgressEnt, allocsize);
 		in_progress_list_maxlen = allocsize;
 	}
 	in_progress_offset = in_progress_list_len++;
@@ -1206,6 +1204,9 @@ retry:
 	/* foreign key data is not loaded till asked for */
 	relation->rd_fkeylist = NIL;
 	relation->rd_fkeyvalid = false;
+
+	/* TOAST type data is not loaded till asked for */
+	relation->rd_toastchunkidtype = InvalidOid;
 
 	/* partitioning data is not loaded till asked for */
 	relation->rd_partkey = NULL;
@@ -2139,16 +2140,6 @@ RelationIdGetRelation(Oid relationId)
 	return rd;
 }
 
-/*
- * Returns a schema-qualified name of the relation.
- */
-char *
-RelationGetQualifiedRelationName(Relation rel)
-{
-	return get_qualified_objname(RelationGetNamespace(rel),
-								 RelationGetRelationName(rel));
-}
-
 /* ----------------------------------------------------------------
  *				cache invalidation support routines
  * ----------------------------------------------------------------
@@ -2760,7 +2751,7 @@ RelationRebuildRelation(Relation relation)
 		/* toast OID override must be preserved */
 		SWAPFIELD(Oid, rd_toastoid);
 		/* pgstat_info / enabled must be preserved */
-		SWAPFIELD(struct PgStat_TableStatus *, pgstat_info);
+		SWAPFIELD(struct PgStat_RelationStatus *, pgstat_info);
 		SWAPFIELD(bool, pgstat_enabled);
 		/* preserve old partition key if we have one */
 		if (keep_partkey)
@@ -3113,7 +3104,7 @@ RememberToFreeTupleDescAtEOX(TupleDesc td)
 
 		oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
 
-		EOXactTupleDescArray = (TupleDesc *) palloc(16 * sizeof(TupleDesc));
+		EOXactTupleDescArray = palloc_array(TupleDesc, 16);
 		EOXactTupleDescArrayLen = 16;
 		NextEOXactTupleDescNum = 0;
 		MemoryContextSwitchTo(oldcxt);
@@ -3124,8 +3115,7 @@ RememberToFreeTupleDescAtEOX(TupleDesc td)
 
 		Assert(EOXactTupleDescArrayLen > 0);
 
-		EOXactTupleDescArray = (TupleDesc *) repalloc(EOXactTupleDescArray,
-													  newlen * sizeof(TupleDesc));
+		EOXactTupleDescArray = repalloc_array(EOXactTupleDescArray, TupleDesc, newlen);
 		EOXactTupleDescArrayLen = newlen;
 	}
 
@@ -3175,7 +3165,7 @@ AssertPendingSyncs_RelationCache(void)
 	 */
 	PushActiveSnapshot(GetTransactionSnapshot());
 	maxrels = 1;
-	rels = palloc(maxrels * sizeof(*rels));
+	rels = palloc_array(Relation, maxrels);
 	nrels = 0;
 	hash_seq_init(&status, GetLockMethodLocalHash());
 	while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
@@ -3195,7 +3185,7 @@ AssertPendingSyncs_RelationCache(void)
 		if (nrels >= maxrels)
 		{
 			maxrels *= 2;
-			rels = repalloc(rels, maxrels * sizeof(*rels));
+			rels = repalloc_array(rels, Relation, maxrels);
 		}
 		rels[nrels++] = r;
 	}
@@ -5078,6 +5068,13 @@ RelationGetPrimaryKeyIndex(Relation relation, bool deferrable_ok)
 /*
  * RelationGetReplicaIndex -- get OID of the relation's replica identity index
  *
+ * If replica identity is DEFAULT, then return the OID of the primary key, if
+ * it's not deferrable; if replica identity is INDEX, return the OID of the
+ * index with indisreplident, if one exists.
+ *
+ * Note that a working PK is not returned if identity is INDEX!  This is
+ * surprising if the replica identity index is dropped.  FIXME someday.
+ *
  * Returns InvalidOid if there is no such index.
  */
 Oid
@@ -5094,6 +5091,39 @@ RelationGetReplicaIndex(Relation relation)
 	}
 
 	return relation->rd_replidindex;
+}
+
+/*
+ * RelationGetToastChunkIdType -- get the type of the relation's TOAST
+ *		table "chunk_id" column
+ *
+ * Returns OIDOID or OID8OID, or InvalidOid if the relation has no TOAST
+ * table.
+ */
+Oid
+RelationGetToastChunkIdType(Relation relation)
+{
+	Oid			toastrelid = relation->rd_rel->reltoastrelid;
+	Oid			typid;
+
+	/* Quick exit if we already computed the value */
+	if (OidIsValid(relation->rd_toastchunkidtype))
+		return relation->rd_toastchunkidtype;
+
+	/* Nothing to report without a TOAST table */
+	if (!OidIsValid(toastrelid))
+		return InvalidOid;
+
+	typid = get_atttype(toastrelid, 1);
+	if (!OidIsValid(typid))
+		elog(ERROR, "cache lookup failed for TOAST relation %u",
+			 toastrelid);
+	if (typid != OIDOID && typid != OID8OID)
+		elog(ERROR, "unexpected type %u for chunk_id in TOAST relation %u",
+			 typid, toastrelid);
+
+	relation->rd_toastchunkidtype = typid;
+	return typid;
 }
 
 /*
@@ -5849,12 +5879,20 @@ RelationBuildPublicationDesc(Relation relation, PublicationDesc *pubdesc)
 	schemaid = RelationGetNamespace(relation);
 	puboids = list_concat_unique_oid(puboids, GetSchemaPublications(schemaid));
 
+	/*
+	 * A partition whose concurrent detach has been committed but not
+	 * finalized reports no ancestors, even though relispartition is still
+	 * set. Treat such a partition as a standalone table, as after the detach
+	 * is finalized.
+	 */
 	if (relation->rd_rel->relispartition)
+		ancestors = get_partition_ancestors(relid);
+
+	if (ancestors)
 	{
 		Oid			last_ancestor_relid;
 
 		/* Add publications that the ancestors are in too. */
-		ancestors = get_partition_ancestors(relid);
 		last_ancestor_relid = llast_oid(ancestors);
 
 		foreach(lc, ancestors)
@@ -6229,7 +6267,7 @@ load_relcache_init_file(bool shared)
 	 * helps to guard against broken init files.
 	 */
 	max_rels = 100;
-	rels = (Relation *) palloc(max_rels * sizeof(Relation));
+	rels = palloc_array(Relation, max_rels);
 	num_rels = 0;
 	nailed_rels = nailed_indexes = 0;
 
@@ -6264,7 +6302,7 @@ load_relcache_init_file(bool shared)
 		if (num_rels >= max_rels)
 		{
 			max_rels *= 2;
-			rels = (Relation *) repalloc(rels, max_rels * sizeof(Relation));
+			rels = repalloc_array(rels, Relation, max_rels);
 		}
 
 		rel = rels[num_rels++] = (Relation) palloc(len);
@@ -6533,6 +6571,7 @@ load_relcache_init_file(bool shared)
 		rel->rd_firstRelfilelocatorSubid = InvalidSubTransactionId;
 		rel->rd_droppedSubid = InvalidSubTransactionId;
 		rel->rd_amcache = NULL;
+		rel->rd_toastchunkidtype = InvalidOid;
 		rel->pgstat_info = NULL;
 
 		/*

@@ -560,9 +560,8 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				 * with optimizations like heap's HOT, we have just a single
 				 * index entry for the entire chain.
 				 */
-				else if (table_index_fetch_tuple_check(heapRel, &htid,
-													   &SnapshotDirty,
-													   &all_dead))
+				else if (table_fetch_tid(heapRel, &htid, &SnapshotDirty,
+										 &all_dead))
 				{
 					TransactionId xwait;
 
@@ -618,8 +617,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 					 * entry.
 					 */
 					htid = itup->t_tid;
-					if (table_index_fetch_tuple_check(heapRel, &htid,
-													  SnapshotSelf, NULL))
+					if (table_fetch_tid(heapRel, &htid, SnapshotSelf, NULL))
 					{
 						/* Normal case --- it's still live */
 					}
@@ -2876,8 +2874,8 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 	delstate.bottomup = false;
 	delstate.bottomupfreespace = 0;
 	delstate.ndeltids = 0;
-	delstate.deltids = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexDelete));
-	delstate.status = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexStatus));
+	delstate.deltids = palloc_array(TM_IndexDelete, MaxTIDsPerBTreePage);
+	delstate.status = palloc_array(TM_IndexStatus, MaxTIDsPerBTreePage);
 
 	for (offnum = minoff;
 		 offnum <= maxoff;
@@ -3019,8 +3017,7 @@ _bt_deadblocks(Page page, OffsetNumber *deletable, int ndeletable,
 			if (ntids + 1 > spacentids)
 			{
 				spacentids *= 2;
-				tidblocks = (BlockNumber *)
-					repalloc(tidblocks, sizeof(BlockNumber) * spacentids);
+				tidblocks = repalloc_array(tidblocks, BlockNumber, spacentids);
 			}
 
 			tidblocks[ntids++] = ItemPointerGetBlockNumber(&itup->t_tid);
@@ -3032,8 +3029,7 @@ _bt_deadblocks(Page page, OffsetNumber *deletable, int ndeletable,
 			if (ntids + nposting > spacentids)
 			{
 				spacentids = Max(spacentids * 2, ntids + nposting);
-				tidblocks = (BlockNumber *)
-					repalloc(tidblocks, sizeof(BlockNumber) * spacentids);
+				tidblocks = repalloc_array(tidblocks, BlockNumber, spacentids);
 			}
 
 			for (int j = 0; j < nposting; j++)

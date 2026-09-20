@@ -122,7 +122,7 @@ DROP ROLE regress_log_memory;
 --
 -- The test that verifies the backend's query plan is actually
 -- logged is implemented in
--- src/test/modules/test_misc/t/015_pg_log_query_plan.pl.
+-- src/test/modules/test_misc/t/016_pg_log_query_plan.pl.
 
 CREATE ROLE regress_log_plan;
 
@@ -347,7 +347,7 @@ SELECT t.relname AS toastrel FROM pg_class c
   WHERE c.relname = 'test_chunk_id'
 \gset
 SELECT pg_column_toast_chunk_id(a) IS NULL,
-  pg_column_toast_chunk_id(b) IN (SELECT chunk_id FROM pg_toast.:toastrel)
+  pg_column_toast_chunk_id(b) IN (SELECT chunk_id::oid8 FROM pg_toast.:toastrel)
   FROM test_chunk_id;
 DROP TABLE test_chunk_id;
 
@@ -387,3 +387,28 @@ CREATE FUNCTION test_instr_time()
     AS :'regresslib'
     LANGUAGE C;
 SELECT test_instr_time();
+
+--
+-- C tests for pg_locale.h APIs. No interesting output; tests will
+-- ERROR upon failure.
+--
+-- The test function is STRICT, so tests will be skipped if the
+-- collation is unavailable in the current database encoding
+-- (to_regcollation() will return NULL).
+--
+CREATE FUNCTION test_pg_locale_apis(oid)
+    RETURNS void
+    AS :'regresslib'
+    LANGUAGE C STRICT;
+
+-- Libc C.  Available in every database.
+SELECT test_pg_locale_apis(to_regcollation('"C"'));
+
+-- Builtin C (collate and ctype).  Usable only in UTF8 databases.
+SELECT test_pg_locale_apis(to_regcollation('ucs_basic'));
+
+-- Builtin C.UTF-8 (C collate, Unicode ctype).  Same encoding restriction.
+SELECT test_pg_locale_apis(to_regcollation('pg_c_utf8'));
+
+-- en-x-icu is present when ICU collations were imported at initdb.
+SELECT test_pg_locale_apis(to_regcollation('en-x-icu'));

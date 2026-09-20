@@ -144,12 +144,22 @@ typedef struct
 	Index		group_rtindex;
 } having_grouping_ctx;
 
+/* Context for preprocess_subquery_phvs_walker */
+typedef struct
+{
+	PlannerInfo *root;
+	int			sublevels_up;
+} preprocess_subquery_phvs_context;
+
 /* Local functions */
 static Node *preprocess_expression(PlannerInfo *root, Node *expr, int kind);
 static void preprocess_qual_conditions(PlannerInfo *root, Node *jtnode);
 static Bitmapset *find_having_conflicts(Query *parse, Index group_rtindex);
 static Oid	having_var_grouping_eqop(Var *var, void *context);
 static Oid	group_var_eqop(Query *parse, Var *var);
+static void preprocess_subquery_phvs(PlannerInfo *root, Node *node);
+static bool preprocess_subquery_phvs_walker(Node *node,
+											preprocess_subquery_phvs_context *context);
 static void grouping_planner(PlannerInfo *root, double tuple_fraction,
 							 SetOperationStmt *setops);
 static grouping_sets_data *preprocess_grouping_sets(PlannerInfo *root);
@@ -803,9 +813,8 @@ subquery_planner(PlannerGlobal *glob, Query *parse, char *plan_name,
 	root->eq_classes = NIL;
 	root->ec_merging_done = false;
 	root->last_rinfo_serial = 0;
-	root->all_result_relids =
-		parse->resultRelation ? bms_make_singleton(parse->resultRelation) : NULL;
-	root->leaf_result_relids = NULL;	/* we'll find out leaf-ness later */
+	root->all_result_relids = NULL;
+	root->leaf_result_relids = NULL;
 	root->append_rel_list = NIL;
 	root->row_identity_vars = NIL;
 	root->rowMarks = NIL;
@@ -847,32 +856,6 @@ subquery_planner(PlannerGlobal *glob, Query *parse, char *plan_name,
 	 * If it's a MERGE command, transform the joinlist as appropriate.
 	 */
 	transform_MERGE_to_join(parse);
-
-	/*
-	 * Reject FOR PORTION OF on a generated column.  We can't write to a
-	 * virtual generated column, and a stored generated column should be
-	 * written by its own expression.
-	 *
-	 * We do this in the planner rather than parse analysis so that updatable
-	 * views have been rewritten; otherwise they would mask which columns are
-	 * generated.  We need to check before preprocess_relation_rtes(), so that
-	 * for virtual generated columns we still have the rangeVar.  After that
-	 * it is replaced by the column's expression.
-	 *
-	 * XXX: We plan to implement PERIODs as stored generated columns, so later
-	 * we will loosen this restriction if the column belongs to a PERIOD.
-	 */
-	if (parse->forPortionOf)
-	{
-		ForPortionOfExpr *forPortionOf = parse->forPortionOf;
-		RangeTblEntry *rte = rt_fetch(parse->resultRelation, parse->rtable);
-
-		if (get_attgenerated(rte->relid, forPortionOf->rangeVar->varattno))
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot use generated column \"%s\" in FOR PORTION OF",
-							forPortionOf->range_name)));
-	}
 
 	/*
 	 * Scan the rangetable for relation RTEs and retrieve the necessary
@@ -974,19 +957,6 @@ subquery_planner(PlannerGlobal *glob, Query *parse, char *plan_name,
 		if (rte->securityQuals)
 			root->qual_security_level = Max(root->qual_security_level,
 											list_length(rte->securityQuals));
-	}
-
-	/*
-	 * If we have now verified that the query target relation is
-	 * non-inheriting, mark it as a leaf target.
-	 */
-	if (parse->resultRelation)
-	{
-		RangeTblEntry *rte = rt_fetch(parse->resultRelation, parse->rtable);
-
-		if (!rte->inh)
-			root->leaf_result_relids =
-				bms_make_singleton(parse->resultRelation);
 	}
 
 	/*
@@ -1102,18 +1072,6 @@ subquery_planner(PlannerGlobal *glob, Query *parse, char *plan_name,
 		/* exclRelTlist contains only Vars, so no preprocessing needed */
 	}
 
-	if (parse->forPortionOf)
-	{
-		parse->forPortionOf->targetRange =
-			preprocess_expression(root,
-								  parse->forPortionOf->targetRange,
-								  EXPRKIND_TARGET);
-		if (contain_volatile_functions(parse->forPortionOf->targetRange))
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("FOR PORTION OF bounds cannot contain volatile functions")));
-	}
-
 	foreach(l, parse->mergeActionList)
 	{
 		MergeAction *action = (MergeAction *) lfirst(l);
@@ -1163,6 +1121,14 @@ subquery_planner(PlannerGlobal *glob, Query *parse, char *plan_name,
 				rte->subquery = (Query *)
 					flatten_join_alias_vars(root, root->parse,
 											(Node *) rte->subquery);
+
+			/*
+			 * Likewise for copies of our PlaceHolderVars in the subquery.
+			 * This must be done after the alias expansion above, which can
+			 * insert such copies.
+			 */
+			if (rte->lateral && root->glob->lastPHId != 0)
+				preprocess_subquery_phvs(root, (Node *) rte->subquery);
 		}
 		else if (rte->rtekind == RTE_FUNCTION)
 		{
@@ -1497,6 +1463,15 @@ preprocess_expression(PlannerInfo *root, Node *expr, int kind)
 		convert_saop_to_hashed_saop(expr);
 	}
 
+	/*
+	 * Preprocess any copies of our PlaceHolderVars within SubLink subselects.
+	 * This must be done after join alias expansion, which can insert such
+	 * copies, and before the SubLinks are turned into SubPlans, which collect
+	 * those copies as SubPlan arguments.
+	 */
+	if (root->parse->hasSubLinks && root->glob->lastPHId != 0)
+		preprocess_subquery_phvs(root, expr);
+
 	/* Expand SubLinks to SubPlans */
 	if (root->parse->hasSubLinks)
 		expr = SS_process_sublinks(root, expr, (kind == EXPRKIND_QUAL));
@@ -1657,20 +1632,77 @@ group_var_eqop(Query *parse, Var *var)
 }
 
 /*
- * preprocess_phv_expression
- *	  Do preprocessing on a PlaceHolderVar expression that's been pulled up.
+ * preprocess_subquery_phvs
+ *		Preprocess copies of this level's PlaceHolderVars that were pushed
+ *		down into subqueries within the given tree.
  *
- * If a LATERAL subquery references an output of another subquery, and that
- * output must be wrapped in a PlaceHolderVar because of an intermediate outer
- * join, then we'll push the PlaceHolderVar expression down into the subquery
- * and later pull it back up during find_lateral_references, which runs after
- * subquery_planner has preprocessed all the expressions that were in the
- * current query level to start with.  So we need to preprocess it then.
+ * When a subquery (a LATERAL RTE or a SubLink's subselect) references a
+ * pulled-up output that must be wrapped in a PlaceHolderVar, the PHV
+ * expression is pushed down into the subquery.  The subquery's own planning
+ * leaves that copy alone, since it belongs to our level, so we need to
+ * preprocess it.  We modify the PHVs in place, temporarily adjusting each to
+ * our level.  Preprocessing a copy's expression takes care of everything
+ * within it, including any further copies nested inside SubLinks there, so
+ * we don't look inside a copy ourselves.
  */
-Expr *
-preprocess_phv_expression(PlannerInfo *root, Expr *expr)
+static void
+preprocess_subquery_phvs(PlannerInfo *root, Node *node)
 {
-	return (Expr *) preprocess_expression(root, (Node *) expr, EXPRKIND_PHV);
+	preprocess_subquery_phvs_context context;
+
+	context.root = root;
+	context.sublevels_up = 0;
+	(void) preprocess_subquery_phvs_walker(node, &context);
+}
+
+static bool
+preprocess_subquery_phvs_walker(Node *node,
+								preprocess_subquery_phvs_context *context)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, Query))
+	{
+		bool		result;
+
+		context->sublevels_up++;
+		result = query_tree_walker((Query *) node,
+								   preprocess_subquery_phvs_walker,
+								   context, 0);
+		context->sublevels_up--;
+		return result;
+	}
+	if (IsA(node, PlaceHolderVar))
+	{
+		PlaceHolderVar *phv = (PlaceHolderVar *) node;
+
+		/* A PHV of an upper level can't contain anything of our level */
+		if (phv->phlevelsup > context->sublevels_up)
+			return false;
+
+		/*
+		 * Is this a copy of one of our PHVs that is pushed down into a
+		 * subquery?
+		 */
+		if (context->sublevels_up > 0 &&
+			phv->phlevelsup == context->sublevels_up)
+		{
+			int			levelsup = phv->phlevelsup;
+			Node	   *expr;
+
+			/* Adjust the expression to our level, preprocess, adjust back */
+			expr = copyObject((Node *) phv->phexpr);
+			IncrementVarSublevelsUp(expr, -levelsup, 0);
+			expr = preprocess_expression(context->root, expr, EXPRKIND_PHV);
+			IncrementVarSublevelsUp(expr, levelsup, 0);
+			phv->phexpr = (Expr *) expr;
+			return false;
+		}
+
+		/* Otherwise, it's ours or a lower level's; look inside it */
+	}
+	return expression_tree_walker(node, preprocess_subquery_phvs_walker,
+								  context);
 }
 
 /*--------------------
@@ -2392,7 +2424,6 @@ grouping_planner(PlannerInfo *root, double tuple_fraction,
 										parse->onConflict,
 										mergeActionLists,
 										mergeJoinConditions,
-										parse->forPortionOf,
 										assign_special_exec_param(root));
 		}
 
@@ -2490,7 +2521,7 @@ preprocess_grouping_sets(PlannerInfo *root)
 	}
 
 	/* Allocate workspace array for remapping */
-	gd->tleref_to_colnum_map = (int *) palloc((maxref + 1) * sizeof(int));
+	gd->tleref_to_colnum_map = palloc_array(int, maxref + 1);
 
 	/*
 	 * If we have any unsortable sets, we must extract them before trying to
@@ -3244,10 +3275,10 @@ extract_rollup_sets(List *groupingSets)
 	 * to leave 0 free for the NIL node in the graph algorithm.
 	 *----------
 	 */
-	orig_sets = palloc0((num_sets_raw + 1) * sizeof(List *));
-	set_masks = palloc0((num_sets_raw + 1) * sizeof(Bitmapset *));
-	adjacency = palloc0((num_sets_raw + 1) * sizeof(short *));
-	adjacency_buf = palloc((num_sets_raw + 1) * sizeof(short));
+	orig_sets = palloc0_array(List *, num_sets_raw + 1);
+	set_masks = palloc0_array(Bitmapset *, num_sets_raw + 1);
+	adjacency = palloc0_array(short *, num_sets_raw + 1);
+	adjacency_buf = palloc_array(short, num_sets_raw + 1);
 
 	j_size = 0;
 	j = 0;
@@ -3309,7 +3340,7 @@ extract_rollup_sets(List *groupingSets)
 			if (n_adj > 0)
 			{
 				adjacency_buf[0] = n_adj;
-				adjacency[i] = palloc((n_adj + 1) * sizeof(short));
+				adjacency[i] = palloc_array(short, n_adj + 1);
 				memcpy(adjacency[i], adjacency_buf, (n_adj + 1) * sizeof(short));
 			}
 			else
@@ -3332,7 +3363,7 @@ extract_rollup_sets(List *groupingSets)
 	 * pair_vu[v] = u (both will be true, but we check both so that we can do
 	 * it in one pass)
 	 */
-	chains = palloc0((num_sets + 1) * sizeof(int));
+	chains = palloc0_array(int, num_sets + 1);
 
 	for (i = 1; i <= num_sets; ++i)
 	{
@@ -3348,7 +3379,7 @@ extract_rollup_sets(List *groupingSets)
 	}
 
 	/* build result lists. */
-	results = palloc0((num_chains + 1) * sizeof(List *));
+	results = palloc0_array(List *, num_chains + 1);
 
 	for (i = 1; i <= num_sets; ++i)
 	{
@@ -4641,7 +4672,7 @@ consider_groupingsets_paths(PlannerInfo *root,
 			double		scale;
 			int			num_rollups = list_length(gd->rollups);
 			int			k_capacity;
-			int		   *k_weights = palloc(num_rollups * sizeof(int));
+			int		   *k_weights = palloc_array(int, num_rollups);
 			Bitmapset  *hash_items = NULL;
 			int			i;
 
@@ -6695,8 +6726,8 @@ make_sort_input_target(PlannerInfo *root,
 
 	/* Inspect tlist and collect per-column information */
 	ncols = list_length(final_target->exprs);
-	col_is_srf = (bool *) palloc0(ncols * sizeof(bool));
-	postpone_col = (bool *) palloc0(ncols * sizeof(bool));
+	col_is_srf = palloc0_array(bool, ncols);
+	postpone_col = palloc0_array(bool, ncols);
 	have_srf = have_volatile = have_expensive = have_srf_sortcols = false;
 
 	i = 0;

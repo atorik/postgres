@@ -325,6 +325,14 @@ heap_page_prune_opt(Relation relation, Buffer buffer, Buffer *vmbuffer,
 		bool		record_free_space = false;
 		Size		freespace = 0;
 
+		/*
+		 * Pin the VM page before taking the heap cleanup lock. This may
+		 * occasionally lead to an unnecessary pin when the buffer is
+		 * contended, but the same VM page covers many heap pages, so there is
+		 * a good chance for the work to be reusable.
+		 */
+		visibilitymap_pin(relation, BufferGetBlockNumber(buffer), vmbuffer);
+
 		/* OK, try to get exclusive buffer lock */
 		if (!ConditionalLockBufferForCleanup(buffer))
 			return;
@@ -339,9 +347,6 @@ heap_page_prune_opt(Relation relation, Buffer buffer, Buffer *vmbuffer,
 			OffsetNumber dummy_off_loc;
 			PruneFreezeResult presult;
 			PruneFreezeParams params;
-
-			visibilitymap_pin(relation, BufferGetBlockNumber(buffer),
-							  vmbuffer);
 
 			params.relation = relation;
 			params.buffer = buffer;
@@ -948,9 +953,10 @@ heap_page_fix_vm_corruption(PruneState *prstate, OffsetNumber offnum,
 	if (do_clear_vm)
 	{
 		LockBuffer(prstate->vmbuffer, BUFFER_LOCK_EXCLUSIVE);
-		visibilitymap_clear(prstate->relation->rd_locator, prstate->block,
-							prstate->vmbuffer,
-							VISIBILITYMAP_VALID_BITS);
+		/* This VM clear is not WAL-logged, so its return value is not needed. */
+		(void) visibilitymap_clear(prstate->relation->rd_locator,
+								   prstate->block, prstate->vmbuffer,
+								   VISIBILITYMAP_VALID_BITS);
 		LockBuffer(prstate->vmbuffer, BUFFER_LOCK_UNLOCK);
 		prstate->old_vmbits = 0;
 	}
@@ -1309,8 +1315,9 @@ heap_page_prune_and_freeze(PruneFreezeParams *params,
 			 */
 			PageSetAllVisible(prstate.page);
 			PageClearPrunable(prstate.page);
-			visibilitymap_set(prstate.block, prstate.vmbuffer, prstate.new_vmbits,
-							  prstate.relation->rd_locator);
+			(void) visibilitymap_set(prstate.block, prstate.vmbuffer,
+									 prstate.new_vmbits,
+									 prstate.relation->rd_locator);
 		}
 
 		MarkBufferDirty(prstate.buffer);

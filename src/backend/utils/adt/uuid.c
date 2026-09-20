@@ -19,7 +19,9 @@
 #include "common/hashfn.h"
 #include "lib/hyperloglog.h"
 #include "libpq/pqformat.h"
+#include "nodes/miscnodes.h"
 #include "port/pg_bswap.h"
+#include "utils/builtins.h"
 #include "utils/fmgrprotos.h"
 #include "utils/guc.h"
 #include "utils/skipsupport.h"
@@ -139,13 +141,13 @@ uuid_out(PG_FUNCTION_ARGS)
 }
 
 /*
- * We allow UUIDs as a series of 32 hexadecimal digits with an optional dash
- * after each group of 4 hexadecimal digits, and optionally surrounded by {}.
- * (The canonical format 8x-4x-4x-4x-12x, where "nx" means n hexadecimal
- * digits, is the only one used for output.)
+ * Reference implementation of the UUID grammar, parsing one byte at a time.
+ * string_to_uuid() recognizes the common shapes more cheaply and defers to
+ * this function for everything else, so this is also the only place that
+ * reports a syntax error.
  */
 static void
-string_to_uuid(const char *source, pg_uuid_t *uuid, Node *escontext)
+string_to_uuid_scalar(const char *source, pg_uuid_t *uuid, Node *escontext)
 {
 	const char *src = source;
 	bool		braces = false;
@@ -192,6 +194,95 @@ syntax_error:
 			(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 			 errmsg("invalid input syntax for type %s: \"%s\"",
 					"uuid", source)));
+}
+
+/*
+ * We allow UUIDs as a series of 32 hexadecimal digits with an optional dash
+ * after each group of 4 hexadecimal digits, and optionally surrounded by {}.
+ * (The canonical format 8x-4x-4x-4x-12x, where "nx" means n hexadecimal
+ * digits, is the only one used for output.)
+ *
+ * The two common shapes -- a bare string of 32 hexadecimal digits and the
+ * canonical form, each optionally wrapped in braces -- are compacted into 32
+ * contiguous hex digits and decoded with hex_decode_safe(), which is much
+ * faster than the byte-at-a-time loop. Any other shape, or any decoding
+ * error, is handed off to string_to_uuid_scalar() so that the accepted
+ * grammar and the error messages are unchanged.
+ */
+static void
+string_to_uuid(const char *source, pg_uuid_t *uuid, Node *escontext)
+{
+	const char *body = source;
+	const char *hexsrc = NULL;
+	char		hexbuf[32];
+	uint64		written;
+	size_t		len;
+	ErrorSaveContext private_escontext = {T_ErrorSaveContext};
+
+	/*
+	 * Measure the input only far enough to classify its shape. The bound must
+	 * exceed the longest shape handled here, the braced canonical form at 38
+	 * characters: strnlen() returns the bound for anything at least that
+	 * long, so stopping at an accepted length would accept a longer string
+	 * that merely starts with a valid UUID.
+	 */
+	len = strnlen(source, 64);
+
+	/* Strip one optional surrounding brace pair */
+	if (len >= 2 && source[0] == '{' && source[len - 1] == '}')
+	{
+		body = source + 1;
+		len -= 2;
+	}
+
+	if (len == 32)
+	{
+		/*
+		 * Body is already 32 contiguous hex digits -- decode straight from
+		 * the input. hex_decode_safe() reads exactly body[0..31], so it never
+		 * touches the trailing NUL or '}'.
+		 */
+		hexsrc = body;
+	}
+	else if (len == 36 && body[8] == '-' && body[13] == '-' &&
+			 body[18] == '-' && body[23] == '-')
+	{
+		/*
+		 * Canonical 8x-4x-4x-4x-12x form; compact them into hexbuf with
+		 * fixed-offset copies, dropping the dashes.
+		 */
+		memcpy(&hexbuf[0], &body[0], 8);
+		memcpy(&hexbuf[8], &body[9], 4);
+		memcpy(&hexbuf[12], &body[14], 4);
+		memcpy(&hexbuf[16], &body[19], 4);
+		memcpy(&hexbuf[20], &body[24], 12);
+		hexsrc = hexbuf;
+	}
+
+	if (hexsrc == NULL)
+	{
+		/* Uncommon shape; let the general parse handle it */
+		string_to_uuid_scalar(source, uuid, escontext);
+		return;
+	}
+
+	/*
+	 * The shape matched, so the decode is expected to succeed. Any error is
+	 * routed into a private context and discarded, leaving
+	 * string_to_uuid_scalar() to parse the input again and report the syntax
+	 * error, so that the message does not depend on which path rejected the
+	 * input.
+	 */
+	written = hex_decode_safe(hexsrc, 32, (char *) uuid->data,
+							  (Node *) &private_escontext);
+
+	/*
+	 * A short result must be rejected as well as an error: hex_decode_safe()
+	 * skips whitespace, so it can succeed yet write fewer than UUID_LEN
+	 * bytes, whereas the UUID grammar forbids whitespace.
+	 */
+	if (private_escontext.error_occurred || written != UUID_LEN)
+		string_to_uuid_scalar(source, uuid, escontext);
 }
 
 Datum
@@ -330,7 +421,7 @@ uuid_sortsupport(PG_FUNCTION_ARGS)
 
 		ssup->ssup_extra = uss;
 
-		ssup->comparator = ssup_datum_unsigned_cmp;
+		ssup->comparator = ssup_datum_uint64_cmp;
 		ssup->abbrev_converter = uuid_abbrev_convert;
 		ssup->abbrev_abort = uuid_abbrev_abort;
 		ssup->abbrev_full_comparator = uuid_fast_cmp;
@@ -441,7 +532,7 @@ uuid_abbrev_convert(Datum original, SortSupport ssup)
 	/*
 	 * Byteswap on little-endian machines.
 	 *
-	 * This is needed so that ssup_datum_unsigned_cmp() (an unsigned integer
+	 * This is needed so that ssup_datum_uint64_cmp() (an unsigned integer
 	 * 3-way comparator) works correctly on all platforms.  If we didn't do
 	 * this, the comparator would have to call memcmp() with a pair of
 	 * pointers to the first byte of each abbreviated key, which is slower.
@@ -775,6 +866,19 @@ uuid_extract_timestamp(PG_FUNCTION_ARGS)
 
 	if (version == 1)
 	{
+		/*----------
+		 * UUIDv1 splits the 60-bit Gregorian timestamp into three fields that
+		 * are *not* stored most-significant-first (see RFC 9562 Sec. 5.1):
+		 *
+		 *  time_low  (bits 0-31)   octets 0-3, the least significant 32 bits
+		 *  time_mid  (bits 32-47)  octets 4-5, the middle 16 bits
+		 *  time_high (bits 48-59)  octet 6 low nibble + octet 7, the most
+		 *                          significant 12 bits (octet 6 high nibble
+		 *                          holds the version and is masked off)
+		 *
+		 * Reassemble the timestamp by shifting each field back to its place.
+		 *----------
+		 */
 		tms = ((uint64) uuid->data[0] << 24)
 			+ ((uint64) uuid->data[1] << 16)
 			+ ((uint64) uuid->data[2] << 8)
@@ -790,8 +894,50 @@ uuid_extract_timestamp(PG_FUNCTION_ARGS)
 		PG_RETURN_TIMESTAMPTZ(ts);
 	}
 
+	if (version == 6)
+	{
+		/*----------
+		 * UUIDv6 is a field-compatible reordering of UUIDv1 that stores the
+		 * 60-bit Gregorian timestamp most-significant-first (see RFC 9562
+		 * Sec. 5.6):
+		 *
+		 *  time_high (bits 28-59)  octets 0-3, the most significant 32 bits
+		 *  time_mid  (bits 12-27)  octets 4-5, the middle 16 bits
+		 *  time_low  (bits 0-11)   octet 6 low nibble + octet 7, the least
+		 *                          significant 12 bits (octet 6 high nibble
+		 *                          holds the version and is masked off)
+		 *
+		 * Note that the 12-bit field is the least significant one here,
+		 * while in UUIDv1 it is the most significant. The version nibble
+		 * therefore sits below time_high and time_mid rather than above
+		 * them, and compacting the timestamp squeezes it out: each of
+		 * octets 0-5 ends up 4 bits lower than a plain big-endian read
+		 * would put it, hence the 52/44/36/28/20/12 shift counts below.
+		 *----------
+		 */
+		tms = ((uint64) uuid->data[0] << 52)
+			+ ((uint64) uuid->data[1] << 44)
+			+ ((uint64) uuid->data[2] << 36)
+			+ ((uint64) uuid->data[3] << 28)
+			+ ((uint64) uuid->data[4] << 20)
+			+ ((uint64) uuid->data[5] << 12)
+			+ (((uint64) uuid->data[6] & 0xf) << 8)
+			+ ((uint64) uuid->data[7]);
+
+		/* convert 100-ns intervals to us, then adjust */
+		ts = (TimestampTz) (tms / 10) -
+			((uint64) POSTGRES_EPOCH_JDATE - GREGORIAN_EPOCH_JDATE) * SECS_PER_DAY * USECS_PER_SEC;
+		PG_RETURN_TIMESTAMPTZ(ts);
+	}
+
 	if (version == 7)
 	{
+		/*
+		 * UUIDv7 stores a 48-bit Unix timestamp in milliseconds (unix_ts_ms)
+		 * most-significant-first in octets 0-5 (see RFC 9562 Sec. 5.7). There
+		 * is no version nibble inside this field, so the bytes reassemble at
+		 * clean 8-bit boundaries.
+		 */
 		tms = (uuid->data[5])
 			+ (((uint64) uuid->data[4]) << 8)
 			+ (((uint64) uuid->data[3]) << 16)

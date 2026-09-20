@@ -376,8 +376,6 @@ typedef struct ModifyTable
 	List	   *onConflictCols;
 	/* WHERE for ON CONFLICT DO SELECT/UPDATE */
 	Node	   *onConflictWhere;
-	/* FOR PORTION OF clause for UPDATE/DELETE */
-	Node	   *forPortionOf;
 	/* RTI of the EXCLUDED pseudo relation */
 	Index		exclRelRTI;
 	/* tlist of the EXCLUDED pseudo relation */
@@ -1171,6 +1169,8 @@ typedef struct IncrementalSort
 	Sort		sort;
 	/* number of presorted columns */
 	int			nPresortedCols;
+	/* estimated number of groups in input */
+	Cardinality numGroups;
 } IncrementalSort;
 
 /* ---------------

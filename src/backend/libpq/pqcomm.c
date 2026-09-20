@@ -53,9 +53,6 @@
  */
 #include "postgres.h"
 
-#ifdef HAVE_POLL_H
-#include <poll.h>
-#endif
 #include <signal.h>
 #include <fcntl.h>
 #include <grp.h>
@@ -1537,7 +1534,7 @@ socket_putmessage_noblock(char msgtype, const char *s, size_t len)
 		PqSendBuffer = repalloc(PqSendBuffer, required);
 		PqSendBufferSize = required;
 	}
-	res = pq_putmessage(msgtype, s, len);
+	res = socket_putmessage(msgtype, s, len);
 	Assert(res == 0);			/* should not fail when the message fits in
 								 * buffer */
 }

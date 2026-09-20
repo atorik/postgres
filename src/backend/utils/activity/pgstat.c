@@ -310,11 +310,27 @@ static const PgStat_KindInfo pgstat_kind_builtin_infos[PGSTAT_KIND_BUILTIN_SIZE]
 		.shared_size = sizeof(PgStatShared_Relation),
 		.shared_data_off = offsetof(PgStatShared_Relation, stats),
 		.shared_data_len = sizeof(((PgStatShared_Relation *) 0)->stats),
-		.pending_size = sizeof(PgStat_TableStatus),
+		.pending_size = sizeof(PgStat_RelationStatus),
 
 		.flush_pending_cb = pgstat_relation_flush_cb,
 		.delete_pending_cb = pgstat_relation_delete_pending_cb,
 		.reset_timestamp_cb = pgstat_relation_reset_timestamp_cb,
+	},
+
+	[PGSTAT_KIND_INDEX] = {
+		.name = "index",
+
+		.fixed_amount = false,
+		.write_to_file = true,
+
+		.shared_size = sizeof(PgStatShared_Index),
+		.shared_data_off = offsetof(PgStatShared_Index, stats),
+		.shared_data_len = sizeof(((PgStatShared_Index *) 0)->stats),
+		.pending_size = sizeof(PgStat_RelationStatus),
+
+		.flush_pending_cb = pgstat_index_flush_cb,
+		.delete_pending_cb = pgstat_index_delete_pending_cb,
+		.reset_timestamp_cb = pgstat_index_reset_timestamp_cb,
 	},
 
 	[PGSTAT_KIND_FUNCTION] = {
@@ -1311,29 +1327,10 @@ pgstat_prep_pending_entry(PgStat_Kind kind, Oid dboid, uint64 objid, bool *creat
 {
 	PgStat_EntryRef *entry_ref;
 
-	/* need to be able to flush out */
-	Assert(pgstat_get_kind_info(kind)->flush_pending_cb != NULL);
-
-	if (unlikely(!pgStatPendingContext))
-	{
-		pgStatPendingContext =
-			AllocSetContextCreate(TopMemoryContext,
-								  "PgStat Pending",
-								  ALLOCSET_SMALL_SIZES);
-	}
-
 	entry_ref = pgstat_get_entry_ref(kind, dboid, objid,
 									 true, created_entry);
 
-	if (entry_ref->pending == NULL)
-	{
-		size_t		entrysize = pgstat_get_kind_info(kind)->pending_size;
-
-		Assert(entrysize != (size_t) -1);
-
-		entry_ref->pending = MemoryContextAllocZero(pgStatPendingContext, entrysize);
-		dlist_push_tail(&pgStatPending, &entry_ref->pending_node);
-	}
+	pgstat_prep_pending_from_entry_ref(entry_ref);
 
 	return entry_ref;
 }
@@ -1375,6 +1372,40 @@ pgstat_delete_pending_entry(PgStat_EntryRef *entry_ref)
 	entry_ref->pending = NULL;
 
 	dlist_delete(&entry_ref->pending_node);
+}
+
+/*
+ * Prepare the given entry to receive pending stats, if not already done.
+ */
+void
+pgstat_prep_pending_from_entry_ref(PgStat_EntryRef *entry_ref)
+{
+	PgStat_Kind kind;
+
+	Assert(entry_ref != NULL);
+
+	kind = entry_ref->shared_entry->key.kind;
+
+	/* need to be able to flush out */
+	Assert(pgstat_get_kind_info(kind)->flush_pending_cb != NULL);
+
+	if (entry_ref->pending == NULL)
+	{
+		size_t		entrysize = pgstat_get_kind_info(kind)->pending_size;
+
+		Assert(entrysize != (size_t) -1);
+
+		if (unlikely(!pgStatPendingContext))
+		{
+			pgStatPendingContext =
+				AllocSetContextCreate(TopMemoryContext,
+									  "PgStat Pending",
+									  ALLOCSET_SMALL_SIZES);
+		}
+
+		entry_ref->pending = MemoryContextAllocZero(pgStatPendingContext, entrysize);
+		dlist_push_tail(&pgStatPending, &entry_ref->pending_node);
+	}
 }
 
 /*
@@ -2078,9 +2109,10 @@ pgstat_read_statsfile(void)
 					}
 
 					header = pgstat_init_entry(key.kind, p);
-					dshash_release_lock(pgStatLocal.shared_hash, p);
 					if (header == NULL)
 					{
+						dshash_delete_entry(pgStatLocal.shared_hash, p);
+
 						/*
 						 * It would be tempting to switch this ERROR to a
 						 * WARNING, but it would mean that all the statistics
@@ -2090,6 +2122,7 @@ pgstat_read_statsfile(void)
 							 key.kind, key.dboid,
 							 key.objid, t);
 					}
+					dshash_release_lock(pgStatLocal.shared_hash, p);
 
 					if (!read_chunk(fpin,
 									pgstat_get_entry_data(key.kind, header),

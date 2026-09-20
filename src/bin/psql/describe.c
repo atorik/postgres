@@ -24,7 +24,6 @@
 #include "catalog/pg_constraint_d.h"
 #include "catalog/pg_default_acl_d.h"
 #include "catalog/pg_proc_d.h"
-#include "catalog/pg_propgraph_element_d.h"
 #include "catalog/pg_publication_d.h"
 #include "catalog/pg_statistic_ext_d.h"
 #include "catalog/pg_subscription_d.h"
@@ -42,9 +41,9 @@ static bool describeOneTableDetails(const char *schemaname,
 									const char *relationname,
 									const char *oid,
 									bool verbose);
-static void add_tablespace_footer(printTableContent *const cont, char relkind,
-								  Oid tablespace, const bool newline);
-static void add_role_attribute(PQExpBuffer buf, const char *const str);
+static void add_tablespace_footer(printTableContent *cont, char relkind,
+								  Oid tablespace, bool newline);
+static void add_role_attribute(PQExpBuffer buf, const char *str);
 static bool listTSParsersVerbose(const char *pattern);
 static bool describeOneTSParser(const char *oid, const char *nspname,
 								const char *prsname);
@@ -986,7 +985,8 @@ listAllDbs(const char *pattern, bool verbose)
 	printACLColumn(&buf, "d.datacl");
 	if (verbose)
 		appendPQExpBuffer(&buf,
-						  ",\n  CASE WHEN pg_catalog.has_database_privilege(d.datname, 'CONNECT')\n"
+						  ",\n  CASE WHEN pg_catalog.has_database_privilege(d.datname, 'CONNECT') OR\n"
+						  "               pg_catalog.pg_has_role('pg_read_all_stats', 'USAGE')\n"
 						  "       THEN pg_catalog.pg_size_pretty(pg_catalog.pg_database_size(d.datname))\n"
 						  "       ELSE 'No Access'\n"
 						  "  END as \"%s\""
@@ -1056,7 +1056,6 @@ permissionsList(const char *pattern, bool showSystem)
 					  " WHEN " CppAsString2(RELKIND_MATVIEW) " THEN '%s'"
 					  " WHEN " CppAsString2(RELKIND_SEQUENCE) " THEN '%s'"
 					  " WHEN " CppAsString2(RELKIND_FOREIGN_TABLE) " THEN '%s'"
-					  " WHEN " CppAsString2(RELKIND_PROPGRAPH) " THEN '%s'"
 					  " WHEN " CppAsString2(RELKIND_PARTITIONED_TABLE) " THEN '%s'"
 					  " END as \"%s\",\n"
 					  "  ",
@@ -1067,7 +1066,6 @@ permissionsList(const char *pattern, bool showSystem)
 					  gettext_noop("materialized view"),
 					  gettext_noop("sequence"),
 					  gettext_noop("foreign table"),
-					  gettext_noop("property graph"),
 					  gettext_noop("partitioned table"),
 					  gettext_noop("Type"));
 
@@ -1127,7 +1125,6 @@ permissionsList(const char *pattern, bool showSystem)
 						 CppAsString2(RELKIND_MATVIEW) ","
 						 CppAsString2(RELKIND_SEQUENCE) ","
 						 CppAsString2(RELKIND_FOREIGN_TABLE) ","
-						 CppAsString2(RELKIND_PROPGRAPH) ","
 						 CppAsString2(RELKIND_PARTITIONED_TABLE) ")\n");
 
 	if (!showSystem && !pattern)
@@ -1671,7 +1668,7 @@ describeOneTableDetails(const char *schemaname,
 	if (tableinfo.relkind == RELKIND_SEQUENCE)
 	{
 		PGresult   *result = NULL;
-		printQueryOpt myopt = pset.popt;
+		printQueryOpt popt = pset.popt;
 		char	   *footers[3] = {NULL, NULL, NULL};
 
 		printfPQExpBuffer(&buf, "/* %s */\n", _("Get sequence information"));
@@ -1786,80 +1783,6 @@ describeOneTableDetails(const char *schemaname,
 		else
 			printfPQExpBuffer(&title, _("Sequence \"%s.%s\""),
 							  schemaname, relationname);
-
-		myopt.footers = footers;
-		myopt.topt.default_footer = false;
-		myopt.title = title.data;
-		myopt.translate_header = true;
-
-		printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
-
-		pg_free(footers[0]);
-		pg_free(footers[1]);
-
-		retval = true;
-		goto error_return;		/* not an error, just return early */
-	}
-
-	/*
-	 * If it's a property graph, deal with it here separately.
-	 */
-	if (tableinfo.relkind == RELKIND_PROPGRAPH)
-	{
-		printQueryOpt popt = pset.popt;
-		char	   *footers[3] = {NULL, NULL, NULL};
-
-		printfPQExpBuffer(&buf, "/* %s */\n", _("Get property graph information"));
-		appendPQExpBuffer(&buf,
-						  "SELECT e.pgealias AS \"%s\","
-						  "\n     pg_catalog.quote_ident(n.nspname) || '.' ||"
-						  "\n          pg_catalog.quote_ident(c.relname) AS \"%s\","
-						  "\n     case e.pgekind when " CppAsString2(PGEKIND_VERTEX) " then 'vertex'"
-						  "\n                    when " CppAsString2(PGEKIND_EDGE) " then 'edge' end AS \"%s\","
-						  "\n     s.pgealias as \"%s\","
-						  "\n     d.pgealias as \"%s\""
-						  "\n FROM pg_catalog.pg_propgraph_element e"
-						  "\n      INNER JOIN pg_catalog.pg_class c ON c.oid = e.pgerelid"
-						  "\n      INNER JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid"
-						  "\n      LEFT JOIN pg_catalog.pg_propgraph_element s ON e.pgesrcvertexid = s.oid"
-						  "\n      LEFT JOIN pg_catalog.pg_propgraph_element d ON e.pgedestvertexid = d.oid"
-						  "\n WHERE e.pgepgid = '%s'"
-						  "\n ORDER BY e.pgealias",
-						  gettext_noop("Element Alias"),
-						  gettext_noop("Element Table"),
-						  gettext_noop("Element Kind"),
-						  gettext_noop("Source Vertex Alias"),
-						  gettext_noop("Destination Vertex Alias"),
-						  oid);
-
-		res = PSQLexec(buf.data);
-		if (!res)
-			goto error_return;
-
-		printfPQExpBuffer(&title, _("Property Graph \"%s.%s\""),
-						  schemaname, relationname);
-
-		/* Add property graph definition in verbose mode */
-		if (verbose)
-		{
-			PGresult   *result;
-
-			printfPQExpBuffer(&buf, "/* %s */\n", _("Get property graph definition"));
-			appendPQExpBuffer(&buf,
-							  "SELECT pg_catalog.pg_get_propgraphdef('%s'::pg_catalog.oid);",
-							  oid);
-			result = PSQLexec(buf.data);
-
-			if (result)
-			{
-				if (PQntuples(result) > 0)
-				{
-					footers[0] = pg_strdup(_("Property graph definition:"));
-					footers[1] = pg_strdup(PQgetvalue(result, 0, 0));
-				}
-				PQclear(result);
-			}
-		}
 
 		popt.footers = footers;
 		popt.topt.default_footer = false;
@@ -2289,11 +2212,11 @@ describeOneTableDetails(const char *schemaname,
 
 		if (PQntuples(result) == 1)
 		{
-			char	   *schemaname = PQgetvalue(result, 0, 0);
-			char	   *relname = PQgetvalue(result, 0, 1);
+			char	   *owning_schemaname = PQgetvalue(result, 0, 0);
+			char	   *owning_relname = PQgetvalue(result, 0, 1);
 
 			printfPQExpBuffer(&tmpbuf, _("Owning table: \"%s.%s\""),
-							  schemaname, relname);
+							  owning_schemaname, owning_relname);
 			printTableAddFooter(&cont, tmpbuf.data);
 		}
 		PQclear(result);
@@ -3660,7 +3583,7 @@ describeOneTableDetails(const char *schemaname,
 			printfPQExpBuffer(&buf, "%s: %s",
 							  s,
 							  tableinfo.relreplident == REPLICA_IDENTITY_FULL ? "FULL" :
-							  tableinfo.relreplident == REPLICA_IDENTITY_DEFAULT ? "NOTHING" :
+							  tableinfo.relreplident == REPLICA_IDENTITY_NOTHING ? "NOTHING" :
 							  "???");
 
 			printTableAddFooter(&cont, buf.data);
@@ -3718,8 +3641,8 @@ error_return:
  * footer.
  */
 static void
-add_tablespace_footer(printTableContent *const cont, char relkind,
-					  Oid tablespace, const bool newline)
+add_tablespace_footer(printTableContent *cont, char relkind,
+					  Oid tablespace, bool newline)
 {
 	/* relkinds for which we support tablespaces */
 	if (relkind == RELKIND_RELATION ||
@@ -3916,7 +3839,7 @@ describeRoles(const char *pattern, bool verbose, bool showSystem)
 }
 
 static void
-add_role_attribute(PQExpBuffer buf, const char *const str)
+add_role_attribute(PQExpBuffer buf, const char *str)
 {
 	if (buf->len > 0)
 		appendPQExpBufferStr(buf, ", ");
@@ -4075,7 +3998,6 @@ describeRoleGrants(const char *pattern, bool showSystem)
  * m - materialized views
  * s - sequences
  * E - foreign table (Note: different from 'f', the relkind value)
- * G - property graphs
  * (any order of the above is fine)
  */
 bool
@@ -4087,7 +4009,6 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 	bool		showMatViews = strchr(tabtypes, 'm') != NULL;
 	bool		showSeq = strchr(tabtypes, 's') != NULL;
 	bool		showForeign = strchr(tabtypes, 'E') != NULL;
-	bool		showPropGraphs = strchr(tabtypes, 'G') != NULL;
 
 	int			ntypes;
 	PQExpBufferData buf;
@@ -4098,10 +4019,10 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 
 	/* Count the number of explicitly-requested relation types */
 	ntypes = showTables + showIndexes + showViews + showMatViews +
-		showSeq + showForeign + showPropGraphs;
-	/* If none, we default to \dtvmsEG (but see also command.c) */
+		showSeq + showForeign;
+	/* If none, we default to \dtvmsE (but see also command.c) */
 	if (ntypes == 0)
-		showTables = showViews = showMatViews = showSeq = showForeign = showPropGraphs = true;
+		showTables = showViews = showMatViews = showSeq = showForeign = true;
 
 	initPQExpBuffer(&buf);
 
@@ -4119,7 +4040,6 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 					  " WHEN " CppAsString2(RELKIND_FOREIGN_TABLE) " THEN '%s'"
 					  " WHEN " CppAsString2(RELKIND_PARTITIONED_TABLE) " THEN '%s'"
 					  " WHEN " CppAsString2(RELKIND_PARTITIONED_INDEX) " THEN '%s'"
-					  " WHEN " CppAsString2(RELKIND_PROPGRAPH) " THEN '%s'"
 					  " END as \"%s\",\n"
 					  "  pg_catalog.pg_get_userbyid(c.relowner) as \"%s\"",
 					  gettext_noop("Schema"),
@@ -4133,7 +4053,6 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 					  gettext_noop("foreign table"),
 					  gettext_noop("partitioned table"),
 					  gettext_noop("partitioned index"),
-					  gettext_noop("property graph"),
 					  gettext_noop("Type"),
 					  gettext_noop("Owner"));
 	cols_so_far = 4;
@@ -4221,8 +4140,6 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 		appendPQExpBufferStr(&buf, "'s',"); /* was RELKIND_SPECIAL */
 	if (showForeign)
 		appendPQExpBufferStr(&buf, CppAsString2(RELKIND_FOREIGN_TABLE) ",");
-	if (showPropGraphs)
-		appendPQExpBufferStr(&buf, CppAsString2(RELKIND_PROPGRAPH) ",");
 
 	appendPQExpBufferStr(&buf, "''");	/* dummy */
 	appendPQExpBufferStr(&buf, ")\n");
@@ -4278,9 +4195,6 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 			else if (showForeign)
 				pg_log_error("Did not find any foreign tables named \"%s\".",
 							 pattern);
-			else if (showPropGraphs)
-				pg_log_error("Did not find any property graphs named \"%s\".",
-							 pattern);
 			else				/* should not get here */
 				pg_log_error_internal("Did not find any ??? named \"%s\".",
 									  pattern);
@@ -4301,8 +4215,6 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 				pg_log_error("Did not find any sequences.");
 			else if (showForeign)
 				pg_log_error("Did not find any foreign tables.");
-			else if (showPropGraphs)
-				pg_log_error("Did not find any property graphs.");
 			else				/* should not get here */
 				pg_log_error_internal("Did not find any ??? relations.");
 		}
@@ -4317,7 +4229,6 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 			(showMatViews) ? _("List of materialized views") :
 			(showSeq) ? _("List of sequences") :
 			(showForeign) ? _("List of foreign tables") :
-			(showPropGraphs) ? _("List of property graphs") :
 			"List of ???";		/* should not get here */
 		myopt.translate_header = true;
 		myopt.translate_columns = translate_columns;
@@ -6572,7 +6483,7 @@ listPublications(const char *pattern)
  */
 static bool
 addFooterToPublicationDesc(PQExpBuffer buf, const char *footermsg,
-						   bool as_schema, printTableContent *const cont)
+						   bool as_schema, printTableContent *cont)
 {
 	PGresult   *res;
 	int			count = 0;

@@ -46,6 +46,9 @@
  * from the constraint to the things it depends on.
  *
  * The new constraint's OID is returned.
+ *
+ * NB: Caller is responsible for ensuring the user has USAGE on all types
+ * conExpr depends on.
  */
 Oid
 CreateConstraintEntry(const char *constraintName,
@@ -118,7 +121,7 @@ CreateConstraintEntry(const char *constraintName,
 	{
 		Datum	   *conkey;
 
-		conkey = (Datum *) palloc(constraintNKeys * sizeof(Datum));
+		conkey = palloc_array(Datum, constraintNKeys);
 		for (i = 0; i < constraintNKeys; i++)
 			conkey[i] = Int16GetDatum(constraintKey[i]);
 		conkeyArray = construct_array_builtin(conkey, constraintNKeys, INT2OID);
@@ -131,7 +134,7 @@ CreateConstraintEntry(const char *constraintName,
 		Datum	   *fkdatums;
 		int			nkeys = Max(foreignNKeys, numFkDeleteSetCols);
 
-		fkdatums = (Datum *) palloc(nkeys * sizeof(Datum));
+		fkdatums = palloc_array(Datum, nkeys);
 		for (i = 0; i < foreignNKeys; i++)
 			fkdatums[i] = Int16GetDatum(foreignKey[i]);
 		confkeyArray = construct_array_builtin(fkdatums, foreignNKeys, INT2OID);
@@ -167,7 +170,7 @@ CreateConstraintEntry(const char *constraintName,
 	{
 		Datum	   *opdatums;
 
-		opdatums = (Datum *) palloc(constraintNKeys * sizeof(Datum));
+		opdatums = palloc_array(Datum, constraintNKeys);
 		for (i = 0; i < constraintNKeys; i++)
 			opdatums[i] = ObjectIdGetDatum(exclOp[i]);
 		conexclopArray = construct_array_builtin(opdatums, constraintNKeys, OIDOID);
@@ -861,22 +864,22 @@ RelationGetNotNullConstraints(Oid relid, bool cooked, bool include_noinh)
 
 		if (cooked)
 		{
-			CookedConstraint *cooked;
+			CookedConstraint *cookedConstr;
 
-			cooked = palloc_object(CookedConstraint);
+			cookedConstr = palloc_object(CookedConstraint);
 
-			cooked->contype = CONSTR_NOTNULL;
-			cooked->conoid = conForm->oid;
-			cooked->name = pstrdup(NameStr(conForm->conname));
-			cooked->attnum = colnum;
-			cooked->expr = NULL;
-			cooked->is_enforced = true;
-			cooked->skip_validation = !conForm->convalidated;
-			cooked->is_local = true;
-			cooked->inhcount = 0;
-			cooked->is_no_inherit = conForm->connoinherit;
+			cookedConstr->contype = CONSTR_NOTNULL;
+			cookedConstr->conoid = conForm->oid;
+			cookedConstr->name = pstrdup(NameStr(conForm->conname));
+			cookedConstr->attnum = colnum;
+			cookedConstr->expr = NULL;
+			cookedConstr->is_enforced = true;
+			cookedConstr->skip_validation = !conForm->convalidated;
+			cookedConstr->is_local = true;
+			cookedConstr->inhcount = 0;
+			cookedConstr->is_no_inherit = conForm->connoinherit;
 
-			notnulls = lappend(notnulls, cooked);
+			notnulls = lappend(notnulls, cookedConstr);
 		}
 		else
 		{
@@ -892,7 +895,7 @@ RelationGetNotNullConstraints(Oid relid, bool cooked, bool include_noinh)
 															 false)));
 			constr->is_enforced = true;
 			constr->skip_validation = !conForm->convalidated;
-			constr->initially_valid = conForm->convalidated;
+			constr->initially_valid = true;
 			constr->is_no_inherit = conForm->connoinherit;
 			notnulls = lappend(notnulls, constr);
 		}

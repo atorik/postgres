@@ -222,44 +222,6 @@ table_beginscan_parallel_tidrange(Relation relation,
 }
 
 
-/* ----------------------------------------------------------------------------
- * Index scan related functions.
- * ----------------------------------------------------------------------------
- */
-
-/*
- * To perform that check simply start an index scan, create the necessary
- * slot, do the heap lookup, and shut everything down again. This could be
- * optimized, but is unlikely to matter from a performance POV. If there
- * frequently are live index pointers also matching a unique index key, the
- * CPU overhead of this routine is unlikely to matter.
- *
- * Note that *tid may be modified when we return true if the AM supports
- * storing multiple row versions reachable via a single index entry (like
- * heap's HOT).
- */
-bool
-table_index_fetch_tuple_check(Relation rel,
-							  ItemPointer tid,
-							  Snapshot snapshot,
-							  bool *all_dead)
-{
-	IndexFetchTableData *scan;
-	TupleTableSlot *slot;
-	bool		call_again = false;
-	bool		found;
-
-	slot = table_slot_create(rel, NULL);
-	scan = table_index_fetch_begin(rel, SO_NONE);
-	found = table_index_fetch_tuple(scan, tid, snapshot, slot, &call_again,
-									all_dead);
-	table_index_fetch_end(scan);
-	ExecDropSingleTupleTableSlot(slot);
-
-	return found;
-}
-
-
 /* ------------------------------------------------------------------------
  * Functions for non-modifying operations on individual tuples
  * ------------------------------------------------------------------------
@@ -421,9 +383,8 @@ table_block_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
 	bpscan->base.phs_syncscan = synchronize_seqscans &&
 		!RelationUsesLocalBuffers(rel) &&
 		bpscan->phs_nblocks > NBuffers / 4;
-	SpinLockInit(&bpscan->phs_mutex);
-	bpscan->phs_startblock = InvalidBlockNumber;
-	bpscan->phs_numblock = InvalidBlockNumber;
+	pg_atomic_init_u32(&bpscan->phs_startblock, InvalidBlockNumber);
+	pg_atomic_init_u32(&bpscan->phs_numblock, InvalidBlockNumber);
 	pg_atomic_init_u64(&bpscan->phs_nallocated, 0);
 
 	return sizeof(ParallelBlockTableScanDescData);
@@ -459,25 +420,22 @@ table_block_parallelscan_startblock_init(Relation rel,
 	StaticAssertDecl(MaxBlockNumber <= 0xFFFFFFFE,
 					 "pg_nextpower2_32 may be too small for non-standard BlockNumber width");
 
-	BlockNumber sync_startpage = InvalidBlockNumber;
 	BlockNumber scan_nblocks;
 
 	/* Reset the state we use for controlling allocation size. */
 	memset(pbscanwork, 0, sizeof(*pbscanwork));
-
-retry:
-	/* Grab the spinlock. */
-	SpinLockAcquire(&pbscan->phs_mutex);
 
 	/*
 	 * When the caller specified a limit on the number of blocks to scan, set
 	 * that in the ParallelBlockTableScanDesc, if it's not been done by
 	 * another worker already.
 	 */
-	if (numblocks != InvalidBlockNumber &&
-		pbscan->phs_numblock == InvalidBlockNumber)
+	if (numblocks != InvalidBlockNumber)
 	{
-		pbscan->phs_numblock = numblocks;
+		uint32		expected = InvalidBlockNumber;
+
+		pg_atomic_compare_exchange_u32(&pbscan->phs_numblock, &expected,
+									   numblocks);
 	}
 
 	/*
@@ -485,36 +443,35 @@ retry:
 	 * so now.  If a startblock was specified, start there, otherwise if this
 	 * is not a synchronized scan, we just start at block 0, but if it is a
 	 * synchronized scan, we must get the starting position from the
-	 * synchronized scan machinery.  We can't hold the spinlock while doing
-	 * that, though, so release the spinlock, get the information we need, and
-	 * retry.  If nobody else has initialized the scan in the meantime, we'll
-	 * fill in the value we fetched on the second time through.
+	 * synchronized scan machinery.
+	 *
+	 * If another worker initializes phs_startblock concurrently, just use
+	 * their value.
 	 */
-	if (pbscan->phs_startblock == InvalidBlockNumber)
+	if (pg_atomic_read_u32(&pbscan->phs_startblock) == InvalidBlockNumber)
 	{
+		BlockNumber newstartblock;
+		uint32		expected = InvalidBlockNumber;
+
 		if (startblock != InvalidBlockNumber)
-			pbscan->phs_startblock = startblock;
+			newstartblock = startblock;
 		else if (!pbscan->base.phs_syncscan)
-			pbscan->phs_startblock = 0;
-		else if (sync_startpage != InvalidBlockNumber)
-			pbscan->phs_startblock = sync_startpage;
+			newstartblock = 0;
 		else
-		{
-			SpinLockRelease(&pbscan->phs_mutex);
-			sync_startpage = ss_get_location(rel, pbscan->phs_nblocks);
-			goto retry;
-		}
+			newstartblock = ss_get_location(rel, pbscan->phs_nblocks);
+
+		pg_atomic_compare_exchange_u32(&pbscan->phs_startblock, &expected,
+									   newstartblock);
 	}
-	SpinLockRelease(&pbscan->phs_mutex);
 
 	/*
 	 * Figure out how many blocks we're going to scan; either all of them, or
 	 * just phs_numblock's worth, if a limit has been imposed.
 	 */
-	if (pbscan->phs_numblock == InvalidBlockNumber)
+	if (pg_atomic_read_u32(&pbscan->phs_numblock) == InvalidBlockNumber)
 		scan_nblocks = pbscan->phs_nblocks;
 	else
-		scan_nblocks = pbscan->phs_numblock;
+		scan_nblocks = pg_atomic_read_u32(&pbscan->phs_numblock);
 
 	/*
 	 * We determine the chunk size based on scan_nblocks.  First we split
@@ -595,10 +552,10 @@ table_block_parallelscan_nextpage(Relation rel,
 	 */
 
 	/* First, figure out how many blocks we're planning on scanning */
-	if (pbscan->phs_numblock == InvalidBlockNumber)
+	if (pg_atomic_read_u32(&pbscan->phs_numblock) == InvalidBlockNumber)
 		scan_nblocks = pbscan->phs_nblocks;
 	else
-		scan_nblocks = pbscan->phs_numblock;
+		scan_nblocks = pg_atomic_read_u32(&pbscan->phs_numblock);
 
 	/*
 	 * Now check if we have any remaining blocks in a previous chunk for this
@@ -644,7 +601,7 @@ table_block_parallelscan_nextpage(Relation rel,
 	if (nallocated >= scan_nblocks)
 		page = InvalidBlockNumber;	/* all blocks have been allocated */
 	else
-		page = (nallocated + pbscan->phs_startblock) % pbscan->phs_nblocks;
+		page = (nallocated + pg_atomic_read_u32(&pbscan->phs_startblock)) % pbscan->phs_nblocks;
 
 	/*
 	 * Report scan location.  Normally, we report the current page number.
@@ -658,7 +615,7 @@ table_block_parallelscan_nextpage(Relation rel,
 		if (page != InvalidBlockNumber)
 			ss_report_location(rel, page);
 		else if (nallocated == pbscan->phs_nblocks)
-			ss_report_location(rel, pbscan->phs_startblock);
+			ss_report_location(rel, pg_atomic_read_u32(&pbscan->phs_startblock));
 	}
 
 	return page;

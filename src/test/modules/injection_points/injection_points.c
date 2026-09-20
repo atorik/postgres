@@ -151,21 +151,20 @@ injection_init_shmem(void)
  * otherwise.
  */
 static bool
-injection_point_allowed(const InjectionPointCondition *condition)
+injection_point_allowed(const InjectionPointCondition *condition,
+						const char *arg)
 {
-	bool		result = true;
+	/* Does not match the condition PID? */
+	if ((condition->type & INJ_CONDITION_PID) &&
+		MyProcPid != condition->pid)
+		return false;
 
-	switch (condition->type)
-	{
-		case INJ_CONDITION_PID:
-			if (MyProcPid != condition->pid)
-				result = false;
-			break;
-		case INJ_CONDITION_ALWAYS:
-			break;
-	}
+	/* Does not match the condition string? */
+	if ((condition->type & INJ_CONDITION_STRING) &&
+		(arg == NULL || strcmp(condition->str, arg) != 0))
+		return false;
 
-	return result;
+	return true;
 }
 
 /*
@@ -197,7 +196,7 @@ injection_error(const char *name, const void *private_data, void *arg)
 	const InjectionPointCondition *condition = private_data;
 	char	   *argstr = arg;
 
-	if (!injection_point_allowed(condition))
+	if (!injection_point_allowed(condition, argstr))
 		return;
 
 	if (argstr)
@@ -213,7 +212,7 @@ injection_notice(const char *name, const void *private_data, void *arg)
 	const InjectionPointCondition *condition = private_data;
 	char	   *argstr = arg;
 
-	if (!injection_point_allowed(condition))
+	if (!injection_point_allowed(condition, argstr))
 		return;
 
 	if (argstr)
@@ -221,6 +220,19 @@ injection_notice(const char *name, const void *private_data, void *arg)
 			 name, argstr);
 	else
 		elog(NOTICE, "notice triggered for injection point %s", name);
+}
+
+/*
+ * Error cleanup callback for injection point waits.
+ */
+static void
+injection_wait_cleanup(int code, Datum arg)
+{
+	int			index = DatumGetInt32(arg);
+
+	SpinLockAcquire(&inj_state->lock);
+	inj_state->name[index][0] = '\0';
+	SpinLockRelease(&inj_state->lock);
 }
 
 /* Wait until injection_points_wakeup() is called */
@@ -231,12 +243,13 @@ injection_wait(const char *name, const void *private_data, void *arg)
 	int			index = -1;
 	uint32		injection_wait_event = 0;
 	const InjectionPointCondition *condition = private_data;
+	char	   *argstr = arg;
 	int			delay_us = 0;
 
 	if (inj_state == NULL)
 		injection_init_shmem();
 
-	if (!injection_point_allowed(condition))
+	if (!injection_point_allowed(condition, argstr))
 		return;
 
 	/*
@@ -275,19 +288,21 @@ injection_wait(const char *name, const void *private_data, void *arg)
 	delay_us = INJ_WAIT_INITIAL_US;
 
 	pgstat_report_wait_start(injection_wait_event);
-	while (pg_atomic_read_u32(&inj_state->wait_counts[index]) == old_wait_counts)
+	PG_ENSURE_ERROR_CLEANUP(injection_wait_cleanup, Int32GetDatum(index));
 	{
-		CHECK_FOR_INTERRUPTS();
-		pg_usleep(delay_us);
-		if (delay_us < INJ_WAIT_MAX_US)
-			delay_us = Min(delay_us * 2, INJ_WAIT_MAX_US);
+		while (pg_atomic_read_u32(&inj_state->wait_counts[index]) == old_wait_counts)
+		{
+			CHECK_FOR_INTERRUPTS();
+			pg_usleep(delay_us);
+			if (delay_us < INJ_WAIT_MAX_US)
+				delay_us = Min(delay_us * 2, INJ_WAIT_MAX_US);
+		}
 	}
+	PG_END_ENSURE_ERROR_CLEANUP(injection_wait_cleanup, Int32GetDatum(index));
 	pgstat_report_wait_end();
 
 	/* Remove this injection point from the waiters. */
-	SpinLockAcquire(&inj_state->lock);
-	inj_state->name[index][0] = '\0';
-	SpinLockRelease(&inj_state->lock);
+	injection_wait_cleanup(0, Int32GetDatum(index));
 }
 
 /*
@@ -297,10 +312,22 @@ PG_FUNCTION_INFO_V1(injection_points_attach);
 Datum
 injection_points_attach(PG_FUNCTION_ARGS)
 {
-	char	   *name = text_to_cstring(PG_GETARG_TEXT_PP(0));
-	char	   *action = text_to_cstring(PG_GETARG_TEXT_PP(1));
+	char	   *name;
+	char	   *action;
+	char	   *str;
 	char	   *function;
 	InjectionPointCondition condition = {0};
+
+	if (PG_ARGISNULL(0))
+		elog(ERROR, "injection point name must not be null");
+
+	if (PG_ARGISNULL(1))
+		elog(ERROR, "injection point action must not be null");
+
+	name = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	action = text_to_cstring(PG_GETARG_TEXT_PP(1));
+	str = PG_ARGISNULL(2) ? NULL
+		: text_to_cstring(PG_GETARG_TEXT_PP(2));
 
 	if (strcmp(action, "error") == 0)
 		function = "injection_error";
@@ -313,8 +340,19 @@ injection_points_attach(PG_FUNCTION_ARGS)
 
 	if (injection_point_local)
 	{
-		condition.type = INJ_CONDITION_PID;
+		condition.type |= INJ_CONDITION_PID;
 		condition.pid = MyProcPid;
+	}
+
+	if (str)
+	{
+		if (str[0] == '\0')
+			elog(ERROR, "injection point condition string must not be empty");
+		if (strlen(str) >= INJ_DATA_MAXLEN)
+			elog(ERROR, "injection point condition string too long (maximum of %d characters)",
+				 INJ_DATA_MAXLEN - 1);
+		condition.type |= INJ_CONDITION_STRING;
+		strlcpy(condition.str, str, INJ_DATA_MAXLEN);
 	}
 
 	InjectionPointAttach(name, "injection_points", function, &condition,

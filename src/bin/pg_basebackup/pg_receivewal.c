@@ -30,6 +30,7 @@
 #include "access/xlog_internal.h"
 #include "common/file_perm.h"
 #include "common/logging.h"
+#include "common/pg_parse_lsn.h"
 #include "fe_utils/option_utils.h"
 #include "getopt_long.h"
 #include "libpq-fe.h"
@@ -59,7 +60,7 @@ static XLogRecPtr endpos = InvalidXLogRecPtr;
 static void usage(void);
 static DIR *get_destination_dir(char *dest_folder);
 static void close_destination_dir(DIR *dest_dir, char *dest_folder);
-static XLogRecPtr FindStreamingStart(uint32 *tli);
+static XLogRecPtr FindStreamingStart(uint32 *tli_p);
 static void StreamLog(void);
 static bool stop_streaming(XLogRecPtr xlogpos, uint32 timeline,
 						   bool segment_finished);
@@ -265,7 +266,7 @@ close_destination_dir(DIR *dest_dir, char *dest_folder)
  * If there are no WAL files in the directory, returns InvalidXLogRecPtr.
  */
 static XLogRecPtr
-FindStreamingStart(uint32 *tli)
+FindStreamingStart(uint32 *tli_p)
 {
 	DIR		   *dir;
 	struct dirent *dirent;
@@ -486,7 +487,7 @@ FindStreamingStart(uint32 *tli)
 
 		XLogSegNoOffsetToRecPtr(high_segno, 0, WalSegSz, high_ptr);
 
-		*tli = high_tli;
+		*tli_p = high_tli;
 		return high_ptr;
 	}
 	else
@@ -651,8 +652,6 @@ main(int argc, char **argv)
 	int			c;
 	int			option_index;
 	char	   *db_name;
-	uint32		hi,
-				lo;
 	pg_compress_specification compression_spec;
 	char	   *compression_detail = NULL;
 	char	   *compression_algorithm_str = "none";
@@ -689,9 +688,8 @@ main(int argc, char **argv)
 				basedir = pg_strdup(optarg);
 				break;
 			case 'E':
-				if (sscanf(optarg, "%X/%08X", &hi, &lo) != 2)
+				if (!pg_parse_lsn(optarg, &endpos))
 					pg_fatal("could not parse end position \"%s\"", optarg);
-				endpos = ((uint64) hi) << 32 | lo;
 				break;
 			case 'h':
 				dbhost = pg_strdup(optarg);

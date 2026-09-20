@@ -2333,7 +2333,7 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 												   HEAP_DEFAULT_FILLFACTOR);
 
 	/* Toast and set header data in all the slots */
-	heaptuples = palloc(ntuples * sizeof(HeapTuple));
+	heaptuples = palloc_array(HeapTuple, ntuples);
 	for (i = 0; i < ntuples; i++)
 	{
 		HeapTuple	tuple;
@@ -2484,19 +2484,19 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 		{
 			PageSetAllVisible(page);
 			PageClearPrunable(page);
-			visibilitymap_set(BufferGetBlockNumber(buffer),
-							  vmbuffer,
-							  VISIBILITYMAP_ALL_VISIBLE |
-							  VISIBILITYMAP_ALL_FROZEN,
-							  relation->rd_locator);
+			(void) visibilitymap_set(BufferGetBlockNumber(buffer),
+									 vmbuffer,
+									 VISIBILITYMAP_ALL_VISIBLE |
+									 VISIBILITYMAP_ALL_FROZEN,
+									 relation->rd_locator);
 		}
 
 		/*
 		 * Set pd_prune_xid. See heap_insert() for more on why we do this when
-		 * inserting tuples. This only makes sense if we aren't already
-		 * setting the page frozen in the VM and we're not in bootstrap mode.
+		 * inserting tuples. This only makes sense if the tuples aren't frozen
+		 * and we're not in bootstrap mode.
 		 */
-		if (!all_frozen_set && TransactionIdIsNormal(xid))
+		if (TransactionIdIsNormal(xid) && !(options & HEAP_INSERT_FROZEN))
 			PageSetPrunable(page, xid);
 
 		MarkBufferDirty(buffer);
@@ -3265,7 +3265,7 @@ simple_heap_delete(Relation relation, const ItemPointerData *tid)
  */
 TM_Result
 heap_update(Relation relation, const ItemPointerData *otid, HeapTuple newtup,
-			CommandId cid, uint32 options pg_attribute_unused(), Snapshot crosscheck, bool wait,
+			CommandId cid, uint32 options, Snapshot crosscheck, bool wait,
 			TM_FailureData *tmfd, LockTupleMode *lockmode,
 			TU_UpdateIndexes *update_indexes)
 {
@@ -3961,8 +3961,12 @@ l2:
 		 */
 		if (need_toast)
 		{
-			/* Note we always use WAL and FSM during updates */
-			heaptup = heap_toast_insert_or_update(relation, newtup, &oldtup, 0);
+			/*
+			 * If logical decoding is not needed, suppress it for the TOAST
+			 * tuples too. We never skip the FSM here.
+			 */
+			heaptup = heap_toast_insert_or_update(relation, newtup, &oldtup,
+												  walLogical ? 0 : HEAP_INSERT_NO_LOGICAL);
 			newtupsize = MAXALIGN(heaptup->t_len);
 		}
 		else
@@ -8979,7 +8983,7 @@ bottomup_sort_and_shrink(TM_IndexDeleteOp *delstate)
 	/* Sort groups and rearrange caller's deltids array */
 	qsort(blockgroups, nblockgroups, sizeof(IndexDeleteCounts),
 		  bottomup_sort_and_shrink_cmp);
-	reordereddeltids = palloc(delstate->ndeltids * sizeof(TM_IndexDelete));
+	reordereddeltids = palloc_array(TM_IndexDelete, delstate->ndeltids);
 
 	nblockgroups = Min(BOTTOMUP_MAX_NBLOCKS, nblockgroups);
 	/* Determine number of favorable blocks at the start of final deltids */

@@ -1770,8 +1770,7 @@ AtSubCommit_childXids(void)
 				MemoryContextAlloc(TopTransactionContext,
 								   new_maxChildXids * sizeof(TransactionId));
 		else
-			new_childXids = repalloc(s->parent->childXids,
-									 new_maxChildXids * sizeof(TransactionId));
+			new_childXids = repalloc_array(s->parent->childXids, TransactionId, new_maxChildXids);
 
 		s->parent->childXids = new_childXids;
 		s->parent->maxChildXids = new_maxChildXids;
@@ -4928,6 +4927,8 @@ RollbackAndReleaseCurrentSubTransaction(void)
 		   s->blockState == TBLOCK_INPROGRESS ||
 		   s->blockState == TBLOCK_IMPLICIT_INPROGRESS ||
 		   s->blockState == TBLOCK_PARALLEL_INPROGRESS ||
+		   s->blockState == TBLOCK_END ||
+		   s->blockState == TBLOCK_PREPARE ||
 		   s->blockState == TBLOCK_STARTED);
 }
 
@@ -5271,6 +5272,7 @@ CommitSubTransaction(void)
 					  s->parent->subTransactionId);
 	AtEOSubXact_HashTables(true, s->nestingLevel);
 	AtEOSubXact_PgStat(true, s->nestingLevel);
+	AtEOSubXact_RI(true, s->subTransactionId, s->parent->subTransactionId);
 	AtSubCommit_Snapshot(s->nestingLevel);
 
 	/*
@@ -5452,6 +5454,7 @@ AbortSubTransaction(void)
 						  s->parent->subTransactionId);
 		AtEOSubXact_HashTables(false, s->nestingLevel);
 		AtEOSubXact_PgStat(false, s->nestingLevel);
+		AtEOSubXact_RI(false, s->subTransactionId, s->parent->subTransactionId);
 		AtSubAbort_Snapshot(s->nestingLevel);
 	}
 
@@ -5673,7 +5676,7 @@ SerializeTransactionState(Size maxsize, char *start_address)
 		   <= maxsize);
 
 	/* Copy them to our scratch space. */
-	workspace = palloc(nxids * sizeof(TransactionId));
+	workspace = palloc_array(TransactionId, nxids);
 	for (s = CurrentTransactionState; s != NULL; s = s->parent)
 	{
 		if (FullTransactionIdIsValid(s->fullTransactionId))

@@ -371,7 +371,12 @@ char *
 pgtls_get_peer_certificate_hash(PGconn *conn, size_t *len)
 {
 	X509	   *peer_cert;
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	EVP_MD	   *algo_type;
+	const char *algo_name;
+#else
 	const EVP_MD *algo_type;
+#endif
 	unsigned char hash[EVP_MAX_MD_SIZE];	/* size for SHA-512 */
 	unsigned int hash_size;
 	int			algo_nid;
@@ -406,6 +411,31 @@ pgtls_get_peer_certificate_hash(PGconn *conn, size_t *len)
 	 * (https://tools.ietf.org/html/rfc5929#section-4.1).  If something else
 	 * is used, the same hash as the signature algorithm is used.
 	 */
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	switch (algo_nid)
+	{
+		case NID_md5:
+		case NID_sha1:
+			algo_name = "SHA256";
+			break;
+		default:
+			algo_name = OBJ_nid2sn(algo_nid);
+			if (algo_name == NULL)
+			{
+				libpq_append_conn_error(conn, "could not find digest for NID %d",
+										algo_nid);
+				return NULL;
+			}
+			break;
+	}
+
+	algo_type = EVP_MD_fetch(NULL, algo_name, NULL);
+	if (algo_type == NULL)
+	{
+		libpq_append_conn_error(conn, "could not fetch digest \"%s\"", algo_name);
+		return NULL;
+	}
+#else
 	switch (algo_nid)
 	{
 		case NID_md5:
@@ -422,12 +452,20 @@ pgtls_get_peer_certificate_hash(PGconn *conn, size_t *len)
 			}
 			break;
 	}
+#endif
 
 	if (!X509_digest(peer_cert, algo_type, hash, &hash_size))
 	{
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+		EVP_MD_free(algo_type);
+#endif
 		libpq_append_conn_error(conn, "could not generate peer certificate hash");
 		return NULL;
 	}
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	EVP_MD_free(algo_type);
+#endif
 
 	/* save result */
 	cert_hash = malloc(hash_size);
@@ -800,13 +838,13 @@ initialize_SSL(PGconn *conn)
 	 * complicated if connections used different certificates. So now we
 	 * create a separate context for each connection, and accept the overhead.
 	 */
-	SSL_context = SSL_CTX_new(SSLv23_method());
+	SSL_context = SSL_CTX_new(TLS_method());
 	if (!SSL_context)
 	{
-		char	   *err = SSLerrmessage(ERR_get_error());
+		char	   *errm = SSLerrmessage(ERR_get_error());
 
-		libpq_append_conn_error(conn, "could not create SSL context: %s", err);
-		SSLerrfree(err);
+		libpq_append_conn_error(conn, "could not create SSL context: %s", errm);
+		SSLerrfree(errm);
 		return -1;
 	}
 
@@ -855,10 +893,10 @@ initialize_SSL(PGconn *conn)
 
 		if (!SSL_CTX_set_min_proto_version(SSL_context, ssl_min_ver))
 		{
-			char	   *err = SSLerrmessage(ERR_get_error());
+			char	   *errm = SSLerrmessage(ERR_get_error());
 
-			libpq_append_conn_error(conn, "could not set minimum SSL protocol version: %s", err);
-			SSLerrfree(err);
+			libpq_append_conn_error(conn, "could not set minimum SSL protocol version: %s", errm);
+			SSLerrfree(errm);
 			SSL_CTX_free(SSL_context);
 			return -1;
 		}
@@ -881,10 +919,10 @@ initialize_SSL(PGconn *conn)
 
 		if (!SSL_CTX_set_max_proto_version(SSL_context, ssl_max_ver))
 		{
-			char	   *err = SSLerrmessage(ERR_get_error());
+			char	   *errm = SSLerrmessage(ERR_get_error());
 
-			libpq_append_conn_error(conn, "could not set maximum SSL protocol version: %s", err);
-			SSLerrfree(err);
+			libpq_append_conn_error(conn, "could not set maximum SSL protocol version: %s", errm);
+			SSLerrfree(errm);
 			SSL_CTX_free(SSL_context);
 			return -1;
 		}
@@ -919,11 +957,11 @@ initialize_SSL(PGconn *conn)
 		 */
 		if (SSL_CTX_set_default_verify_paths(SSL_context) != 1)
 		{
-			char	   *err = SSLerrmessage(ERR_get_error());
+			char	   *errm = SSLerrmessage(ERR_get_error());
 
 			libpq_append_conn_error(conn, "could not load system root certificate paths: %s",
-									err);
-			SSLerrfree(err);
+									errm);
+			SSLerrfree(errm);
 			SSL_CTX_free(SSL_context);
 			return -1;
 		}
@@ -936,11 +974,11 @@ initialize_SSL(PGconn *conn)
 
 		if (SSL_CTX_load_verify_locations(SSL_context, fnbuf, NULL) != 1)
 		{
-			char	   *err = SSLerrmessage(ERR_get_error());
+			char	   *errm = SSLerrmessage(ERR_get_error());
 
 			libpq_append_conn_error(conn, "could not read root certificate file \"%s\": %s",
-									fnbuf, err);
-			SSLerrfree(err);
+									fnbuf, errm);
+			SSLerrfree(errm);
 			SSL_CTX_free(SSL_context);
 			return -1;
 		}
@@ -1044,11 +1082,11 @@ initialize_SSL(PGconn *conn)
 		 */
 		if (SSL_CTX_use_certificate_chain_file(SSL_context, fnbuf) != 1)
 		{
-			char	   *err = SSLerrmessage(ERR_get_error());
+			char	   *errm = SSLerrmessage(ERR_get_error());
 
 			libpq_append_conn_error(conn, "could not read certificate file \"%s\": %s",
-									fnbuf, err);
-			SSLerrfree(err);
+									fnbuf, errm);
+			SSLerrfree(errm);
 			SSL_CTX_free(SSL_context);
 			return -1;
 		}
@@ -1068,10 +1106,10 @@ initialize_SSL(PGconn *conn)
 		!SSL_set_app_data(conn->ssl, conn) ||
 		!ssl_set_pgconn_bio(conn))
 	{
-		char	   *err = SSLerrmessage(ERR_get_error());
+		char	   *errm = SSLerrmessage(ERR_get_error());
 
-		libpq_append_conn_error(conn, "could not establish SSL connection: %s", err);
-		SSLerrfree(err);
+		libpq_append_conn_error(conn, "could not establish SSL connection: %s", errm);
+		SSLerrfree(errm);
 		SSL_CTX_free(SSL_context);
 		return -1;
 	}
@@ -1117,10 +1155,10 @@ initialize_SSL(PGconn *conn)
 		{
 			if (SSL_set_tlsext_host_name(conn->ssl, host) != 1)
 			{
-				char	   *err = SSLerrmessage(ERR_get_error());
+				char	   *errm = SSLerrmessage(ERR_get_error());
 
-				libpq_append_conn_error(conn, "could not set SSL Server Name Indication (SNI): %s", err);
-				SSLerrfree(err);
+				libpq_append_conn_error(conn, "could not set SSL Server Name Indication (SNI): %s", errm);
+				SSLerrfree(errm);
 				return -1;
 			}
 		}
@@ -1134,10 +1172,10 @@ initialize_SSL(PGconn *conn)
 
 		if (retval != 0)
 		{
-			char	   *err = SSLerrmessage(ERR_get_error());
+			char	   *errm = SSLerrmessage(ERR_get_error());
 
-			libpq_append_conn_error(conn, "could not set SSL ALPN extension: %s", err);
-			SSLerrfree(err);
+			libpq_append_conn_error(conn, "could not set SSL ALPN extension: %s", errm);
+			SSLerrfree(errm);
 			return -1;
 		}
 	}
@@ -1177,22 +1215,22 @@ initialize_SSL(PGconn *conn)
 			conn->engine = ENGINE_by_id(engine_str);
 			if (conn->engine == NULL)
 			{
-				char	   *err = SSLerrmessage(ERR_get_error());
+				char	   *errm = SSLerrmessage(ERR_get_error());
 
 				libpq_append_conn_error(conn, "could not load SSL engine \"%s\": %s",
-										engine_str, err);
-				SSLerrfree(err);
+										engine_str, errm);
+				SSLerrfree(errm);
 				free(engine_str);
 				return -1;
 			}
 
 			if (ENGINE_init(conn->engine) == 0)
 			{
-				char	   *err = SSLerrmessage(ERR_get_error());
+				char	   *errm = SSLerrmessage(ERR_get_error());
 
 				libpq_append_conn_error(conn, "could not initialize SSL engine \"%s\": %s",
-										engine_str, err);
-				SSLerrfree(err);
+										engine_str, errm);
+				SSLerrfree(errm);
 				ENGINE_free(conn->engine);
 				conn->engine = NULL;
 				free(engine_str);
@@ -1203,11 +1241,11 @@ initialize_SSL(PGconn *conn)
 										   NULL, NULL);
 			if (pkey == NULL)
 			{
-				char	   *err = SSLerrmessage(ERR_get_error());
+				char	   *errm = SSLerrmessage(ERR_get_error());
 
 				libpq_append_conn_error(conn, "could not read private SSL key \"%s\" from engine \"%s\": %s",
-										engine_colon, engine_str, err);
-				SSLerrfree(err);
+										engine_colon, engine_str, errm);
+				SSLerrfree(errm);
 				ENGINE_finish(conn->engine);
 				ENGINE_free(conn->engine);
 				conn->engine = NULL;
@@ -1216,11 +1254,11 @@ initialize_SSL(PGconn *conn)
 			}
 			if (SSL_use_PrivateKey(conn->ssl, pkey) != 1)
 			{
-				char	   *err = SSLerrmessage(ERR_get_error());
+				char	   *errm = SSLerrmessage(ERR_get_error());
 
 				libpq_append_conn_error(conn, "could not load private SSL key \"%s\" from engine \"%s\": %s",
-										engine_colon, engine_str, err);
-				SSLerrfree(err);
+										engine_colon, engine_str, errm);
+				SSLerrfree(errm);
 				ENGINE_finish(conn->engine);
 				ENGINE_free(conn->engine);
 				conn->engine = NULL;
@@ -1307,7 +1345,7 @@ initialize_SSL(PGconn *conn)
 
 		if (SSL_use_PrivateKey_file(conn->ssl, fnbuf, SSL_FILETYPE_PEM) != 1)
 		{
-			char	   *err = SSLerrmessage(ERR_get_error());
+			char	   *errm = SSLerrmessage(ERR_get_error());
 
 			/*
 			 * We'll try to load the file in DER (binary ASN.1) format, and if
@@ -1324,12 +1362,12 @@ initialize_SSL(PGconn *conn)
 			if (SSL_use_PrivateKey_file(conn->ssl, fnbuf, SSL_FILETYPE_ASN1) != 1)
 			{
 				libpq_append_conn_error(conn, "could not load private key file \"%s\": %s",
-										fnbuf, err);
-				SSLerrfree(err);
+										fnbuf, errm);
+				SSLerrfree(errm);
 				return -1;
 			}
 
-			SSLerrfree(err);
+			SSLerrfree(errm);
 		}
 	}
 
@@ -1337,11 +1375,11 @@ initialize_SSL(PGconn *conn)
 	if (have_cert &&
 		SSL_check_private_key(conn->ssl) != 1)
 	{
-		char	   *err = SSLerrmessage(ERR_get_error());
+		char	   *errm = SSLerrmessage(ERR_get_error());
 
 		libpq_append_conn_error(conn, "certificate does not match private key file \"%s\": %s",
-								fnbuf, err);
-		SSLerrfree(err);
+								fnbuf, errm);
+		SSLerrfree(errm);
 		return -1;
 	}
 
@@ -1420,10 +1458,10 @@ open_client_SSL(PGconn *conn)
 				}
 			case SSL_ERROR_SSL:
 				{
-					char	   *err = SSLerrmessage(ecode);
+					char	   *errm = SSLerrmessage(ecode);
 
-					libpq_append_conn_error(conn, "SSL error: %s", err);
-					SSLerrfree(err);
+					libpq_append_conn_error(conn, "SSL error: %s", errm);
+					SSLerrfree(errm);
 					switch (ERR_GET_REASON(ecode))
 					{
 							/*
@@ -1512,10 +1550,10 @@ open_client_SSL(PGconn *conn)
 	conn->peer = SSL_get_peer_certificate(conn->ssl);
 	if (conn->peer == NULL)
 	{
-		char	   *err = SSLerrmessage(ERR_get_error());
+		char	   *errm = SSLerrmessage(ERR_get_error());
 
-		libpq_append_conn_error(conn, "certificate could not be obtained: %s", err);
-		SSLerrfree(err);
+		libpq_append_conn_error(conn, "certificate could not be obtained: %s", errm);
+		SSLerrfree(errm);
 		pgtls_close(conn);
 		return PGRES_POLLING_FAILED;
 	}
@@ -1547,7 +1585,6 @@ pgtls_close(PGconn *conn)
 			SSL_free(conn->ssl);
 			conn->ssl = NULL;
 			conn->ssl_in_use = false;
-			conn->ssl_handshake_started = false;
 		}
 
 		if (conn->peer)
@@ -1795,9 +1832,6 @@ pgconn_bio_read(BIO *h, char *buf, int size)
 		}
 	}
 
-	if (res > 0)
-		conn->ssl_handshake_started = true;
-
 	return res;
 }
 
@@ -1991,20 +2025,22 @@ PQssl_passwd_cb(char *buf, int size, int rwflag, void *userdata)
 static int
 ssl_protocol_version_to_openssl(const char *protocol)
 {
+#ifndef OPENSSL_NO_TLS1
 	if (pg_strcasecmp("TLSv1", protocol) == 0)
 		return TLS1_VERSION;
+#endif
 
-#ifdef TLS1_1_VERSION
+#ifndef OPENSSL_NO_TLS1_1
 	if (pg_strcasecmp("TLSv1.1", protocol) == 0)
 		return TLS1_1_VERSION;
 #endif
 
-#ifdef TLS1_2_VERSION
+#ifndef OPENSSL_NO_TLS1_2
 	if (pg_strcasecmp("TLSv1.2", protocol) == 0)
 		return TLS1_2_VERSION;
 #endif
 
-#ifdef TLS1_3_VERSION
+#ifndef OPENSSL_NO_TLS1_3
 	if (pg_strcasecmp("TLSv1.3", protocol) == 0)
 		return TLS1_3_VERSION;
 #endif

@@ -1304,19 +1304,19 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 	 */
 	if (stream->per_buffer_data)
 	{
-		void	   *per_buffer_data;
+		void	   *prev_per_buffer_data;
 
-		per_buffer_data = get_per_buffer_data(stream,
-											  oldest_buffer_index == 0 ?
-											  stream->queue_size - 1 :
-											  oldest_buffer_index - 1);
+		prev_per_buffer_data = get_per_buffer_data(stream,
+												   oldest_buffer_index == 0 ?
+												   stream->queue_size - 1 :
+												   oldest_buffer_index - 1);
 
 #if defined(CLOBBER_FREED_MEMORY)
 		/* This also tells Valgrind the memory is "noaccess". */
-		wipe_mem(per_buffer_data, stream->per_buffer_data_size);
+		wipe_mem(prev_per_buffer_data, stream->per_buffer_data_size);
 #elif defined(USE_VALGRIND)
 		/* Tell it ourselves. */
-		VALGRIND_MAKE_MEM_NOACCESS(per_buffer_data,
+		VALGRIND_MAKE_MEM_NOACCESS(prev_per_buffer_data,
 								   stream->per_buffer_data_size);
 #endif
 	}
@@ -1408,6 +1408,27 @@ read_stream_resume(ReadStream *stream)
 }
 
 /*
+ * Stop using a buffer access strategy for reads from this stream.
+ *
+ * This clears the strategy for all of the stream's ReadBuffersOperations,
+ * including those with in-progress IOs. The completion of an IO whose
+ * strategy was cleared while it was in flight may have a small amount of its
+ * read time attributed to IOCONTEXT_NORMAL instead of the strategy's
+ * IOContext, because WaitReadBuffers() derives the IOContext from the (now
+ * cleared) strategy. This is bounded by the stream's look-ahead window and
+ * happens at most once, when the strategy is first cleared, so it is not worth
+ * the complexity of preserving the original IOContext for those IOs.
+ *
+ * Note that the caller is responsible for freeing the strategy's memory.
+ */
+void
+read_stream_clear_strategy(ReadStream *stream)
+{
+	for (int i = 0; i < stream->max_ios; ++i)
+		stream->ios[i].op.strategy = NULL;
+}
+
+/*
  * Reset a read stream by releasing any queued up buffers, allowing the stream
  * to be used again for different blocks.  This can be used to clear an
  * end-of-stream condition and start again, or to throw away blocks that were
@@ -1422,6 +1443,9 @@ read_stream_reset(ReadStream *stream)
 	/* Stop looking ahead. */
 	stream->readahead_distance = 0;
 	stream->combine_distance = 0;
+
+	/* Forget pending reads. */
+	stream->pending_read_nblocks = 0;
 
 	/* Forget buffered block number and fast path state. */
 	stream->buffered_blocknum = InvalidBlockNumber;

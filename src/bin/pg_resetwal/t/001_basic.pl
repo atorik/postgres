@@ -133,6 +133,10 @@ command_fails_like(
 	qr/error: invalid argument for option -o/,
 	'fails with incorrect -o option');
 command_fails_like(
+	[ 'pg_resetwal', '-o' => '-1', $node->data_dir ],
+	qr/error: invalid argument for option -o/,
+	'fails with -o value -1');
+command_fails_like(
 	[ 'pg_resetwal', '-o' => '0', $node->data_dir ],
 	qr/must not be 0/,
 	'fails with -o value 0');
@@ -145,6 +149,10 @@ command_fails_like(
 	[ 'pg_resetwal', '-O' => '-1', $node->data_dir ],
 	qr/error: invalid argument for option -O/,
 	'fails with -O value -1');
+command_fails_like(
+	[ 'pg_resetwal', '-O' => '0', $node->data_dir ],
+	qr/must not be 0/,
+	'fails with -O value 0');
 # --wal-segsize
 command_fails_like(
 	[ 'pg_resetwal', '--wal-segsize' => 'foo', $node->data_dir ],
@@ -256,5 +264,22 @@ command_like(
 
 $node->start;
 ok(1, 'server started after reset');
+
+# Checks for 8 bytes OIDs.
+$node->stop;
+my $new_nextoid = "4295067296";    # 2^32 + 100,000
+command_ok([ 'pg_resetwal', '--next-oid' => $new_nextoid, $node->data_dir ],
+	'runs with --next-oid value above 2^32');
+command_like(
+	[ 'pg_resetwal', '--dry-run', $node->data_dir ],
+	qr/^Latest checkpoint's NextOID: *$new_nextoid$/m,
+	'8-byte --next-oid value preserved in pg_control');
+$node->start;
+is( $node->safe_psql(
+		'postgres',
+		"SELECT next_oid >= '$new_nextoid'::oid8 FROM pg_control_checkpoint()"
+	),
+	't',
+	'new 8-byte OID reported');
 
 done_testing();

@@ -249,8 +249,8 @@ attribute_statistics_update_internal(Oid reloid,
 	bool		result = true;
 
 	/*
-	 * Check argument sanity. If some arguments are unusable, emit a WARNING
-	 * and set the corresponding argument to NULL in fcinfo.
+	 * Check argument sanity.  If some arguments are unusable, emit a WARNING
+	 * and skip the corresponding statistics kind, reporting back a failure.
 	 */
 
 	if (!stats_check_arg_array(fcinfo, attarginfo, MOST_COMMON_FREQS_ARG))
@@ -498,11 +498,19 @@ attribute_statistics_update_internal(Oid reloid,
 	{
 		bool		converted = false;
 		Datum		stavalues;
+		Oid			bounds_typid = atttypid;
+
+		/*
+		 * If it's a multirange, step down to the range type, as is done by
+		 * multirange_typanalyze().
+		 */
+		if (type_is_multirange(atttypid))
+			bounds_typid = get_multirange_range(atttypid);
 
 		stavalues = statatt_build_stavalues("range_bounds_histogram",
 											&array_in_fn,
 											PG_GETARG_DATUM(RANGE_BOUNDS_HISTOGRAM_ARG),
-											atttypid, atttypmod,
+											bounds_typid, atttypmod,
 											&converted);
 
 		if (converted &&

@@ -146,7 +146,7 @@ RelationBuildPartitionDesc(Relation rel, bool omit_detached)
 	int			i,
 				nparts;
 	bool		retried = false;
-	PartitionKey key = RelationGetPartitionKey(rel);
+	PartitionKey partkey = RelationGetPartitionKey(rel);
 	MemoryContext new_pdcxt;
 	MemoryContext oldcxt;
 	int		   *mapping;
@@ -171,9 +171,9 @@ retry:
 	/* Allocate working arrays for OIDs, leaf flags, and boundspecs. */
 	if (nparts > 0)
 	{
-		oids = (Oid *) palloc(nparts * sizeof(Oid));
-		is_leaf = (bool *) palloc(nparts * sizeof(bool));
-		boundspecs = palloc(nparts * sizeof(PartitionBoundSpec *));
+		oids = palloc_array(Oid, nparts);
+		is_leaf = palloc_array(bool, nparts);
+		boundspecs = palloc_array(PartitionBoundSpec *, nparts);
 	}
 
 	/* Collect bound spec nodes for each partition. */
@@ -226,15 +226,15 @@ retry:
 		{
 			Relation	pg_class;
 			SysScanDesc scan;
-			ScanKeyData key[1];
+			ScanKeyData skey[1];
 
 			pg_class = table_open(RelationRelationId, AccessShareLock);
-			ScanKeyInit(&key[0],
+			ScanKeyInit(&skey[0],
 						Anum_pg_class_oid,
 						BTEqualStrategyNumber, F_OIDEQ,
 						ObjectIdGetDatum(inhrelid));
 			scan = systable_beginscan(pg_class, ClassOidIndexId, true,
-									  NULL, 1, key);
+									  NULL, 1, skey);
 
 			/*
 			 * We could get one tuple from the scan (the normal case), or zero
@@ -308,7 +308,7 @@ retry:
 	 * This could fail, but we haven't done any damage if so.
 	 */
 	if (nparts > 0)
-		boundinfo = partition_bounds_create(boundspecs, nparts, key, &mapping);
+		boundinfo = partition_bounds_create(boundspecs, nparts, partkey, &mapping);
 
 	/*
 	 * Now build the actual relcache partition descriptor, copying all the
@@ -329,15 +329,14 @@ retry:
 	if (nparts > 0)
 	{
 		oldcxt = MemoryContextSwitchTo(new_pdcxt);
-		partdesc->boundinfo = partition_bounds_copy(boundinfo, key);
+		partdesc->boundinfo = partition_bounds_copy(boundinfo, partkey);
 
 		/* Initialize caching fields for speeding up ExecFindPartition */
 		partdesc->last_found_datum_index = -1;
-		partdesc->last_found_part_index = -1;
 		partdesc->last_found_count = 0;
 
-		partdesc->oids = (Oid *) palloc(nparts * sizeof(Oid));
-		partdesc->is_leaf = (bool *) palloc(nparts * sizeof(bool));
+		partdesc->oids = palloc_array(Oid, nparts);
+		partdesc->is_leaf = palloc_array(bool, nparts);
 
 		/*
 		 * Assign OIDs from the original array into mapped indexes of the

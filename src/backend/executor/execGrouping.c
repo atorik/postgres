@@ -72,7 +72,7 @@ execTuplesMatchPrepare(TupleDesc desc,
 	if (numCols == 0)
 		return NULL;
 
-	eqFunctions = (Oid *) palloc(numCols * sizeof(Oid));
+	eqFunctions = palloc_array(Oid, numCols);
 
 	/* lookup equality functions */
 	for (i = 0; i < numCols; i++)
@@ -104,8 +104,8 @@ execTuplesHashPrepare(int numCols,
 {
 	int			i;
 
-	*eqFuncOids = (Oid *) palloc(numCols * sizeof(Oid));
-	*hashFunctions = (FmgrInfo *) palloc(numCols * sizeof(FmgrInfo));
+	*eqFuncOids = palloc_array(Oid, numCols);
+	*hashFunctions = palloc_array(FmgrInfo, numCols);
 
 	for (i = 0; i < numCols; i++)
 	{
@@ -232,7 +232,6 @@ BuildTupleHashTable(PlanState *parent,
 	hashtable->tuplescxt = tuplescxt;
 	hashtable->tempcxt = tempcxt;
 	hashtable->additionalsize = additionalsize;
-	hashtable->tableslot = NULL;	/* will be made on first lookup */
 	hashtable->inputslot = NULL;
 	hashtable->in_hash_expr = NULL;
 	hashtable->cur_eq_func = NULL;
