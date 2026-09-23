@@ -14,6 +14,7 @@
 #include "postgres.h"
 
 #include "access/xact.h"
+#include "common/pg_prng.h"
 #include "commands/explain.h"
 #include "commands/explain_format.h"
 #include "commands/explain_running.h"
@@ -24,13 +25,243 @@
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/procsignal.h"
+#include "storage/shmem.h"
+#include "storage/spin.h"
+#include "storage/subsystems.h"
 #include "utils/backend_status.h"
 #include "utils/injection_point.h"
+
+typedef uint64 LogQueryPlanRequestId;
+
+typedef enum LogQueryPlanRequestState
+{
+	LOG_QUERY_PLAN_REQUEST_IDLE = 0,
+	LOG_QUERY_PLAN_REQUEST_PENDING,
+	LOG_QUERY_PLAN_REQUEST_PROCESSING,
+} LogQueryPlanRequestState;
+
+typedef struct LogQueryPlanRequest
+{
+	LogQueryPlanRequestId request_id;
+	pid_t		target_pid;
+	/* Future versions may add fields here to carry EXPLAIN options. */
+} LogQueryPlanRequest;
+
+typedef struct LogQueryPlanRequestSlot
+{
+	/* All fields below are protected by mutex. */
+	slock_t		mutex;
+	LogQueryPlanRequestState state;
+	LogQueryPlanRequest request;
+} LogQueryPlanRequestSlot;
+
+StaticAssertDecl(sizeof(LogQueryPlanRequestSlot) <= 64,
+				 "query plan request slot must be no larger than 64 bytes");
+
+static LogQueryPlanRequestSlot *LogQueryPlanRequestSlots;
+
+static void LogQueryPlanShmemRequest(void *arg);
+static void LogQueryPlanShmemInit(void *arg);
+
+const ShmemCallbacks LogQueryPlanShmemCallbacks = {
+	.request_fn = LogQueryPlanShmemRequest,
+	.init_fn = LogQueryPlanShmemInit,
+};
 
 /* Is plan node wrapping for query plan logging currently in progress? */
 static bool WrapNodesInProgress = false;
 
+/* Request being processed by this backend. */
+static bool LogQueryPlanRequestActive = false;
+static LogQueryPlanRequest ActiveLogQueryPlanRequest;
+
 static bool wrapExecProcNode(PlanState *ps, void *context);
+static LogQueryPlanRequestId GenerateLogQueryPlanRequestId(void);
+static bool ReserveLogQueryPlanRequest(ProcNumber proc_number, pid_t pid,
+									   LogQueryPlanRequestId request_id);
+static bool RollbackLogQueryPlanRequest(ProcNumber proc_number, pid_t pid,
+										LogQueryPlanRequestId request_id);
+static bool TakeLogQueryPlanRequest(void);
+static void FinishLogQueryPlanRequest(void);
+
+static void
+LogQueryPlanShmemRequest(void *arg)
+{
+	ShmemRequestStruct(.name = "Log Query Plan Request Slots",
+					   .size = mul_size(sizeof(LogQueryPlanRequestSlot), MaxBackends),
+					   .ptr = (void **) &LogQueryPlanRequestSlots,
+		);
+}
+
+static void
+LogQueryPlanShmemInit(void *arg)
+{
+	for (int i = 0; i < MaxBackends; i++)
+	{
+		LogQueryPlanRequestSlot *slot = &LogQueryPlanRequestSlots[i];
+
+		SpinLockInit(&slot->mutex);
+		slot->state = LOG_QUERY_PLAN_REQUEST_IDLE;
+		MemSet(&slot->request, 0, sizeof(slot->request));
+	}
+}
+
+/*
+ * Initialize the request slot assigned to a newly-started process.
+ *
+ * This is called before InitProcessPhase2() publishes the process in the
+ * ProcArray, so no other backend can yet install a query plan request for
+ * this process.
+ */
+void
+LogQueryPlanRequestSlotInit(ProcNumber proc_number, pid_t pid)
+{
+	LogQueryPlanRequestSlot *slot;
+	pid_t		old_pid = 0;
+
+	Assert(proc_number >= 0 && proc_number < MaxBackends);
+	slot = &LogQueryPlanRequestSlots[proc_number];
+
+	SpinLockAcquire(&slot->mutex);
+	if (slot->state != LOG_QUERY_PLAN_REQUEST_IDLE &&
+		slot->request.target_pid != pid)
+		old_pid = slot->request.target_pid;
+	slot->state = LOG_QUERY_PLAN_REQUEST_IDLE;
+	MemSet(&slot->request, 0, sizeof(slot->request));
+	SpinLockRelease(&slot->mutex);
+
+	if (old_pid != 0)
+		elog(LOG, "process %d taking over query plan request slot %d owned by process %d",
+			 (int) pid, proc_number, (int) old_pid);
+}
+
+/*
+ * Release a request slot when its process exits.
+ *
+ * Do not throw an error here, since this is called during process exit.
+ */
+void
+LogQueryPlanRequestSlotCleanup(ProcNumber proc_number)
+{
+	LogQueryPlanRequestSlot *slot;
+
+	Assert(proc_number >= 0 && proc_number < MaxBackends);
+	slot = &LogQueryPlanRequestSlots[proc_number];
+
+	SpinLockAcquire(&slot->mutex);
+	slot->state = LOG_QUERY_PLAN_REQUEST_IDLE;
+	MemSet(&slot->request, 0, sizeof(slot->request));
+	SpinLockRelease(&slot->mutex);
+}
+
+/*
+ * Generate an opaque request identifier.
+ *
+ * The identifier allocation policy is intentionally separate from the IPC
+ * mechanism and can be replaced without changing request transport.
+ */
+static LogQueryPlanRequestId
+GenerateLogQueryPlanRequestId(void)
+{
+	return pg_prng_uint64(&pg_global_prng_state);
+}
+
+static bool
+ReserveLogQueryPlanRequest(ProcNumber proc_number, pid_t pid,
+						   LogQueryPlanRequestId request_id)
+{
+	LogQueryPlanRequestSlot *slot;
+	bool		reserved = false;
+
+	Assert(proc_number >= 0 && proc_number < MaxBackends);
+	slot = &LogQueryPlanRequestSlots[proc_number];
+
+	SpinLockAcquire(&slot->mutex);
+	if (slot->state == LOG_QUERY_PLAN_REQUEST_IDLE)
+	{
+		slot->request.request_id = request_id;
+		slot->request.target_pid = pid;
+		slot->state = LOG_QUERY_PLAN_REQUEST_PENDING;
+		reserved = true;
+	}
+	SpinLockRelease(&slot->mutex);
+
+	return reserved;
+}
+
+static bool
+RollbackLogQueryPlanRequest(ProcNumber proc_number, pid_t pid,
+							LogQueryPlanRequestId request_id)
+{
+	LogQueryPlanRequestSlot *slot;
+	bool		rolled_back = false;
+
+	Assert(proc_number >= 0 && proc_number < MaxBackends);
+	slot = &LogQueryPlanRequestSlots[proc_number];
+
+	SpinLockAcquire(&slot->mutex);
+	if (slot->state == LOG_QUERY_PLAN_REQUEST_PENDING &&
+		slot->request.target_pid == pid &&
+		slot->request.request_id == request_id)
+	{
+		slot->state = LOG_QUERY_PLAN_REQUEST_IDLE;
+		MemSet(&slot->request, 0, sizeof(slot->request));
+		rolled_back = true;
+	}
+	SpinLockRelease(&slot->mutex);
+
+	return rolled_back;
+}
+
+static bool
+TakeLogQueryPlanRequest(void)
+{
+	LogQueryPlanRequestSlot *slot;
+	bool		found = false;
+
+	Assert(MyProcNumber >= 0 && MyProcNumber < MaxBackends);
+	Assert(!LogQueryPlanRequestActive);
+	slot = &LogQueryPlanRequestSlots[MyProcNumber];
+
+	SpinLockAcquire(&slot->mutex);
+	if (slot->state == LOG_QUERY_PLAN_REQUEST_PENDING &&
+		slot->request.target_pid == MyProcPid)
+	{
+		ActiveLogQueryPlanRequest = slot->request;
+		LogQueryPlanRequestActive = true;
+		slot->state = LOG_QUERY_PLAN_REQUEST_PROCESSING;
+		found = true;
+	}
+	SpinLockRelease(&slot->mutex);
+
+	return found;
+}
+
+static void
+FinishLogQueryPlanRequest(void)
+{
+	LogQueryPlanRequestSlot *slot;
+
+	if (!LogQueryPlanRequestActive)
+		return;
+
+	Assert(MyProcNumber >= 0 && MyProcNumber < MaxBackends);
+	slot = &LogQueryPlanRequestSlots[MyProcNumber];
+
+	SpinLockAcquire(&slot->mutex);
+	if (slot->state == LOG_QUERY_PLAN_REQUEST_PROCESSING &&
+		slot->request.target_pid == MyProcPid &&
+		slot->request.request_id == ActiveLogQueryPlanRequest.request_id)
+	{
+		slot->state = LOG_QUERY_PLAN_REQUEST_IDLE;
+		MemSet(&slot->request, 0, sizeof(slot->request));
+	}
+	SpinLockRelease(&slot->mutex);
+
+	LogQueryPlanRequestActive = false;
+	MemSet(&ActiveLogQueryPlanRequest, 0,
+		   sizeof(ActiveLogQueryPlanRequest));
+}
 
 /*
  * Wrap all the underlying ExecProcNode with ExecProcNodeFirst.
@@ -81,11 +312,11 @@ LogQueryPlan(void)
 
 	if (queryDesc == NULL)
 	{
-		ereport(LOG_SERVER_ONLY,
-				errmsg("query plan logging was requested but there was no opportunity to do it"));
-		LogQueryPlanPending = false;
+		LogQueryPlanNoOpportunity(0);
 		return;
 	}
+
+	Assert(LogQueryPlanRequestActive);
 
 	cxt = AllocSetContextCreate(CurrentMemoryContext,
 								"log_query_plan temporary context",
@@ -100,17 +331,44 @@ LogQueryPlan(void)
 		ExplainStringAssemble(es, queryDesc, es->format, false, -1);
 
 		ereport(LOG_SERVER_ONLY,
-				errmsg("query and its plan for queryid " INT64_FORMAT " running on backend with PID %d are:\n%s",
-					   queryDesc->plannedstmt->queryId, MyProcPid,
+				errmsg("query and its plan for queryid " INT64_FORMAT " requested by request ID " UINT64_FORMAT " running on backend with PID %d are:\n%s",
+					   queryDesc->plannedstmt->queryId,
+					   ActiveLogQueryPlanRequest.request_id, MyProcPid,
 					   es->str->data));
 	}
 	PG_FINALLY();
 	{
 		MemoryContextSwitchTo(old_cxt);
 		MemoryContextDelete(cxt);
+		FinishLogQueryPlanRequest();
 		LogQueryPlanPending = false;
 	}
 	PG_END_TRY();
+}
+
+/*
+ * Log that an active request could not be completed, and release its slot.
+ */
+void
+LogQueryPlanNoOpportunity(uint64 query_id)
+{
+	if (!LogQueryPlanRequestActive && !TakeLogQueryPlanRequest())
+	{
+		LogQueryPlanPending = false;
+		return;
+	}
+
+	if (query_id != 0)
+		ereport(LOG_SERVER_ONLY,
+				errmsg("query plan logging request " UINT64_FORMAT " could not be completed because there was no opportunity to log the plan for queryid " INT64_FORMAT,
+					   ActiveLogQueryPlanRequest.request_id, query_id));
+	else
+		ereport(LOG_SERVER_ONLY,
+				errmsg("query plan logging request " UINT64_FORMAT " could not be completed because there was no opportunity to log the plan",
+					   ActiveLogQueryPlanRequest.request_id));
+
+	FinishLogQueryPlanRequest();
+	LogQueryPlanPending = false;
 }
 
 /*
@@ -125,16 +383,8 @@ LogQueryPlan(void)
 void
 ProcessLogQueryPlanInterrupt(void)
 {
-	QueryDesc  *querydesc = GetCurrentQueryDesc();
-
-	/* If current query has already finished, we can do nothing but exit */
-	if (querydesc == NULL)
-	{
-		ereport(LOG_SERVER_ONLY,
-				errmsg("query plan logging was requested but there was no opportunity to do it"));
-		LogQueryPlanPending = false;
-		return;
-	}
+	QueryDesc  *querydesc;
+	bool		wrapped = false;
 
 	/*
 	 * Exit immediately if wrapping plan is already in progress. This prevents
@@ -143,6 +393,21 @@ ProcessLogQueryPlanInterrupt(void)
 	 */
 	if (WrapNodesInProgress)
 		return;
+
+	if (!TakeLogQueryPlanRequest())
+	{
+		LogQueryPlanPending = false;
+		return;
+	}
+
+	querydesc = GetCurrentQueryDesc();
+
+	/* If current query has already finished, we can do nothing but exit */
+	if (querydesc == NULL)
+	{
+		LogQueryPlanNoOpportunity(0);
+		return;
+	}
 
 	WrapNodesInProgress = true;
 
@@ -155,10 +420,16 @@ ProcessLogQueryPlanInterrupt(void)
 		 * when LogQueryPlanPending is true.
 		 */
 		(void) wrapExecProcNode(querydesc->planstate, NULL);
+		wrapped = true;
 	}
 	PG_FINALLY();
 	{
 		WrapNodesInProgress = false;
+		if (!wrapped)
+		{
+			FinishLogQueryPlanRequest();
+			LogQueryPlanPending = false;
+		}
 	}
 	PG_END_TRY();
 }
@@ -176,7 +447,9 @@ pg_log_query_plan(PG_FUNCTION_ARGS)
 {
 	int			pid = PG_GETARG_INT32(0);
 	PGPROC	   *proc;
+	ProcNumber	procNumber;
 	PgBackendStatus *be_status = NULL;
+	LogQueryPlanRequestId request_id;
 
 	proc = BackendPidGetProc(pid);
 
@@ -201,8 +474,25 @@ pg_log_query_plan(PG_FUNCTION_ARGS)
 		PG_RETURN_BOOL(false);
 	}
 
-	if (SendProcSignal(pid, PROCSIG_LOG_QUERY_PLAN, proc->vxid.procNumber) < 0)
+	procNumber = GetNumberFromPGProc(proc);
+	request_id = GenerateLogQueryPlanRequestId();
+
+	if (!ReserveLogQueryPlanRequest(procNumber, pid, request_id))
 	{
+		ereport(WARNING,
+				(errmsg("query plan request for PID %d is already pending", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
+	INJECTION_POINT("log-query-plan-before-signal", NULL);
+
+	if (SendProcSignal(pid, PROCSIG_LOG_QUERY_PLAN, procNumber) < 0)
+	{
+		int			save_errno = errno;
+
+		/* The signal was not delivered, so undo our reservation if possible. */
+		(void) RollbackLogQueryPlanRequest(procNumber, pid, request_id);
+		errno = save_errno;
 		ereport(WARNING,
 				(errmsg("could not send signal to process %d: %m", pid)));
 		PG_RETURN_BOOL(false);

@@ -43,6 +43,7 @@ $node->safe_psql('postgres', 'CREATE EXTENSION injection_points;');
 
 my $psql_session1 = $node->background_psql('postgres');
 my $psql_session2 = $node->background_psql('postgres');
+my $psql_session3 = $node->background_psql('postgres');
 
 my $session1_pid = $psql_session1->query_safe("select pg_backend_pid()");
 
@@ -71,12 +72,42 @@ $psql_session1->query_until(
 # Confirm that session1 is actually waiting on the advisory lock.
 $node->wait_for_event('client backend', 'advisory');
 
-# Run pg_log_query_plan().
-$psql_session2->query_safe("SELECT pg_log_query_plan($session1_pid);");
+# Stop the sender after publishing the request but before sending the signal.
+$psql_session2->query_safe(
+	qq[
+	SELECT injection_points_set_local();
+	SELECT injection_points_attach('log-query-plan-before-signal', 'wait');
+]);
+$psql_session2->query_until(
+	qr/sending_request/,
+	"\\echo sending_request\nSELECT pg_log_query_plan($session1_pid);\n");
+$node->wait_for_event('client backend', 'log-query-plan-before-signal');
+
+my ($pending_result, $pending_error) =
+  $psql_session3->query("SELECT pg_log_query_plan($session1_pid);");
+is($pending_result, 'f',
+	'a second request is rejected while the first is pending');
+ok($pending_error, 'the pending request reports a busy warning');
+
+$node->safe_psql(
+	'postgres',
+	qq[
+	SELECT injection_points_wakeup('log-query-plan-before-signal');
+	SELECT injection_points_detach('log-query-plan-before-signal');
+]);
+is($psql_session2->query_safe(''), 't', 'the first request is accepted');
 
 # Ensure that the signal of pg_log_query_plan() is actually
 # received by confirming session1 is waiting on the injection point.
 $node->wait_for_event('client backend', 'log-query-interrupt');
+
+# A target backend accepts at most one outstanding request.  Confirm that a
+# second request cannot overwrite the request being processed.
+my ($second_result, $second_error) =
+  $psql_session3->query("SELECT pg_log_query_plan($session1_pid);");
+is($second_result, 'f',
+	'a second request is rejected while the first is being processed');
+ok($second_error, 'the processing request reports a busy warning');
 
 # Commit the session 2 to release the advisory lock.
 $psql_session2->query_safe("COMMIT;");
@@ -91,12 +122,23 @@ $psql_session2->query_safe(
 ]);
 
 $node->wait_for_log(
-	"running on backend with PID $session1_pid ",
+	qr/request ID [0-9]+ running on backend with PID $session1_pid /,
+	$log_offset);
+
+# The completed request must release the slot.  At this point session1 is
+# idle, so the accepted request cannot produce a plan, but its failure log
+# must still identify the request.
+$log_offset = -s $node->logfile;
+is($psql_session2->query_safe("SELECT pg_log_query_plan($session1_pid);"),
+	't', 'a new request is accepted after the first request completes');
+$node->wait_for_log(
+	qr/query plan logging request [0-9]+ could not be completed because there was no opportunity to log the plan/,
 	$log_offset);
 
 $psql_session1->query_safe("COMMIT;");
 
 ok($psql_session1->quit);
 ok($psql_session2->quit);
+ok($psql_session3->quit);
 
 done_testing();

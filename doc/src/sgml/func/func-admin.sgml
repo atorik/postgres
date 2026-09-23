@@ -210,6 +210,17 @@
         reached, no plan may be logged.
        </para>
        <para>
+        A backend accepts at most one outstanding plan logging request.
+        The function returns <literal>false</literal> with a warning if a
+        request for the same backend is already pending or being processed.
+        Each accepted request is assigned a request identifier, which is
+        included in the server log message reporting either the plan or that
+        the plan could not be logged.  A <literal>true</literal> result means
+        that the request was sent, not that logging has completed.  No
+        terminal log message is guaranteed if the target backend exits while
+        handling the request.
+       </para>
+       <para>
         If the target backend is executing a nested query when it
         processes the request, only the plan of the innermost
         executing query is logged.

@@ -280,6 +280,13 @@ CleanupProcSignalState(int status, Datum arg)
 	SpinLockRelease(&slot->pss_mutex);
 
 	ConditionVariableBroadcast(&slot->pss_barrierCV);
+
+	/*
+	 * Query plan requests use ProcSignal for notification, so release the
+	 * associated request slot together with the ProcSignal slot.
+	 */
+	if (MyProcNumber < MaxBackends)
+		LogQueryPlanRequestSlotCleanup(MyProcNumber);
 }
 
 /*
