@@ -1442,9 +1442,9 @@ create_append_path(PlannerInfo *root,
 	 * child's pathkeys if any, overriding whatever the caller might've said.
 	 * Furthermore, if the child's parallel awareness matches the Append's,
 	 * then the Append is a no-op and will be discarded later (in setrefs.c).
-	 * Then we can inherit the child's size and cost too, effectively charging
-	 * zero for the Append.  Otherwise, we must do the normal costsize
-	 * calculation.
+	 * Then we can inherit the child's size, cost and disabled-node count too,
+	 * effectively charging zero for the Append.  Otherwise, we must do the
+	 * normal costsize calculation.
 	 */
 	if (list_length(pathnode->subpaths) == 1)
 	{
@@ -1453,6 +1453,7 @@ create_append_path(PlannerInfo *root,
 		if (child->parallel_aware == parallel_aware)
 		{
 			pathnode->path.rows = child->rows;
+			pathnode->path.disabled_nodes = child->disabled_nodes;
 			pathnode->path.startup_cost = child->startup_cost;
 			pathnode->path.total_cost = child->total_cost;
 		}
@@ -3720,7 +3721,7 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 						List *withCheckOptionLists, List *returningLists,
 						List *rowMarks, OnConflictExpr *onconflict,
 						List *mergeActionLists, List *mergeJoinConditions,
-						ForPortionOfExpr *forPortionOf, int epqParam)
+						int epqParam)
 {
 	ModifyTablePath *pathnode = makeNode(ModifyTablePath);
 
@@ -3786,7 +3787,6 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->returningLists = returningLists;
 	pathnode->rowMarks = rowMarks;
 	pathnode->onconflict = onconflict;
-	pathnode->forPortionOf = forPortionOf;
 	pathnode->epqParam = epqParam;
 	pathnode->mergeActionLists = mergeActionLists;
 	pathnode->mergeJoinConditions = mergeJoinConditions;

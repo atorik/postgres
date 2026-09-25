@@ -90,11 +90,7 @@ typedef struct reduce_outer_joins_pass1_state
 	bool		contains_outer; /* does subtree contain outer join(s)? */
 	Relids		nullable_rels;	/* base relids that are nullable within this
 								 * subtree */
-	List	   *safe_quals;		/* quals (implicit-AND) that are applied to
-								 * every output row of this subtree, and so
-								 * can be used to prove non-nullability of its
-								 * outputs.  May be shared with a child
-								 * state's list; don't modify in place. */
+	Node	   *jtnode;			/* the jointree node this state describes */
 	List	   *sub_states;		/* List of states for subtree components */
 } reduce_outer_joins_pass1_state;
 
@@ -102,6 +98,7 @@ typedef struct reduce_outer_joins_pass2_state
 {
 	Relids		inner_reduced;	/* OJ relids reduced to plain inner joins */
 	List	   *partial_reduced;	/* List of partially reduced FULL joins */
+	Relids		anti_reduced;	/* OJ relids reduced to antijoins */
 } reduce_outer_joins_pass2_state;
 
 typedef struct reduce_outer_joins_partial_state
@@ -168,6 +165,9 @@ static void reduce_outer_joins_pass2(Node *jtnode,
 									 List *forced_null_vars);
 static void report_reduced_full_join(reduce_outer_joins_pass2_state *state2,
 									 int rtindex, Relids relids);
+static void remove_redundant_nullability_quals(Node *jtnode,
+											   Relids antijoins);
+static Node *strip_redundant_nullability_quals(Node *quals, Relids antijoins);
 static bool forced_null_var_is_attnotnull(PlannerInfo *root,
 										  List *forced_null_vars,
 										  reduce_outer_joins_pass1_state *state);
@@ -1661,10 +1661,6 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 				case RTE_GROUP:
 					/* these can't contain any lateral references */
 					break;
-				case RTE_GRAPH_TABLE:
-					/* shouldn't happen here */
-					Assert(false);
-					break;
 			}
 		}
 	}
@@ -2727,10 +2723,6 @@ replace_vars_in_jointree(Node *jtnode,
 						/* these shouldn't be marked LATERAL */
 						Assert(false);
 						break;
-					case RTE_GRAPH_TABLE:
-						/* shouldn't happen here */
-						Assert(false);
-						break;
 				}
 			}
 		}
@@ -3246,9 +3238,8 @@ flatten_simple_union_all(PlannerInfo *root)
  * due to lower-level outer joins, then only null-extended rows could pass
  * the upper WHERE, and we can conclude that what the query is really
  * specifying is an anti-semijoin.  We change the join type from JOIN_LEFT
- * to JOIN_ANTI.  The IS NULL clause then becomes redundant, and must be
- * removed to prevent bogus selectivity calculations, but we leave it to
- * distribute_qual_to_rels to get rid of such clauses.
+ * to JOIN_ANTI.  The IS NULL clause then becomes redundant, and is removed
+ * at the end of this phase; see remove_redundant_nullability_quals.
  *
  * A whole-row Var works too.  "WHERE b IS NULL" in row-format semantics is
  * true when b's whole-row value is NULL or when every column of b is NULL;
@@ -3296,6 +3287,7 @@ reduce_outer_joins(PlannerInfo *root)
 
 	state2.inner_reduced = NULL;
 	state2.partial_reduced = NIL;
+	state2.anti_reduced = NULL;
 
 	reduce_outer_joins_pass2((Node *) root->parse->jointree,
 							 state1, &state2,
@@ -3338,6 +3330,74 @@ reduce_outer_joins(PlannerInfo *root)
 								  full_join_relids,
 								  statep->unreduced_side);
 	}
+
+	/*
+	 * Finally, remove any quals made redundant by reducing outer joins to
+	 * antijoins.
+	 */
+	if (!bms_is_empty(state2.anti_reduced))
+		remove_redundant_nullability_quals((Node *) root->parse->jointree,
+										   state2.anti_reduced);
+}
+
+/*
+ * remove_redundant_nullability_quals
+ *		Remove quals made redundant by reducing outer joins to antijoins.
+ *
+ * An IS NULL qual on a Var from the nullable side of a lower antijoin is
+ * necessarily true.  Keeping such a qual would not be wrong, but it would
+ * generate bogus selectivity estimates, and it could prevent join removal
+ * from later removing the rel(s) it references.
+ */
+static void
+remove_redundant_nullability_quals(Node *jtnode, Relids antijoins)
+{
+	if (jtnode == NULL)
+		return;
+	if (IsA(jtnode, RangeTblRef))
+	{
+		/* nothing to do here */
+	}
+	else if (IsA(jtnode, FromExpr))
+	{
+		FromExpr   *f = (FromExpr *) jtnode;
+		ListCell   *l;
+
+		foreach(l, f->fromlist)
+			remove_redundant_nullability_quals(lfirst(l), antijoins);
+		f->quals = strip_redundant_nullability_quals(f->quals, antijoins);
+	}
+	else if (IsA(jtnode, JoinExpr))
+	{
+		JoinExpr   *j = (JoinExpr *) jtnode;
+
+		remove_redundant_nullability_quals(j->larg, antijoins);
+		remove_redundant_nullability_quals(j->rarg, antijoins);
+		j->quals = strip_redundant_nullability_quals(j->quals, antijoins);
+	}
+	else
+		elog(ERROR, "unrecognized jointree node type: %d",
+			 (int) nodeTag(jtnode));
+}
+
+/*
+ * strip_redundant_nullability_quals
+ *		Strip redundant IS NULL quals from one implicit-AND qual list.
+ */
+static Node *
+strip_redundant_nullability_quals(Node *quals, Relids antijoins)
+{
+	List	   *newquals = NIL;
+
+	foreach_ptr(Node, clause, castNode(List, quals))
+	{
+		Var		   *var = find_forced_null_var(clause);
+
+		if (var && bms_overlap(var->varnullingrels, antijoins))
+			continue;
+		newquals = lappend(newquals, clause);
+	}
+	return (Node *) newquals;
 }
 
 /*
@@ -3354,7 +3414,7 @@ reduce_outer_joins_pass1(Node *jtnode)
 	result->relids = NULL;
 	result->contains_outer = false;
 	result->nullable_rels = NULL;
-	result->safe_quals = NIL;
+	result->jtnode = jtnode;
 	result->sub_states = NIL;
 
 	if (jtnode == NULL)
@@ -3380,15 +3440,8 @@ reduce_outer_joins_pass1(Node *jtnode)
 			result->contains_outer |= sub_state->contains_outer;
 			result->nullable_rels = bms_add_members(result->nullable_rels,
 													sub_state->nullable_rels);
-			/* All of a FROM item's safe quals are safe at this level too */
-			result->safe_quals = list_concat(result->safe_quals,
-											 sub_state->safe_quals);
 			result->sub_states = lappend(result->sub_states, sub_state);
 		}
-		/* ... and so are this FromExpr's own WHERE quals */
-		if (f->quals)
-			result->safe_quals = list_concat(result->safe_quals,
-											 (List *) f->quals);
 	}
 	else if (IsA(jtnode, JoinExpr))
 	{
@@ -3411,54 +3464,27 @@ reduce_outer_joins_pass1(Node *jtnode)
 		{
 			case JOIN_INNER:
 			case JOIN_SEMI:
-
-				/*
-				 * No new nullability; propagate state from children.  Both
-				 * children's quals, plus our own ON quals, hold for every
-				 * output row.  (At a semijoin the RHS's quals are included
-				 * too, harmlessly, since nothing above can reference its
-				 * Vars.)
-				 */
+				/* No new nullability; propagate state from children */
 				result->contains_outer = left_state->contains_outer ||
 					right_state->contains_outer;
 				result->nullable_rels = bms_union(left_state->nullable_rels,
 												  right_state->nullable_rels);
-				result->safe_quals = list_concat_copy(left_state->safe_quals,
-													  right_state->safe_quals);
-				if (j->quals)
-					result->safe_quals = list_concat(result->safe_quals,
-													 (List *) j->quals);
 				break;
 			case JOIN_LEFT:
 			case JOIN_ANTI:
-
-				/*
-				 * RHS is nullable; LHS keeps existing status.  A
-				 * null-extended row satisfies neither the ON quals nor the
-				 * RHS's own quals, so only the LHS's quals survive.
-				 */
+				/* RHS is nullable; LHS keeps existing status */
 				result->contains_outer = true;
 				result->nullable_rels = bms_union(left_state->nullable_rels,
 												  right_state->relids);
-				result->safe_quals = left_state->safe_quals;
 				break;
 			case JOIN_RIGHT:
-
-				/*
-				 * LHS is nullable; RHS keeps existing status.  Symmetrically,
-				 * only the RHS's quals survive.
-				 */
+				/* LHS is nullable; RHS keeps existing status */
 				result->contains_outer = true;
 				result->nullable_rels = bms_union(left_state->relids,
 												  right_state->nullable_rels);
-				result->safe_quals = right_state->safe_quals;
 				break;
 			case JOIN_FULL:
-
-				/*
-				 * Both sides are nullable, so no qual is guaranteed to hold
-				 * for every output row; safe_quals stays NIL.
-				 */
+				/* Both sides are nullable */
 				result->contains_outer = true;
 				result->nullable_rels = bms_union(left_state->relids,
 												  right_state->relids);
@@ -3487,9 +3513,11 @@ reduce_outer_joins_pass1(Node *jtnode)
  *
  * Returns info in state2 about outer joins that were successfully simplified.
  * Joins that were fully reduced to inner joins are all added to
- * state2->inner_reduced.  If a full join is reduced to a left join,
- * it needs its own entry in state2->partial_reduced, since that will
- * require custom processing to remove only the correct nullingrel markers.
+ * state2->inner_reduced, and joins that became antijoins are all added to
+ * state2->anti_reduced.  If a full join is reduced to a left join or an
+ * antijoin, it also needs its own entry in state2->partial_reduced, since
+ * that will require custom processing to remove only the correct nullingrel
+ * markers.
  */
 static void
 reduce_outer_joins_pass2(Node *jtnode,
@@ -3682,7 +3710,8 @@ reduce_outer_joins_pass2(Node *jtnode,
 
 		/*
 		 * Apply the jointype change, if any, to both jointree node and RTE.
-		 * Also, if we changed an RTE to INNER, add its RTI to inner_reduced.
+		 * Also, if we changed an RTE to INNER, add its RTI to inner_reduced;
+		 * if we changed it to ANTI, add its RTI to anti_reduced.
 		 */
 		if (rtindex && jointype != j->jointype)
 		{
@@ -3694,6 +3723,9 @@ reduce_outer_joins_pass2(Node *jtnode,
 			if (jointype == JOIN_INNER)
 				state2->inner_reduced = bms_add_member(state2->inner_reduced,
 													   rtindex);
+			else if (jointype == JOIN_ANTI)
+				state2->anti_reduced = bms_add_member(state2->anti_reduced,
+													  rtindex);
 		}
 		j->jointype = jointype;
 
@@ -3926,9 +3958,9 @@ forced_null_var_is_attnotnull(PlannerInfo *root, List *forced_null_vars,
  *		actually non-nullable in every row that the given subtree emits.
  *
  * We prove non-nullness from quals that hold for every such row: the subtree's
- * collected safe_quals, plus any "extra_quals" the caller knows also constrain
- * the Var, or a NOT NULL table constraint (excluding Vars nullable due to
- * lower-level outer joins).
+ * safe quals, plus any "extra_quals" the caller knows also constrain the Var,
+ * or a NOT NULL table constraint (excluding Vars nullable due to lower-level
+ * outer joins).
  *
  * A whole-row Var in "forced_null_vars" requires, in any matching row, every
  * column of its relation to be NULL, so it is refuted by proving any one of
@@ -3941,12 +3973,13 @@ forced_null_var_is_nonnullable(PlannerInfo *root, List *forced_null_vars,
 							   reduce_outer_joins_pass1_state *state,
 							   List *extra_quals)
 {
-	List	   *all_quals;
+	List	   *all_quals = NIL;
 	List	   *nonnullable_vars;
 	int			wholerow_attno = 0 - FirstLowInvalidHeapAttributeNumber;
 	int			varno = -1;
 
-	all_quals = list_concat_copy(state->safe_quals, extra_quals);
+	find_safe_quals(state->jtnode, &all_quals);
+	all_quals = list_concat(all_quals, extra_quals);
 	nonnullable_vars = find_nonnullable_vars((Node *) all_quals);
 
 	/*

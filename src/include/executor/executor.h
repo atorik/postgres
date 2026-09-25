@@ -249,7 +249,7 @@ extern bool ExecCheckPermissions(List *rangeTable,
 extern bool ExecCheckOneRelPerms(RTEPermissionInfo *perminfo);
 extern void CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation,
 								OnConflictAction onConflictAction,
-								List *mergeActions, ModifyTable *mtnode);
+								List *mergeActions);
 extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 							  Relation resultRelationDesc,
 							  Index resultRelationIndex,
@@ -703,6 +703,7 @@ extern void ExecInitRangeTable(EState *estate, List *rangeTable, List *permInfos
 							   Bitmapset *unpruned_relids);
 extern void ExecCloseRangeTableRelations(EState *estate);
 extern void ExecCloseResultRelations(EState *estate);
+extern void ExecCloseTrigTargetRelations(EState *estate);
 
 static inline RangeTblEntry *
 exec_rt_fetch(Index rti, EState *estate)

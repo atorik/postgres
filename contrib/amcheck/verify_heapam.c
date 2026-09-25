@@ -28,7 +28,6 @@
 #include "storage/procarray.h"
 #include "storage/read_stream.h"
 #include "utils/builtins.h"
-#include "utils/fmgroids.h"
 #include "utils/rel.h"
 #include "utils/tuplestore.h"
 
@@ -75,7 +74,9 @@ typedef enum SkipPages
  */
 typedef struct ToastedAttribute
 {
-	varatt_external toast_pointer;
+	Oid8		va_valueid;		/* value ID (works for both Oid and Oid8) */
+	uint32		va_extinfo;		/* external size and compression method */
+	vartag_external tag;		/* VARTAG_ONDISK_OID or VARTAG_ONDISK_OID8 */
 	BlockNumber blkno;			/* block in main table */
 	OffsetNumber offnum;		/* offset in main table */
 	AttrNumber	attnum;			/* attribute in main table */
@@ -190,7 +191,7 @@ static void check_tuple(HeapCheckContext *ctx,
 						XidCommitStatus *xmin_commit_status);
 static void check_toast_tuple(HeapTuple toasttup, HeapCheckContext *ctx,
 							  ToastedAttribute *ta, int32 *expected_chunk_seq,
-							  uint32 extsize);
+							  uint32 extsize, int32 max_chunk_size);
 
 static bool check_tuple_attribute(HeapCheckContext *ctx);
 static void check_toasted_attribute(HeapCheckContext *ctx,
@@ -481,6 +482,7 @@ verify_heapam(PG_FUNCTION_ARGS)
 
 	while ((ctx.buffer = read_stream_next_buffer(stream, NULL)) != InvalidBuffer)
 	{
+		uint8		vmbits;
 		OffsetNumber maxoff;
 		OffsetNumber predecessor[MaxOffsetNumber];
 		OffsetNumber successor[MaxOffsetNumber];
@@ -498,6 +500,23 @@ verify_heapam(PG_FUNCTION_ARGS)
 
 		ctx.blkno = BufferGetBlockNumber(ctx.buffer);
 		ctx.page = BufferGetPage(ctx.buffer);
+
+		/*
+		 * It is corruption if PD_ALL_VISIBLE is clear while either VM bit is
+		 * set. Missing VM pages are treated as having no bits set. VM pages
+		 * that fail page verification are read with RBM_ZERO_ON_ERROR, so
+		 * those failures are not reported as corruption rows here.
+		 */
+		vmbits = visibilitymap_get_status(ctx.rel, ctx.blkno, &vmbuffer);
+
+		if (!PageIsAllVisible(ctx.page) &&
+			(vmbits & VISIBILITYMAP_VALID_BITS) != 0)
+		{
+			ctx.offnum = InvalidOffsetNumber;
+			ctx.attnum = -1;
+			report_corruption(&ctx,
+							  psprintf("page is not marked all-visible in page header but visibility map bit is set"));
+		}
 
 		/* Perform tuple checks */
 		maxoff = PageGetMaxOffsetNumber(ctx.page);
@@ -1555,14 +1574,17 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
 static void
 check_toast_tuple(HeapTuple toasttup, HeapCheckContext *ctx,
 				  ToastedAttribute *ta, int32 *expected_chunk_seq,
-				  uint32 extsize)
+				  uint32 extsize, int32 max_chunk_size)
 {
 	int32		chunk_seq;
-	int32		last_chunk_seq = (extsize - 1) / TOAST_MAX_CHUNK_SIZE;
+	int32		last_chunk_seq;
 	Pointer		chunk;
 	bool		isnull;
 	int32		chunksize;
 	int32		expected_size;
+	Oid8		toast_valueid = ta->va_valueid;
+
+	last_chunk_seq = (extsize - 1) / max_chunk_size;
 
 	/* Sanity-check the sequence number. */
 	chunk_seq = DatumGetInt32(fastgetattr(toasttup, 2,
@@ -1570,16 +1592,16 @@ check_toast_tuple(HeapTuple toasttup, HeapCheckContext *ctx,
 	if (isnull)
 	{
 		report_toast_corruption(ctx, ta,
-								psprintf("toast value %u has toast chunk with null sequence number",
-										 ta->toast_pointer.va_valueid));
+								psprintf("toast value " OID8_FORMAT " has toast chunk with null sequence number",
+										 toast_valueid));
 		return;
 	}
 	if (chunk_seq != *expected_chunk_seq)
 	{
 		/* Either the TOAST index is corrupt, or we don't have all chunks. */
 		report_toast_corruption(ctx, ta,
-								psprintf("toast value %u index scan returned chunk %d when expecting chunk %d",
-										 ta->toast_pointer.va_valueid,
+								psprintf("toast value " OID8_FORMAT " index scan returned chunk %d when expecting chunk %d",
+										 toast_valueid,
 										 chunk_seq, *expected_chunk_seq));
 	}
 	*expected_chunk_seq = chunk_seq + 1;
@@ -1590,8 +1612,8 @@ check_toast_tuple(HeapTuple toasttup, HeapCheckContext *ctx,
 	if (isnull)
 	{
 		report_toast_corruption(ctx, ta,
-								psprintf("toast value %u chunk %d has null data",
-										 ta->toast_pointer.va_valueid,
+								psprintf("toast value " OID8_FORMAT " chunk %d has null data",
+										 toast_valueid,
 										 chunk_seq));
 		return;
 	}
@@ -1610,8 +1632,8 @@ check_toast_tuple(HeapTuple toasttup, HeapCheckContext *ctx,
 		uint32		header = ((varattrib_4b *) chunk)->va_4byte.va_header;
 
 		report_toast_corruption(ctx, ta,
-								psprintf("toast value %u chunk %d has invalid varlena header %0x",
-										 ta->toast_pointer.va_valueid,
+								psprintf("toast value " OID8_FORMAT " chunk %d has invalid varlena header %0x",
+										 toast_valueid,
 										 chunk_seq, header));
 		return;
 	}
@@ -1622,19 +1644,19 @@ check_toast_tuple(HeapTuple toasttup, HeapCheckContext *ctx,
 	if (chunk_seq > last_chunk_seq)
 	{
 		report_toast_corruption(ctx, ta,
-								psprintf("toast value %u chunk %d follows last expected chunk %d",
-										 ta->toast_pointer.va_valueid,
+								psprintf("toast value " OID8_FORMAT " chunk %d follows last expected chunk %d",
+										 toast_valueid,
 										 chunk_seq, last_chunk_seq));
 		return;
 	}
 
-	expected_size = chunk_seq < last_chunk_seq ? TOAST_MAX_CHUNK_SIZE
-		: extsize - (last_chunk_seq * TOAST_MAX_CHUNK_SIZE);
+	expected_size = chunk_seq < last_chunk_seq ? max_chunk_size
+		: extsize - (last_chunk_seq * max_chunk_size);
 
 	if (chunksize != expected_size)
 		report_toast_corruption(ctx, ta,
-								psprintf("toast value %u chunk %d has size %u, but expected size %u",
-										 ta->toast_pointer.va_valueid,
+								psprintf("toast value " OID8_FORMAT " chunk %d has size %u, but expected size %u",
+										 toast_valueid,
 										 chunk_seq, chunksize, expected_size));
 }
 
@@ -1665,8 +1687,12 @@ check_tuple_attribute(HeapCheckContext *ctx)
 	varlena    *attr;
 	char	   *tp;				/* pointer to the tuple data */
 	uint16		infomask;
+	Oid8		toast_pointer_valueid;
+	int32		va_rawsize;
+	uint32		va_extinfo;
 	CompactAttribute *thisatt;
-	varatt_external toast_pointer;
+	vartag_external va_tag_value;
+	toast_external_data toast_ext_data;
 
 	infomask = ctx->tuphdr->t_infomask;
 	thisatt = TupleDescCompactAttr(RelationGetDescr(ctx->rel), ctx->attnum);
@@ -1725,7 +1751,7 @@ check_tuple_attribute(HeapCheckContext *ctx)
 	{
 		uint8		va_tag = VARTAG_EXTERNAL(tp + ctx->offset);
 
-		if (va_tag != VARTAG_ONDISK)
+		if (va_tag != VARTAG_ONDISK_OID && va_tag != VARTAG_ONDISK_OID8)
 		{
 			report_corruption(ctx,
 							  psprintf("toasted attribute has unexpected TOAST tag %u",
@@ -1769,26 +1795,28 @@ check_tuple_attribute(HeapCheckContext *ctx)
 
 	/* It is external, and we're looking at a page on disk */
 
-	/*
-	 * Must copy attr into toast_pointer for alignment considerations
-	 */
-	VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
+	/* Must copy attr into a decoded pointer for alignment considerations */
+	toast_external_info_get(attr, &toast_ext_data);
+	va_tag_value = toast_ext_data.tag;
+	toast_pointer_valueid = toast_ext_data.valueid;
+	va_rawsize = toast_ext_data.rawsize;
+	va_extinfo = toast_ext_data.extinfo;
 
 	/* Toasted attributes too large to be untoasted should never be stored */
-	if (toast_pointer.va_rawsize > VARLENA_SIZE_LIMIT)
+	if (va_rawsize > VARLENA_SIZE_LIMIT)
 		report_corruption(ctx,
-						  psprintf("toast value %u rawsize %d exceeds limit %d",
-								   toast_pointer.va_valueid,
-								   toast_pointer.va_rawsize,
+						  psprintf("toast value " OID8_FORMAT " rawsize %d exceeds limit %d",
+								   toast_pointer_valueid,
+								   va_rawsize,
 								   VARLENA_SIZE_LIMIT));
 
-	if (VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer))
+	if (VARATT_EXTINFO_IS_COMPRESSED(toast_ext_data.extinfo, toast_ext_data.rawsize))
 	{
 		ToastCompressionId cmid;
 		bool		valid = false;
 
 		/* Compressed attributes should have a valid compression method */
-		cmid = TOAST_COMPRESS_METHOD(&toast_pointer);
+		cmid = VARATT_EXTINFO_GET_COMPRESS_METHOD(toast_ext_data.extinfo);
 		switch (cmid)
 		{
 				/* List of all valid compression method IDs */
@@ -1805,16 +1833,16 @@ check_tuple_attribute(HeapCheckContext *ctx)
 		}
 		if (!valid)
 			report_corruption(ctx,
-							  psprintf("toast value %u has invalid compression method id %d",
-									   toast_pointer.va_valueid, cmid));
+							  psprintf("toast value " OID8_FORMAT " has invalid compression method id %d",
+									   toast_pointer_valueid, cmid));
 	}
 
 	/* The tuple header better claim to contain toasted values */
 	if (!(infomask & HEAP_HASEXTERNAL))
 	{
 		report_corruption(ctx,
-						  psprintf("toast value %u is external but tuple header flag HEAP_HASEXTERNAL not set",
-								   toast_pointer.va_valueid));
+						  psprintf("toast value " OID8_FORMAT " is external but tuple header flag HEAP_HASEXTERNAL not set",
+								   toast_pointer_valueid));
 		return true;
 	}
 
@@ -1822,8 +1850,8 @@ check_tuple_attribute(HeapCheckContext *ctx)
 	if (!ctx->rel->rd_rel->reltoastrelid)
 	{
 		report_corruption(ctx,
-						  psprintf("toast value %u is external but relation has no toast relation",
-								   toast_pointer.va_valueid));
+						  psprintf("toast value " OID8_FORMAT " is external but relation has no toast relation",
+								   toast_pointer_valueid));
 		return true;
 	}
 
@@ -1842,7 +1870,10 @@ check_tuple_attribute(HeapCheckContext *ctx)
 
 		ta = palloc0_object(ToastedAttribute);
 
-		VARATT_EXTERNAL_GET_POINTER(ta->toast_pointer, attr);
+		/* The pointer has already been decoded above, just reuse it */
+		ta->tag = va_tag_value;
+		ta->va_valueid = toast_pointer_valueid;
+		ta->va_extinfo = va_extinfo;
 		ta->blkno = ctx->blkno;
 		ta->offnum = ctx->offnum;
 		ta->attnum = ctx->attnum;
@@ -1868,17 +1899,48 @@ check_toasted_attribute(HeapCheckContext *ctx, ToastedAttribute *ta)
 	uint32		extsize;
 	int32		expected_chunk_seq = 0;
 	int32		last_chunk_seq;
+	int32		max_chunk_size;
+	Oid8		toast_valueid;
+	Oid			toast_typid;
+	vartag_external expected_tag;
 
-	extsize = VARATT_EXTERNAL_GET_EXTSIZE(ta->toast_pointer);
-	last_chunk_seq = (extsize - 1) / TOAST_MAX_CHUNK_SIZE;
+	toast_valueid = ta->va_valueid;
+	extsize = VARATT_EXTINFO_GET_EXTSIZE(ta->va_extinfo);
 
 	/*
-	 * Setup a scan key to find chunks in toast table with matching va_valueid
+	 * Take the chunk_id type from the TOAST table's own definition, not from
+	 * the vartag in the main table as that pointer is the very thing under
+	 * scrutiny here.  The two must agree.
 	 */
-	ScanKeyInit(&toastkey,
-				(AttrNumber) 1,
-				BTEqualStrategyNumber, F_OIDEQ,
-				ObjectIdGetDatum(ta->toast_pointer.va_valueid));
+	toast_typid = TupleDescAttr(ctx->toast_rel->rd_att, 0)->atttypid;
+	if (toast_typid == OID8OID)
+		expected_tag = VARTAG_ONDISK_OID8;
+	else if (toast_typid == OIDOID)
+		expected_tag = VARTAG_ONDISK_OID;
+	else
+	{
+		report_toast_corruption(ctx, ta,
+								psprintf("toast value " OID8_FORMAT " stored in toast table whose chunk_id has unexpected type %u",
+										 toast_valueid, toast_typid));
+		return;
+	}
+
+	if (ta->tag != expected_tag)
+	{
+		report_toast_corruption(ctx, ta,
+								psprintf("toast value " OID8_FORMAT " has TOAST tag %u, but chunk_id of toast table has type %u",
+										 toast_valueid, (uint8) ta->tag,
+										 toast_typid));
+		return;
+	}
+
+	max_chunk_size = TOAST_MAX_CHUNK_SIZE(toast_typid);
+	last_chunk_seq = (extsize - 1) / max_chunk_size;
+
+	/*
+	 * Setup a scan key to find chunks in toast table with matching value ID
+	 */
+	toast_valueid_scankey_init(&toastkey, toast_typid, toast_valueid);
 
 	/*
 	 * Check if any chunks for this toasted object exist in the toast table,
@@ -1894,18 +1956,19 @@ check_toasted_attribute(HeapCheckContext *ctx, ToastedAttribute *ta)
 									 ForwardScanDirection)) != NULL)
 	{
 		found_toasttup = true;
-		check_toast_tuple(toasttup, ctx, ta, &expected_chunk_seq, extsize);
+		check_toast_tuple(toasttup, ctx, ta, &expected_chunk_seq, extsize,
+						  max_chunk_size);
 	}
 	systable_endscan_ordered(toastscan);
 
 	if (!found_toasttup)
 		report_toast_corruption(ctx, ta,
-								psprintf("toast value %u not found in toast table",
-										 ta->toast_pointer.va_valueid));
+								psprintf("toast value " OID8_FORMAT " not found in toast table",
+										 toast_valueid));
 	else if (expected_chunk_seq <= last_chunk_seq)
 		report_toast_corruption(ctx, ta,
-								psprintf("toast value %u was expected to end at chunk %d, but ended while expecting chunk %d",
-										 ta->toast_pointer.va_valueid,
+								psprintf("toast value " OID8_FORMAT " was expected to end at chunk %d, but ended while expecting chunk %d",
+										 toast_valueid,
 										 last_chunk_seq, expected_chunk_seq));
 }
 

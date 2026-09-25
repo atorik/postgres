@@ -1056,7 +1056,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 					success = describeTableDetails(pattern, show_verbose, show_system);
 				else
 					/* standard listing of interesting things */
-					success = listTables("tvmsEG", NULL, show_verbose, show_system);
+					success = listTables("tvmsE", NULL, show_verbose, show_system);
 				break;
 			case 'A':
 				{
@@ -1190,7 +1190,6 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 			case 'i':
 			case 's':
 			case 'E':
-			case 'G':
 				success = listTables(&cmd[1], pattern, show_verbose, show_system);
 				break;
 			case 'r':
@@ -1934,10 +1933,8 @@ exec_command_getresults(PsqlScanState scan_state, bool active_branch)
 	if (active_branch)
 	{
 		char	   *opt;
-		int			num_results;
+		int			num_results = 0;
 
-		pset.send_mode = PSQL_SEND_GET_RESULTS;
-		status = PSQL_CMD_SEND;
 		opt = psql_scan_slash_option(scan_state, OT_NORMAL, NULL, false);
 
 		pset.requested_results = 0;
@@ -1950,8 +1947,11 @@ exec_command_getresults(PsqlScanState scan_state, bool active_branch)
 				pg_log_error("\\getresults: invalid number of requested results");
 				return PSQL_CMD_ERROR;
 			}
-			pset.requested_results = num_results;
 		}
+
+		pset.requested_results = num_results;
+		pset.send_mode = PSQL_SEND_GET_RESULTS;
+		status = PSQL_CMD_SEND;
 	}
 	else
 		ignore_slash_options(scan_state);

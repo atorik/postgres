@@ -1500,7 +1500,7 @@ bms_prev_member(const Bitmapset *a, int prevbit)
 		return -2;
 
 	/* Validate callers didn't give us something out of range */
-	Assert(prevbit < 0 || prevbit <= (unsigned int) (a->nwords * BITS_PER_BITMAPWORD));
+	Assert(prevbit < 0 || prevbit <= (unsigned int) a->nwords * BITS_PER_BITMAPWORD);
 
 	/*
 	 * Transform -1 (or any negative number) to the highest possible bit we
@@ -1546,8 +1546,8 @@ bms_hash_value(const Bitmapset *a)
 
 	if (a == NULL)
 		return 0;				/* All empty sets hash to 0 */
-	return DatumGetUInt32(hash_any((const unsigned char *) a->words,
-								   a->nwords * sizeof(bitmapword)));
+	return hash_bytes((const unsigned char *) a->words,
+					  a->nwords * sizeof(bitmapword));
 }
 
 /*

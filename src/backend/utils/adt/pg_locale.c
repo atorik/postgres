@@ -1323,6 +1323,9 @@ strupper_c(char *dst, size_t dstsize, const char *src, size_t srclen)
  * Convert src to lowercase, and return the result length (not including
  * terminating NUL).
  *
+ * Lowercasing is intended for human-readable display.  If the goal is to
+ * convert to a canonical caseless form, see pg_strfold().
+ *
  * src must be in the database encoding with no embedded NULs.  If dstsize is
  * zero, dst may be NULL, which is useful for calculating the required buffer
  * size before allocating.
@@ -1330,15 +1333,22 @@ strupper_c(char *dst, size_t dstsize, const char *src, size_t srclen)
  * If the result length is less than dstsize, the NUL-terminated result is
  * stored in dst.  Otherwise, the contents of dst are undefined, and the
  * caller should use the return value to resize the buffer and retry.
+ *
+ * See pg_locale.h for limits on string expansion.
  */
 size_t
 pg_strlower(char *dst, size_t dstsize, const char *src, size_t srclen,
 			pg_locale_t locale)
 {
+	size_t		result;
+
 	if (locale->ctype == NULL)
-		return strlower_c(dst, dstsize, src, srclen);
+		result = strlower_c(dst, dstsize, src, srclen);
 	else
-		return locale->ctype->strlower(dst, dstsize, src, srclen, locale);
+		result = locale->ctype->strlower(dst, dstsize, src, srclen, locale);
+
+	Assert(result <= (uint64) srclen * PG_MAX_CASEMAP_EXPANSION);
+	return result;
 }
 
 /*
@@ -1347,6 +1357,11 @@ pg_strlower(char *dst, size_t dstsize, const char *src, size_t srclen,
  * Convert src to titlecase, and return the result length (not including
  * terminating NUL).
  *
+ * Titlecasing is intended for human-readable display.  A titlecase string has
+ * the initial letter of each word uppercased (or changed to a special
+ * titlecase form, if available), and all other characters lowercased.  Used
+ * to implement the SQL INITCAP() function.
+ *
  * src must be in the database encoding with no embedded NULs.  If dstsize is
  * zero, dst may be NULL, which is useful for calculating the required buffer
  * size before allocating.
@@ -1354,15 +1369,22 @@ pg_strlower(char *dst, size_t dstsize, const char *src, size_t srclen,
  * If the result length is less than dstsize, the NUL-terminated result is
  * stored in dst.  Otherwise, the contents of dst are undefined, and the
  * caller should use the return value to resize the buffer and retry.
+ *
+ * See pg_locale.h for limits on string expansion.
  */
 size_t
 pg_strtitle(char *dst, size_t dstsize, const char *src, size_t srclen,
 			pg_locale_t locale)
 {
+	size_t		result;
+
 	if (locale->ctype == NULL)
-		return strtitle_c(dst, dstsize, src, srclen);
+		result = strtitle_c(dst, dstsize, src, srclen);
 	else
-		return locale->ctype->strtitle(dst, dstsize, src, srclen, locale);
+		result = locale->ctype->strtitle(dst, dstsize, src, srclen, locale);
+
+	Assert(result <= (uint64) srclen * PG_MAX_CASEMAP_EXPANSION);
+	return result;
 }
 
 /*
@@ -1371,6 +1393,9 @@ pg_strtitle(char *dst, size_t dstsize, const char *src, size_t srclen,
  * Convert src to uppercase, and return the result length (not including
  * terminating NUL).
  *
+ * Uppercasing is intended for human-readable display.  If the goal is to
+ * convert to a canonical caseless form, see pg_strfold().
+ *
  * src must be in the database encoding with no embedded NULs.  If dstsize is
  * zero, dst may be NULL, which is useful for calculating the required buffer
  * size before allocating.
@@ -1378,21 +1403,38 @@ pg_strtitle(char *dst, size_t dstsize, const char *src, size_t srclen,
  * If the result length is less than dstsize, the NUL-terminated result is
  * stored in dst.  Otherwise, the contents of dst are undefined, and the
  * caller should use the return value to resize the buffer and retry.
+ *
+ * See pg_locale.h for limits on string expansion.
  */
 size_t
 pg_strupper(char *dst, size_t dstsize, const char *src, size_t srclen,
 			pg_locale_t locale)
 {
+	size_t		result;
+
 	if (locale->ctype == NULL)
-		return strupper_c(dst, dstsize, src, srclen);
+		result = strupper_c(dst, dstsize, src, srclen);
 	else
-		return locale->ctype->strupper(dst, dstsize, src, srclen, locale);
+		result = locale->ctype->strupper(dst, dstsize, src, srclen, locale);
+
+	Assert(result <= (uint64) srclen * PG_MAX_CASEMAP_EXPANSION);
+	return result;
 }
 
 /*
  * pg_strfold()
  *
- * Casefold src, and return the result length (not including terminating NUL).
+ * Casefold src, and return the result length (not including terminating
+ * NUL).
+ *
+ * Casefolding produces a canonical string such that, iff the casefolded
+ * strings are equal, the original strings are a case-insensitive match (the
+ * strength of this guarantee depends on normalization, provider and locale).
+ * In practice the result is similar to lowercasing, but the purpose is
+ * different: lowercasing is for human-readable display; whereas casefolding
+ * is meant to canonicalize complex mappings reliably without regard for
+ * display.  Unicode guarantees that casefolding is stable across versions if
+ * the original string consists only of assigned code points.
  *
  * src must be in the database encoding with no embedded NULs.  If dstsize is
  * zero, dst may be NULL, which is useful for calculating the required buffer
@@ -1401,40 +1443,23 @@ pg_strupper(char *dst, size_t dstsize, const char *src, size_t srclen,
  * If the result length is less than dstsize, the NUL-terminated result is
  * stored in dst.  Otherwise, the contents of dst are undefined, and the
  * caller should use the return value to resize the buffer and retry.
+ *
+ * See pg_locale.h for limits on string expansion.
  */
 size_t
 pg_strfold(char *dst, size_t dstsize, const char *src, size_t srclen,
 		   pg_locale_t locale)
 {
+	size_t		result;
+
 	/* in the C locale, casefolding is the same as lowercasing */
 	if (locale->ctype == NULL)
-		return strlower_c(dst, dstsize, src, srclen);
+		result = strlower_c(dst, dstsize, src, srclen);
 	else
-		return locale->ctype->strfold(dst, dstsize, src, srclen, locale);
-}
+		result = locale->ctype->strfold(dst, dstsize, src, srclen, locale);
 
-/*
- * pg_downcase_ident()
- *
- * Lowercase an identifier using historical identifier-folding semantics, and
- * return the result length (not including terminating NUL). If the result
- * length is less than dstsize, the NUL-terminated result is stored in dst;
- * otherwise the contents of dst are undefined.
- *
- * XXX: callers currently depend on the result length being equal to srclen,
- * but that may change in the future if we change to proper case folding.
- */
-size_t
-pg_downcase_ident(char *dst, size_t dstsize, const char *src, size_t srclen)
-{
-	pg_locale_t locale = default_locale;
-
-	if (locale == NULL || locale->ctype == NULL ||
-		locale->ctype->downcase_ident == NULL)
-		return strlower_c(dst, dstsize, src, srclen);
-	else
-		return locale->ctype->downcase_ident(dst, dstsize, src, srclen,
-											 locale);
+	Assert(result <= (uint64) srclen * PG_MAX_CASEMAP_EXPANSION);
+	return result;
 }
 
 /*
@@ -1445,7 +1470,10 @@ pg_downcase_ident(char *dst, size_t dstsize, const char *src, size_t srclen)
 int
 pg_strcoll(const char *arg1, const char *arg2, pg_locale_t locale)
 {
-	return locale->collate->strcoll(arg1, arg2, locale);
+	if (locale->collate == NULL)
+		return strcmp(arg1, arg2);
+	else
+		return locale->collate->strcoll(arg1, arg2, locale);
 }
 
 /*
@@ -1463,7 +1491,16 @@ int
 pg_strncoll(const char *arg1, size_t len1, const char *arg2, size_t len2,
 			pg_locale_t locale)
 {
-	return locale->collate->strncoll(arg1, len1, arg2, len2, locale);
+	if (locale->collate == NULL)
+	{
+		int			result = memcmp(arg1, arg2, Min(len1, len2));
+
+		if ((result == 0) && (len1 != len2))
+			result = (len1 < len2) ? -1 : 1;
+		return result;
+	}
+	else
+		return locale->collate->strncoll(arg1, len1, arg2, len2, locale);
 }
 
 /*
@@ -1473,6 +1510,9 @@ pg_strncoll(const char *arg1, size_t len1, const char *arg2, size_t len2,
 bool
 pg_strxfrm_enabled(pg_locale_t locale)
 {
+	if (locale->collate == NULL)
+		return true;
+
 	/*
 	 * locale->collate->strnxfrm is still a required method, even if it may
 	 * have the wrong behavior, because the planner uses it for estimates in
@@ -1489,7 +1529,10 @@ pg_strxfrm_enabled(pg_locale_t locale)
 size_t
 pg_strxfrm(char *dest, const char *src, size_t destsize, pg_locale_t locale)
 {
-	return locale->collate->strxfrm(dest, destsize, src, locale);
+	if (locale->collate == NULL)
+		return pg_strnxfrm(dest, destsize, src, strlen(src), locale);
+	else
+		return locale->collate->strxfrm(dest, destsize, src, locale);
 }
 
 /*
@@ -1506,14 +1549,26 @@ pg_strxfrm(char *dest, const char *src, size_t destsize, pg_locale_t locale)
  * pg_strxfrm_enabled() first, otherwise this function may return wrong
  * results or an error.
  *
- * Returns the number of bytes needed (or more) to store the transformed
- * string, excluding the terminating nul byte. If the value returned is
- * 'destsize' or greater, the resulting contents of 'dest' are undefined.
+ * Returns the number of bytes needed (NB: or more; see comments above
+ * strnxfrm_libc()) to store the transformed string, excluding the terminating
+ * nul byte. If the value returned is 'destsize' or greater, the resulting
+ * contents of 'dest' are undefined, and the caller should use the return
+ * value to resize the buffer.
  */
 size_t
 pg_strnxfrm(char *dest, size_t destsize, const char *src, size_t srclen,
 			pg_locale_t locale)
 {
+	if (locale->collate == NULL)
+	{
+		if (destsize > srclen)
+		{
+			memcpy(dest, src, srclen);
+			dest[srclen] = '\0';
+		}
+
+		return srclen;
+	}
 	return locale->collate->strnxfrm(dest, destsize, src, srclen, locale);
 }
 
@@ -1524,7 +1579,10 @@ pg_strnxfrm(char *dest, size_t destsize, const char *src, size_t srclen,
 bool
 pg_strxfrm_prefix_enabled(pg_locale_t locale)
 {
-	return (locale->collate->strnxfrm_prefix != NULL);
+	if (locale->collate == NULL)
+		return true;
+	else
+		return (locale->collate->strnxfrm_prefix != NULL);
 }
 
 /*
@@ -1536,7 +1594,10 @@ size_t
 pg_strxfrm_prefix(char *dest, const char *src, size_t destsize,
 				  pg_locale_t locale)
 {
-	return locale->collate->strxfrm_prefix(dest, destsize, src, locale);
+	if (locale->collate == NULL)
+		return pg_strnxfrm_prefix(dest, destsize, src, strlen(src), locale);
+	else
+		return locale->collate->strxfrm_prefix(dest, destsize, src, locale);
 }
 
 /*
@@ -1560,7 +1621,16 @@ size_t
 pg_strnxfrm_prefix(char *dest, size_t destsize, const char *src,
 				   size_t srclen, pg_locale_t locale)
 {
-	return locale->collate->strnxfrm_prefix(dest, destsize, src, srclen, locale);
+	if (locale->collate == NULL)
+	{
+		size_t		len = Min(srclen, destsize);
+
+		if (destsize > 0)
+			memcpy(dest, src, len);
+		return len;
+	}
+	else
+		return locale->collate->strnxfrm_prefix(dest, destsize, src, srclen, locale);
 }
 
 /*
@@ -1677,6 +1747,11 @@ pg_iswxdigit(pg_wchar wc, pg_locale_t locale)
 		return locale->ctype->wc_isxdigit(wc, locale);
 }
 
+/*
+ * Is the character potentially case-varying? Used by ILIKE to extract a
+ * prefix suitable for an index search. Safe to return true if the character
+ * can't be easily classified.
+ */
 bool
 pg_iswcased(pg_wchar wc, pg_locale_t locale)
 {

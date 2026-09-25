@@ -2642,8 +2642,16 @@ MultiXactMemberFreezeThreshold(void)
 static void
 PerformMembersTruncation(MultiXactOffset newOldestOffset)
 {
+	/*
+	 * We step back one entry to avoid passing a cutoff page that hasn't been
+	 * created yet in the rare case that oldestOffset would be the first item
+	 * on a page and oldestOffset == nextOffset.  In that case, if we didn't
+	 * subtract one, we'd trigger SimpleLruTruncate's wraparound detection.
+	 */
+	if (newOldestOffset <= 1)
+		return;
 	SimpleLruTruncate(MultiXactMemberCtl,
-					  MXOffsetToMemberPage(newOldestOffset));
+					  MXOffsetToMemberPage(newOldestOffset - 1));
 }
 
 /*
@@ -2653,11 +2661,8 @@ static void
 PerformOffsetsTruncation(MultiXactId newOldestMulti)
 {
 	/*
-	 * We step back one multixact to avoid passing a cutoff page that hasn't
-	 * been created yet in the rare case that oldestMulti would be the first
-	 * item on a page and oldestMulti == nextMulti.  In that case, if we
-	 * didn't subtract one, we'd trigger SimpleLruTruncate's wraparound
-	 * detection.
+	 * Like in PerformMembersTruncation(), step back one entry to avoid
+	 * passing a cutoff page that hasn't been created yet.
 	 */
 	SimpleLruTruncate(MultiXactOffsetCtl,
 					  MultiXactIdToOffsetPage(PreviousMultiXactId(newOldestMulti)));
@@ -2853,34 +2858,6 @@ MultiXactMemberIoErrorDetail(const void *opaque_data)
 	else
 		return errdetail("Could not access multixact member at offset %" PRIu64 ".",
 						 context->offset);
-}
-
-/*
- * Decide which of two MultiXactIds is earlier.
- *
- * XXX do we need to do something special for InvalidMultiXactId?
- * (Doesn't look like it.)
- */
-bool
-MultiXactIdPrecedes(MultiXactId multi1, MultiXactId multi2)
-{
-	int32		diff = (int32) (multi1 - multi2);
-
-	return (diff < 0);
-}
-
-/*
- * MultiXactIdPrecedesOrEquals -- is multi1 logically <= multi2?
- *
- * XXX do we need to do something special for InvalidMultiXactId?
- * (Doesn't look like it.)
- */
-bool
-MultiXactIdPrecedesOrEquals(MultiXactId multi1, MultiXactId multi2)
-{
-	int32		diff = (int32) (multi1 - multi2);
-
-	return (diff <= 0);
 }
 
 

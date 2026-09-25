@@ -9,6 +9,8 @@ EXTENSION = injection_points
 DATA = injection_points--1.0.sql
 PGFILEDESC = "injection_points - facility for injection points"
 
+EXTRA_INSTALL = contrib/test_decoding
+
 REGRESS = injection_points hashagg reindex_conc vacuum
 REGRESS_OPTS = --dlpath=$(top_builddir)/src/test/regress
 
@@ -16,13 +18,17 @@ ISOLATION = basic \
 	    inplace \
 	    reindex_concurrently_deferred \
 	    repack \
+	    repack_commit_race \
+	    repack_decode \
 	    repack_temporal \
 	    repack_temporal_multirange \
 	    repack_toast \
 	    ri_fastpath_reindex \
+	    ri_fastpath_snapshot \
 	    syscache-update-pruned \
 	    wait_cleanup \
-	    heap_lock_update
+	    heap_lock_update \
+	    on_conflict_probe_window
 
 # some isolation tests require wal_level=replica
 ISOLATION_OPTS = --temp-config $(top_srcdir)/src/test/modules/injection_points/extra.conf

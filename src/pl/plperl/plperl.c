@@ -1039,7 +1039,7 @@ plperl_build_tuple_result(HV *perlhash, TupleDesc td)
 	while ((he = hv_iternext(perlhash)))
 	{
 		char	   *key = hek2cstr(he);
-		SV		   *val = HeVAL(he);
+		SV		   *val = hv_iterval(perlhash, he);
 		int			attn = SPI_fnumber(td, key);
 		Form_pg_attribute attr;
 
@@ -1082,15 +1082,20 @@ plperl_hash_to_datum(SV *src, TupleDesc td)
 }
 
 /*
- * if we are an array ref return the reference. this is special in that if we
- * are a PostgreSQL::InServer::ARRAY object we will return the 'magic' array.
+ * If sv is an array ref return the reference, else return NULL.
+ *
+ * This is special in that if sv is a PostgreSQL::InServer::ARRAY object
+ * we will fetch its 'magic' array.
+ *
+ * The caller must already have invoked plperl_materialize_sv() on sv.
+ * sv may be NULL.
  */
 static SV  *
 get_perl_array_ref(SV *sv)
 {
 	dTHX;
 
-	if (sv && SvOK(sv) && SvROK(sv))
+	if (sv && SvROK(sv))
 	{
 		if (SvTYPE(SvRV(sv)) == SVt_PVAV)
 			return sv;
@@ -1099,9 +1104,12 @@ get_perl_array_ref(SV *sv)
 			HV		   *hv = (HV *) SvRV(sv);
 			SV		  **sav = hv_fetch_string(hv, "array");
 
-			if (sav && *sav && SvOK(*sav) && SvROK(*sav) &&
-				SvTYPE(SvRV(*sav)) == SVt_PVAV)
-				return *sav;
+			if (sav && *sav)
+			{
+				plperl_materialize_sv(*sav);
+				if (SvROK(*sav) && SvTYPE(SvRV(*sav)) == SVt_PVAV)
+					return *sav;
+			}
 
 			elog(ERROR, "could not get array reference from PostgreSQL::InServer::ARRAY object");
 		}
@@ -1135,11 +1143,14 @@ array_to_datum_internal(AV *av, ArrayBuildState **astatep,
 	{
 		/* fetch the array element */
 		SV		  **svp = av_fetch(av, i, FALSE);
+		SV		   *elem = svp ? *svp : NULL;
+		SV		   *sav;
 
-		/* see if this element is an array, if so get that */
-		SV		   *sav = svp ? get_perl_array_ref(*svp) : NULL;
+		/* cope with get magic on the array element */
+		plperl_materialize_sv(elem);
 
 		/* multi-dimensional array? */
+		sav = get_perl_array_ref(elem);
 		if (sav)
 		{
 			AV		   *nav = (AV *) SvRV(sav);
@@ -1185,7 +1196,7 @@ array_to_datum_internal(AV *av, ArrayBuildState **astatep,
 						(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 						 errmsg("multidimensional arrays must have array expressions with matching dimensions")));
 
-			dat = plperl_sv_to_datum(svp ? *svp : NULL,
+			dat = plperl_sv_to_datum(elem,
 									 elemtypid,
 									 typmod,
 									 NULL,
@@ -1299,6 +1310,7 @@ plperl_sv_to_datum(SV *sv, Oid typid, int32 typmod,
 				   FmgrInfo *finfo, Oid typioparam,
 				   bool *isnull)
 {
+	dTHX;
 	FmgrInfo	tmp;
 	Oid			funcid;
 
@@ -1306,6 +1318,8 @@ plperl_sv_to_datum(SV *sv, Oid typid, int32 typmod,
 	check_stack_depth();
 
 	*isnull = false;
+
+	plperl_materialize_sv(sv);
 
 	/*
 	 * Return NULL if result is undef, or if we're in a function returning
@@ -1751,7 +1765,8 @@ plperl_modify_tuple(HV *hvTD, TriggerData *tdata, HeapTuple otup)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_COLUMN),
 				 errmsg("$_TD->{new} does not exist")));
-	if (!SvOK(*svp) || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVHV)
+	plperl_materialize_sv(*svp);
+	if (!(*svp) || !SvROK(*svp) || SvTYPE(SvRV(*svp)) != SVt_PVHV)
 		ereport(ERROR,
 				(errcode(ERRCODE_DATATYPE_MISMATCH),
 				 errmsg("$_TD->{new} is not a hash reference")));
@@ -1768,7 +1783,7 @@ plperl_modify_tuple(HV *hvTD, TriggerData *tdata, HeapTuple otup)
 	while ((he = hv_iternext(hvNew)))
 	{
 		char	   *key = hek2cstr(he);
-		SV		   *val = HeVAL(he);
+		SV		   *val = hv_iterval(hvNew, he);
 		int			attn = SPI_fnumber(tupdesc, key);
 		Form_pg_attribute attr;
 
@@ -2429,6 +2444,7 @@ plperl_func_handler(PG_FUNCTION_ARGS)
 
 	if (prodesc->fn_retisset)
 	{
+		dTHX;
 		SV		   *sav;
 
 		/*
@@ -2437,10 +2453,10 @@ plperl_func_handler(PG_FUNCTION_ARGS)
 		 * SRFs that didn't know about return_next(). Any other sort of return
 		 * value is an error, except undef which means return an empty set.
 		 */
+		plperl_materialize_sv(perlret);
 		sav = get_perl_array_ref(perlret);
 		if (sav)
 		{
-			dTHX;
 			AV		   *rav = (AV *) SvRV(sav);
 			Size_t		alen = av_count(rav);
 
@@ -2452,7 +2468,7 @@ plperl_func_handler(PG_FUNCTION_ARGS)
 					plperl_return_next_internal(*svp);
 			}
 		}
-		else if (SvOK(perlret))
+		else if (perlret && SvOK(perlret))
 		{
 			ereport(ERROR,
 					(errcode(ERRCODE_DATATYPE_MISMATCH),
@@ -2494,6 +2510,7 @@ plperl_func_handler(PG_FUNCTION_ARGS)
 static Datum
 plperl_trigger_handler(PG_FUNCTION_ARGS)
 {
+	dTHX;
 	plperl_proc_desc *prodesc;
 	SV		   *perlret;
 	Datum		retval;
@@ -2536,6 +2553,8 @@ plperl_trigger_handler(PG_FUNCTION_ARGS)
 	************************************************************/
 	if (SPI_finish() != SPI_OK_FINISH)
 		elog(ERROR, "SPI_finish() failed");
+
+	plperl_materialize_sv(perlret);
 
 	if (perlret == NULL || !SvOK(perlret))
 	{
@@ -3333,9 +3352,11 @@ plperl_return_next_internal(SV *sv)
 
 	if (prodesc->fn_retistuple)
 	{
+		dTHX;
 		HeapTuple	tuple;
 
-		if (!(SvOK(sv) && SvROK(sv) && SvTYPE(SvRV(sv)) == SVt_PVHV))
+		plperl_materialize_sv(sv);
+		if (!(SvROK(sv) && SvTYPE(SvRV(sv)) == SVt_PVHV))
 			ereport(ERROR,
 					(errcode(ERRCODE_DATATYPE_MISMATCH),
 					 errmsg("SETOF-composite-returning PL/Perl function "

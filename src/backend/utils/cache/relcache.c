@@ -1205,6 +1205,9 @@ retry:
 	relation->rd_fkeylist = NIL;
 	relation->rd_fkeyvalid = false;
 
+	/* TOAST type data is not loaded till asked for */
+	relation->rd_toastchunkidtype = InvalidOid;
+
 	/* partitioning data is not loaded till asked for */
 	relation->rd_partkey = NULL;
 	relation->rd_partkeycxt = NULL;
@@ -2135,16 +2138,6 @@ RelationIdGetRelation(Oid relationId)
 	if (RelationIsValid(rd))
 		RelationIncrementReferenceCount(rd);
 	return rd;
-}
-
-/*
- * Returns a schema-qualified name of the relation.
- */
-char *
-RelationGetQualifiedRelationName(Relation rel)
-{
-	return get_qualified_objname(RelationGetNamespace(rel),
-								 RelationGetRelationName(rel));
 }
 
 /* ----------------------------------------------------------------
@@ -5075,6 +5068,13 @@ RelationGetPrimaryKeyIndex(Relation relation, bool deferrable_ok)
 /*
  * RelationGetReplicaIndex -- get OID of the relation's replica identity index
  *
+ * If replica identity is DEFAULT, then return the OID of the primary key, if
+ * it's not deferrable; if replica identity is INDEX, return the OID of the
+ * index with indisreplident, if one exists.
+ *
+ * Note that a working PK is not returned if identity is INDEX!  This is
+ * surprising if the replica identity index is dropped.  FIXME someday.
+ *
  * Returns InvalidOid if there is no such index.
  */
 Oid
@@ -5091,6 +5091,39 @@ RelationGetReplicaIndex(Relation relation)
 	}
 
 	return relation->rd_replidindex;
+}
+
+/*
+ * RelationGetToastChunkIdType -- get the type of the relation's TOAST
+ *		table "chunk_id" column
+ *
+ * Returns OIDOID or OID8OID, or InvalidOid if the relation has no TOAST
+ * table.
+ */
+Oid
+RelationGetToastChunkIdType(Relation relation)
+{
+	Oid			toastrelid = relation->rd_rel->reltoastrelid;
+	Oid			typid;
+
+	/* Quick exit if we already computed the value */
+	if (OidIsValid(relation->rd_toastchunkidtype))
+		return relation->rd_toastchunkidtype;
+
+	/* Nothing to report without a TOAST table */
+	if (!OidIsValid(toastrelid))
+		return InvalidOid;
+
+	typid = get_atttype(toastrelid, 1);
+	if (!OidIsValid(typid))
+		elog(ERROR, "cache lookup failed for TOAST relation %u",
+			 toastrelid);
+	if (typid != OIDOID && typid != OID8OID)
+		elog(ERROR, "unexpected type %u for chunk_id in TOAST relation %u",
+			 typid, toastrelid);
+
+	relation->rd_toastchunkidtype = typid;
+	return typid;
 }
 
 /*
@@ -5846,12 +5879,20 @@ RelationBuildPublicationDesc(Relation relation, PublicationDesc *pubdesc)
 	schemaid = RelationGetNamespace(relation);
 	puboids = list_concat_unique_oid(puboids, GetSchemaPublications(schemaid));
 
+	/*
+	 * A partition whose concurrent detach has been committed but not
+	 * finalized reports no ancestors, even though relispartition is still
+	 * set. Treat such a partition as a standalone table, as after the detach
+	 * is finalized.
+	 */
 	if (relation->rd_rel->relispartition)
+		ancestors = get_partition_ancestors(relid);
+
+	if (ancestors)
 	{
 		Oid			last_ancestor_relid;
 
 		/* Add publications that the ancestors are in too. */
-		ancestors = get_partition_ancestors(relid);
 		last_ancestor_relid = llast_oid(ancestors);
 
 		foreach(lc, ancestors)
@@ -6530,6 +6571,7 @@ load_relcache_init_file(bool shared)
 		rel->rd_firstRelfilelocatorSubid = InvalidSubTransactionId;
 		rel->rd_droppedSubid = InvalidSubTransactionId;
 		rel->rd_amcache = NULL;
+		rel->rd_toastchunkidtype = InvalidOid;
 		rel->pgstat_info = NULL;
 
 		/*

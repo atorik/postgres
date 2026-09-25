@@ -726,6 +726,7 @@ do_analyze_rel(Relation onerel, const VacuumParams *params,
 			ivinfo.index = Irel[ind];
 			ivinfo.heaprel = onerel;
 			ivinfo.analyze_only = true;
+			ivinfo.is_autovacuum = AmAutoVacuumWorkerProcess();
 			ivinfo.estimated_count = true;
 			ivinfo.message_level = elevel;
 			ivinfo.num_heap_tuples = onerel->rd_rel->reltuples;
@@ -1171,6 +1172,11 @@ examine_attribute(Relation onerel, int attnum, Node *index_expr)
 	return stats;
 }
 
+/*
+ * Determine whether the column is analyzable.
+ *
+ * If the column is analyzable, return its attstattarget value, if asked to.
+ */
 bool
 attribute_is_analyzable(Relation onerel, int attnum, Form_pg_attribute attr,
 						int *p_attstattarget)

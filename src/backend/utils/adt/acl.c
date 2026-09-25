@@ -891,10 +891,6 @@ acldefault(ObjectType objtype, Oid ownerId)
 			world_default = ACL_NO_RIGHTS;
 			owner_default = ACL_ALL_RIGHTS_PARAMETER_ACL;
 			break;
-		case OBJECT_PROPGRAPH:
-			world_default = ACL_NO_RIGHTS;
-			owner_default = ACL_ALL_RIGHTS_PROPGRAPH;
-			break;
 		default:
 			elog(ERROR, "unrecognized object type: %d", (int) objtype);
 			world_default = ACL_NO_RIGHTS;	/* keep compiler quiet */
@@ -956,9 +952,6 @@ acldefault_sql(PG_FUNCTION_ARGS)
 		case 'c':
 			objtype = OBJECT_COLUMN;
 			break;
-		case 'g':
-			objtype = OBJECT_PROPGRAPH;
-			break;
 		case 'r':
 			objtype = OBJECT_TABLE;
 			break;
@@ -996,7 +989,16 @@ acldefault_sql(PG_FUNCTION_ARGS)
 			objtype = OBJECT_TYPE;
 			break;
 		default:
-			elog(ERROR, "unrecognized object type abbreviation: %c", objtypec);
+			/* Avoid printing non-ASCII bytes, else we have encoding issues */
+			if (objtypec >= ' ' && objtypec < 0x7f)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("unrecognized object type abbreviation: \"%c\"", objtypec)));
+			else				/* use \ooo format, like charout() */
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("unrecognized object type abbreviation: \"\\%03o\"",
+								(unsigned char) objtypec)));
 	}
 
 	PG_RETURN_ACL_P(acldefault(objtype, owner));

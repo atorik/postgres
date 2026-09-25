@@ -660,20 +660,12 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 	 */
 	if (OldIndex != NULL && !use_sort)
 	{
-		const int	ci_index[] = {
-			PROGRESS_REPACK_PHASE,
-			PROGRESS_REPACK_INDEX_RELID
-		};
-		int64		ci_val[2];
-
-		/* Set phase and OIDOldIndex to columns */
-		ci_val[0] = PROGRESS_REPACK_PHASE_INDEX_SCAN_HEAP;
-		ci_val[1] = RelationGetRelid(OldIndex);
-		pgstat_progress_update_multi_param(2, ci_index, ci_val);
+		pgstat_progress_update_param(PROGRESS_REPACK_PHASE,
+									 PROGRESS_REPACK_PHASE_INDEX_SCAN_HEAP);
 
 		tableScan = NULL;
 		heapScan = NULL;
-		indexScan = index_beginscan(OldHeap, OldIndex,
+		indexScan = index_beginscan(OldHeap, OldIndex, false,
 									snapshot ? snapshot : SnapshotAny,
 									NULL, 0, 0,
 									SO_NONE);
@@ -716,7 +708,8 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 
 		if (indexScan != NULL)
 		{
-			if (!index_getnext_slot(indexScan, ForwardScanDirection, slot))
+			if (!table_index_getnext_slot(indexScan, ForwardScanDirection,
+										  slot))
 				break;
 
 			/* Since we used no scan keys, should never need to recheck */
@@ -1965,7 +1958,7 @@ heapam_scan_get_blocks_done(HeapScanDesc hscan)
 	if (hscan->rs_base.rs_parallel != NULL)
 	{
 		bpscan = (ParallelBlockTableScanDesc) hscan->rs_base.rs_parallel;
-		startblock = bpscan->phs_startblock;
+		startblock = pg_atomic_read_u32(&bpscan->phs_startblock);
 	}
 	else
 		startblock = hscan->rs_startblock;
@@ -2673,10 +2666,9 @@ static const TableAmRoutine heapam_methods = {
 	.parallelscan_initialize = table_block_parallelscan_initialize,
 	.parallelscan_reinitialize = table_block_parallelscan_reinitialize,
 
-	.index_fetch_begin = heapam_index_fetch_begin,
-	.index_fetch_reset = heapam_index_fetch_reset,
-	.index_fetch_end = heapam_index_fetch_end,
-	.index_fetch_tuple = heapam_index_fetch_tuple,
+	.index_scan_begin = heapam_index_scan_begin,
+	.index_scan_reset = heapam_index_scan_reset,
+	.index_scan_end = heapam_index_scan_end,
 
 	.tuple_insert = heapam_tuple_insert,
 	.tuple_insert_speculative = heapam_tuple_insert_speculative,
@@ -2686,6 +2678,7 @@ static const TableAmRoutine heapam_methods = {
 	.tuple_update = heapam_tuple_update,
 	.tuple_lock = heapam_tuple_lock,
 
+	.fetch_tid = heapam_fetch_tid,
 	.tuple_fetch_row_version = heapam_fetch_row_version,
 	.tuple_get_latest_tid = heap_get_latest_tid,
 	.tuple_tid_valid = heapam_tuple_tid_valid,

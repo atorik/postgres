@@ -39,7 +39,6 @@
 #include "partitioning/partdefs.h"
 #include "storage/buf.h"
 #include "utils/reltrigger.h"
-#include "utils/typcache.h"
 
 
 /*
@@ -468,24 +467,6 @@ typedef struct MergeActionState
 } MergeActionState;
 
 /*
- * ForPortionOfState
- *
- * Executor state of a FOR PORTION OF operation.
- */
-typedef struct ForPortionOfState
-{
-	NodeTag		type;
-
-	Oid			fp_rangeType;	/* the base type (not domain) of the FOR
-								 * PORTION OF expression */
-	int			fp_rangeAttno;	/* the attno of the range column */
-	Datum		fp_targetRange; /* the range/multirange from FOR PORTION OF */
-	TypeCacheEntry *fp_leftoverstypcache;	/* type cache entry of the range */
-	TupleTableSlot *fp_Existing;	/* slot to store old tuple */
-	TupleTableSlot *fp_Leftover;	/* slot to store leftover */
-} ForPortionOfState;
-
-/*
  * ResultRelInfo
  *
  * Whenever we update an existing relation, we have to update indexes on the
@@ -620,9 +601,6 @@ typedef struct ResultRelInfo
 
 	/* for MERGE, expr state for checking the join condition */
 	ExprState  *ri_MergeJoinCondition;
-
-	/* FOR PORTION OF evaluation state */
-	ForPortionOfState *ri_forPortionOf;
 
 	/* partition check expression state (NULL if not set up yet) */
 	ExprState  *ri_PartitionCheckExpr;
@@ -1791,11 +1769,7 @@ typedef struct IndexScanState
  *		ScanDesc		   index scan descriptor
  *		Instrument		   local index scan instrumentation
  *		SharedInfo		   parallel worker instrumentation (no leader entry)
- *		TableSlot		   slot for holding tuples fetched from the table
- *		VMBuffer		   buffer in use for visibility map testing, if any
  *		PscanLen		   size of parallel index-only scan descriptor
- *		NameCStringAttNums attnums of name typed columns to pad to NAMEDATALEN
- *		NameCStringCount   number of elements in the NameCStringAttNums array
  * ----------------
  */
 typedef struct IndexOnlyScanState
@@ -1814,11 +1788,7 @@ typedef struct IndexOnlyScanState
 	struct IndexScanDescData *ioss_ScanDesc;
 	IndexScanInstrumentation *ioss_Instrument;
 	SharedIndexScanInstrumentation *ioss_SharedInfo;
-	TupleTableSlot *ioss_TableSlot;
-	Buffer		ioss_VMBuffer;
 	Size		ioss_PscanLen;
-	AttrNumber *ioss_NameCStringAttNums;
-	int			ioss_NameCStringCount;
 } IndexOnlyScanState;
 
 /* ----------------
@@ -2291,7 +2261,6 @@ typedef struct MaterialState
 } MaterialState;
 
 struct MemoizeEntry;
-struct MemoizeTuple;
 struct MemoizeKey;
 
 /* ----------------
@@ -2319,10 +2288,9 @@ typedef struct MemoizeState
 	uint64		mem_limit;		/* memory limit in bytes for the cache */
 	MemoryContext tableContext; /* memory context to store cache data */
 	dlist_head	lru_list;		/* least recently used entry list */
-	struct MemoizeTuple *last_tuple;	/* Used to point to the last tuple
-										 * returned during a cache hit and the
-										 * tuple we last stored when
-										 * populating the cache. */
+	MinimalTuple last_tuple;	/* Used to point to the last tuple returned
+								 * during a cache hit and the tuple we last
+								 * stored when populating the cache. */
 	struct MemoizeEntry *entry; /* the entry that 'last_tuple' belongs to or
 								 * NULL if 'last_tuple' is NULL. */
 	bool		singlerow;		/* true if the cache entry is to be marked as

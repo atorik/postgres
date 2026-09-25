@@ -62,7 +62,13 @@ check_publication_add_relation(PublicationRelInfo *pri)
 
 	if (pri->except)
 	{
-		relname = RelationGetQualifiedRelationName(targetrel);
+		/*
+		 * The name parts must not be quoted here, because the message already
+		 * encloses the whole name in double quotes.
+		 */
+		relname = psprintf("%s.%s",
+						   get_namespace_name(RelationGetNamespace(targetrel)),
+						   RelationGetRelationName(targetrel));
 		errormsg = gettext_noop("cannot specify relation \"%s\" in the publication EXCEPT clause");
 	}
 	else
@@ -73,10 +79,19 @@ check_publication_add_relation(PublicationRelInfo *pri)
 
 	/* If in EXCEPT clause, must be root partitioned table */
 	if (pri->except && targetrel->rd_rel->relispartition)
+	{
+		if (PartitionHasPendingDetach(RelationGetRelid(targetrel)))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg(errormsg, relname),
+					 errdetail("This operation is not supported for partitions with an incomplete detach."),
+					 errhint("Use ALTER TABLE ... DETACH PARTITION ... FINALIZE to complete the pending detach operation.")));
+
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg(errormsg, relname),
 				 errdetail("This operation is not supported for individual partitions.")));
+	}
 
 	/* Must be a regular or partitioned table */
 	if (RelationGetForm(targetrel)->relkind != RELKIND_RELATION &&
@@ -926,6 +941,25 @@ List *
 GetRelationExcludedPublications(Oid relid)
 {
 	return get_relation_publications(relid, true);
+}
+
+/*
+ * Check whether the relation is referenced by any publication, either as a
+ * published relation or in a publication's EXCEPT clause.
+ */
+bool
+RelationHasPublication(Oid relid)
+{
+	CatCList   *pubrellist;
+	bool		found;
+
+	pubrellist = SearchSysCacheList1(PUBLICATIONRELMAP,
+									 ObjectIdGetDatum(relid));
+	found = (pubrellist->n_members > 0);
+
+	ReleaseSysCacheList(pubrellist);
+
+	return found;
 }
 
 /*

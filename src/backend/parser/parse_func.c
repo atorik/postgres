@@ -2392,7 +2392,7 @@ LookupFuncName(List *funcname, int nargs, const Oid *argtypes, bool missing_ok)
 Oid
 LookupFuncWithArgs(ObjectType objtype, ObjectWithArgs *func, bool missing_ok)
 {
-	Oid			argoids[FUNC_MAX_ARGS];
+	Oid			argoids[FUNC_MAX_ARGS] = {0};
 	int			argcount;
 	int			nargs;
 	int			i;
@@ -2841,12 +2841,6 @@ check_srf_call_placement(ParseState *pstate, Node *last_srf, int location)
 			break;
 		case EXPR_KIND_CYCLE_MARK:
 			errkind = true;
-			break;
-		case EXPR_KIND_PROPGRAPH_PROPERTY:
-			err = _("set-returning functions are not allowed in property definition expressions");
-			break;
-		case EXPR_KIND_FOR_PORTION:
-			err = _("set-returning functions are not allowed in FOR PORTION OF expressions");
 			break;
 
 			/*
