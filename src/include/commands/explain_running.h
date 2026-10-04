@@ -21,8 +21,7 @@ extern void HandleLogQueryPlanInterrupt(void);
 extern void ProcessLogQueryPlanInterrupt(void);
 extern void LogQueryPlan(void);
 extern void LogQueryPlanNoOpportunity(uint64 query_id);
-extern void LogQueryPlanRequestSlotInit(ProcNumber proc_number, pid_t pid);
-extern void LogQueryPlanRequestSlotCleanup(ProcNumber proc_number);
+extern void LogQueryPlanRequestSlotInit(void);
 extern Datum pg_log_query_plan(PG_FUNCTION_ARGS);
 
 #endif							/* EXPLAIN_RUNNING_H */

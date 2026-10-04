@@ -22,6 +22,7 @@
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
+#include "storage/ipc.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/procsignal.h"
@@ -55,13 +56,11 @@ typedef struct LogQueryPlanRequestSlot
 	LogQueryPlanRequest request;
 } LogQueryPlanRequestSlot;
 
-StaticAssertDecl(sizeof(LogQueryPlanRequestSlot) <= 64,
-				 "query plan request slot must be no larger than 64 bytes");
-
 static LogQueryPlanRequestSlot *LogQueryPlanRequestSlots;
 
 static void LogQueryPlanShmemRequest(void *arg);
 static void LogQueryPlanShmemInit(void *arg);
+static void LogQueryPlanRequestSlotCleanup(int code, Datum arg);
 
 const ShmemCallbacks LogQueryPlanShmemCallbacks = {
 	.request_fn = LogQueryPlanShmemRequest,
@@ -114,25 +113,31 @@ LogQueryPlanShmemInit(void *arg)
  * this process.
  */
 void
-LogQueryPlanRequestSlotInit(ProcNumber proc_number, pid_t pid)
+LogQueryPlanRequestSlotInit(void)
 {
 	LogQueryPlanRequestSlot *slot;
-	pid_t		old_pid = 0;
+	pid_t		previous_target_pid = 0;
 
-	Assert(proc_number >= 0 && proc_number < MaxBackends);
-	slot = &LogQueryPlanRequestSlots[proc_number];
+	Assert(MyBackendType == B_BACKEND);
+	slot = &LogQueryPlanRequestSlots[MyProcNumber];
 
 	SpinLockAcquire(&slot->mutex);
-	if (slot->state != LOG_QUERY_PLAN_REQUEST_IDLE &&
-		slot->request.target_pid != pid)
-		old_pid = slot->request.target_pid;
+	if (slot->state != LOG_QUERY_PLAN_REQUEST_IDLE && slot->request.target_pid != MyProcPid)
+		previous_target_pid = slot->request.target_pid;
 	slot->state = LOG_QUERY_PLAN_REQUEST_IDLE;
 	MemSet(&slot->request, 0, sizeof(slot->request));
 	SpinLockRelease(&slot->mutex);
 
-	if (old_pid != 0)
+	/*
+	 * Register before InitProcessPhase2() registers RemoveProcFromArray, so
+	 * exit callbacks remove us from the ProcArray before releasing this slot,
+	 * and release the slot before ProcKill makes our PGPROC reusable.
+	 */
+	on_shmem_exit(LogQueryPlanRequestSlotCleanup, Int32GetDatum(MyProcNumber));
+
+	if (previous_target_pid != 0)
 		elog(LOG, "process %d taking over query plan request slot %d owned by process %d",
-			 (int) pid, proc_number, (int) old_pid);
+			 MyProcPid, MyProcNumber, (int) previous_target_pid);
 }
 
 /*
@@ -140,9 +145,10 @@ LogQueryPlanRequestSlotInit(ProcNumber proc_number, pid_t pid)
  *
  * Do not throw an error here, since this is called during process exit.
  */
-void
-LogQueryPlanRequestSlotCleanup(ProcNumber proc_number)
+static void
+LogQueryPlanRequestSlotCleanup(int code, Datum arg)
 {
+	ProcNumber	proc_number = DatumGetInt32(arg);
 	LogQueryPlanRequestSlot *slot;
 
 	Assert(proc_number >= 0 && proc_number < MaxBackends);
@@ -163,7 +169,8 @@ LogQueryPlanRequestSlotCleanup(ProcNumber proc_number)
 static LogQueryPlanRequestId
 GenerateLogQueryPlanRequestId(void)
 {
-	return pg_prng_uint64(&pg_global_prng_state);
+	/* Keep the identifier positive and representable as SQL bigint. */
+	return pg_prng_uint64_range(&pg_global_prng_state, 1, PG_INT64_MAX);
 }
 
 static bool
@@ -219,7 +226,6 @@ TakeLogQueryPlanRequest(void)
 	LogQueryPlanRequestSlot *slot;
 	bool		found = false;
 
-	Assert(MyProcNumber >= 0 && MyProcNumber < MaxBackends);
 	Assert(!LogQueryPlanRequestActive);
 	slot = &LogQueryPlanRequestSlots[MyProcNumber];
 
@@ -387,11 +393,12 @@ ProcessLogQueryPlanInterrupt(void)
 	bool		wrapped = false;
 
 	/*
-	 * Exit immediately if wrapping plan is already in progress. This prevents
-	 * recursive calls, which could occur if logging is requested repeatedly
-	 * and rapidly, potentially leading to infinite recursion and crash.
+	 * Exit immediately if wrapping the plan or processing a request is already
+	 * in progress.  Keep LogQueryPlanPending set until the active request is
+	 * completed, without trying to take another request at subsequent interrupt
+	 * checks.
 	 */
-	if (WrapNodesInProgress)
+	if (WrapNodesInProgress || LogQueryPlanRequestActive)
 		return;
 
 	if (!TakeLogQueryPlanRequest())
@@ -464,14 +471,14 @@ pg_log_query_plan(PG_FUNCTION_ARGS)
 		 */
 		ereport(WARNING,
 				(errmsg("PID %d is not a PostgreSQL backend process", pid)));
-		PG_RETURN_BOOL(false);
+		PG_RETURN_NULL();
 	}
 
 	if (be_status->st_backendType != B_BACKEND)
 	{
 		ereport(WARNING,
 				(errmsg("PID %d is not a PostgreSQL client backend process", pid)));
-		PG_RETURN_BOOL(false);
+		PG_RETURN_NULL();
 	}
 
 	procNumber = GetNumberFromPGProc(proc);
@@ -481,22 +488,19 @@ pg_log_query_plan(PG_FUNCTION_ARGS)
 	{
 		ereport(WARNING,
 				(errmsg("query plan request for PID %d is already pending", pid)));
-		PG_RETURN_BOOL(false);
+		PG_RETURN_NULL();
 	}
 
 	INJECTION_POINT("log-query-plan-before-signal", NULL);
 
 	if (SendProcSignal(pid, PROCSIG_LOG_QUERY_PLAN, procNumber) < 0)
 	{
-		int			save_errno = errno;
-
 		/* The signal was not delivered, so undo our reservation if possible. */
 		(void) RollbackLogQueryPlanRequest(procNumber, pid, request_id);
-		errno = save_errno;
 		ereport(WARNING,
 				(errmsg("could not send signal to process %d: %m", pid)));
-		PG_RETURN_BOOL(false);
+		PG_RETURN_NULL();
 	}
 
-	PG_RETURN_BOOL(true);
+	PG_RETURN_INT64((int64) request_id);
 }

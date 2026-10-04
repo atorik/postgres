@@ -739,8 +739,8 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	 * to the ProcArray.  Once InitProcessPhase2() has done that, another
 	 * backend can find us and install a request in the slot.
 	 */
-	if (MyProcNumber < MaxBackends)
-		LogQueryPlanRequestSlotInit(MyProcNumber, MyProcPid);
+	if (MyBackendType == B_BACKEND)
+		LogQueryPlanRequestSlotInit();
 
 	/*
 	 * Add my PGPROC struct to the ProcArray.

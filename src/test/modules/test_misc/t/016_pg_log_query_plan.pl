@@ -85,7 +85,7 @@ $node->wait_for_event('client backend', 'log-query-plan-before-signal');
 
 my ($pending_result, $pending_error) =
   $psql_session3->query("SELECT pg_log_query_plan($session1_pid);");
-is($pending_result, 'f',
+is($pending_result, '',
 	'a second request is rejected while the first is pending');
 ok($pending_error, 'the pending request reports a busy warning');
 
@@ -95,7 +95,9 @@ $node->safe_psql(
 	SELECT injection_points_wakeup('log-query-plan-before-signal');
 	SELECT injection_points_detach('log-query-plan-before-signal');
 ]);
-is($psql_session2->query_safe(''), 't', 'the first request is accepted');
+my $request_id = $psql_session2->query_safe('');
+like($request_id, qr/^[1-9][0-9]*$/,
+	'the first request returns a positive request ID');
 
 # Ensure that the signal of pg_log_query_plan() is actually
 # received by confirming session1 is waiting on the injection point.
@@ -105,7 +107,7 @@ $node->wait_for_event('client backend', 'log-query-interrupt');
 # second request cannot overwrite the request being processed.
 my ($second_result, $second_error) =
   $psql_session3->query("SELECT pg_log_query_plan($session1_pid);");
-is($second_result, 'f',
+is($second_result, '',
 	'a second request is rejected while the first is being processed');
 ok($second_error, 'the processing request reports a busy warning');
 
@@ -122,17 +124,19 @@ $psql_session2->query_safe(
 ]);
 
 $node->wait_for_log(
-	qr/request ID [0-9]+ running on backend with PID $session1_pid /,
+	qr/request ID $request_id running on backend with PID $session1_pid /,
 	$log_offset);
 
 # The completed request must release the slot.  At this point session1 is
 # idle, so the accepted request cannot produce a plan, but its failure log
 # must still identify the request.
 $log_offset = -s $node->logfile;
-is($psql_session2->query_safe("SELECT pg_log_query_plan($session1_pid);"),
-	't', 'a new request is accepted after the first request completes');
+my $next_request_id =
+  $psql_session2->query_safe("SELECT pg_log_query_plan($session1_pid);");
+like($next_request_id, qr/^[1-9][0-9]*$/,
+	'a new request returns a positive request ID after the first completes');
 $node->wait_for_log(
-	qr/query plan logging request [0-9]+ could not be completed because there was no opportunity to log the plan/,
+	qr/query plan logging request $next_request_id could not be completed because there was no opportunity to log the plan/,
 	$log_offset);
 
 $psql_session1->query_safe("COMMIT;");
