@@ -20,7 +20,7 @@
 extern void HandleLogQueryPlanInterrupt(void);
 extern void ProcessLogQueryPlanInterrupt(void);
 extern void LogQueryPlan(void);
-extern void LogQueryPlanNoOpportunity(uint64 query_id);
+extern void FinishLogQueryPlanRequestWithoutPlan(uint64 query_id);
 extern void LogQueryPlanRequestSlotInit(void);
 extern Datum pg_log_query_plan(PG_FUNCTION_ARGS);
 

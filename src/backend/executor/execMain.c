@@ -414,7 +414,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	 * execution on the same session.
 	 */
 	if (LogQueryPlanPending)
-		LogQueryPlanNoOpportunity(queryDesc->plannedstmt->queryId);
+		FinishLogQueryPlanRequestWithoutPlan(queryDesc->plannedstmt->queryId);
 }
 
 /* ----------------------------------------------------------------

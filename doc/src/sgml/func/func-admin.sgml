@@ -211,16 +211,13 @@
        </para>
        <para>
         A backend accepts at most one outstanding plan logging request.
-        The function returns <literal>NULL</literal> with a warning if the
-        target is invalid, a request for the same backend is already pending
+        The function returns <literal>NULL</literal> if the target is
+        invalid, a request for the same backend is already pending
         or being processed, or the request could not be sent.
         Each accepted request is assigned a positive request identifier, which
         is returned by the function and is
         included in the server log message reporting either the plan or that
-        the plan could not be logged.  A non-null result means
-        that the request was sent, not that logging has completed.  No
-        terminal log message is guaranteed if the target backend exits while
-        handling the request.
+        the plan could not be logged.
        </para>
        <para>
         If the target backend is executing a nested query when it
