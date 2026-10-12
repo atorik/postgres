@@ -14,7 +14,6 @@
 #include "postgres.h"
 
 #include "access/xact.h"
-#include "common/pg_prng.h"
 #include "commands/explain.h"
 #include "commands/explain_format.h"
 #include "commands/explain_running.h"
@@ -33,6 +32,12 @@
 #include "utils/injection_point.h"
 
 typedef uint64 LogQueryPlanRequestId;
+
+typedef struct LogQueryPlanRequestIdControl
+{
+	slock_t		mutex;
+	LogQueryPlanRequestId next_request_id;
+} LogQueryPlanRequestIdControl;
 
 typedef enum LogQueryPlanRequestState
 {
@@ -56,6 +61,7 @@ typedef struct LogQueryPlanRequestSlot
 } LogQueryPlanRequestSlot;
 
 static LogQueryPlanRequestSlot *LogQueryPlanRequestSlots;
+static LogQueryPlanRequestIdControl *LogQueryPlanRequestIdCtl;
 
 static void LogQueryPlanShmemRequest(void *arg);
 static void LogQueryPlanShmemInit(void *arg);
@@ -79,6 +85,11 @@ static void FinishLogQueryPlanRequest(void);
 static void
 LogQueryPlanShmemRequest(void *arg)
 {
+	ShmemRequestStruct(.name = "Log Query Plan Request ID",
+					   .size = sizeof(LogQueryPlanRequestIdControl),
+					   .ptr = (void **) &LogQueryPlanRequestIdCtl,
+		);
+
 	ShmemRequestStruct(.name = "Log Query Plan Request Slots",
 					   .size = mul_size(sizeof(LogQueryPlanRequestSlot), MaxBackends),
 					   .ptr = (void **) &LogQueryPlanRequestSlots,
@@ -88,6 +99,9 @@ LogQueryPlanShmemRequest(void *arg)
 static void
 LogQueryPlanShmemInit(void *arg)
 {
+	SpinLockInit(&LogQueryPlanRequestIdCtl->mutex);
+	LogQueryPlanRequestIdCtl->next_request_id = 1;
+
 	for (int i = 0; i < MaxBackends; i++)
 	{
 		LogQueryPlanRequestSlot *slot = &LogQueryPlanRequestSlots[i];
@@ -133,16 +147,23 @@ LogQueryPlanRequestSlotCleanup(int code, Datum arg)
 }
 
 /*
- * Generate an opaque request identifier.
+ * Generate an opaque request identifier from a shared counter.
  *
- * The identifier allocation policy is intentionally separate from the IPC
- * mechanism and can be replaced without changing request transport.
+ * Keep identifiers positive and representable as SQL bigint, wrapping to 1
+ * after PG_INT64_MAX.  Failed requests consume identifiers, too.
  */
 static LogQueryPlanRequestId
 GenerateLogQueryPlanRequestId(void)
 {
-	/* Keep the identifier positive and representable as SQL bigint. */
-	return pg_prng_uint64_range(&pg_global_prng_state, 1, PG_INT64_MAX);
+	LogQueryPlanRequestId id;
+
+	SpinLockAcquire(&LogQueryPlanRequestIdCtl->mutex);
+	id = LogQueryPlanRequestIdCtl->next_request_id;
+	LogQueryPlanRequestIdCtl->next_request_id =
+		(id == PG_INT64_MAX) ? 1 : id + 1;
+	SpinLockRelease(&LogQueryPlanRequestIdCtl->mutex);
+
+	return id;
 }
 
 /*
