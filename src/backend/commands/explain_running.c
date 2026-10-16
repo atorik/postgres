@@ -235,6 +235,9 @@ TakePendingLogQueryPlanRequest(void)
 		slot->state = LOG_QUERY_PLAN_REQUEST_PROCESSING;
 		request = &slot->request;
 	}
+	else
+		/* Clear under the lock so a new request's notification is not lost. */
+		LogQueryPlanPending = false;
 	SpinLockRelease(&slot->mutex);
 
 	return request;
@@ -263,10 +266,10 @@ FinishLogQueryPlanRequest(void)
 	LogQueryPlanRequestSlot *slot = &LogQueryPlanRequestSlots[MyProcNumber];
 
 	SpinLockAcquire(&slot->mutex);
+	/* Clear the notification before allowing another request to be registered. */
+	LogQueryPlanPending = false;
 	slot->state = LOG_QUERY_PLAN_REQUEST_IDLE;
 	SpinLockRelease(&slot->mutex);
-
-	LogQueryPlanPending = false;
 }
 
 /*
@@ -366,13 +369,13 @@ FinishLogQueryPlanRequestWithoutPlan(uint64 query_id)
 
 	SpinLockAcquire(&slot->mutex);
 	request_id = slot->request.request_id;
+	/* Clear the notification before allowing another request to be registered. */
+	LogQueryPlanPending = false;
 	slot->state = LOG_QUERY_PLAN_REQUEST_IDLE;
 	SpinLockRelease(&slot->mutex);
 
 	// request_id should have been set when the request was made.
 	Assert(request_id != 0);
-
-	LogQueryPlanPending = false;
 
 	if (query_id != 0)
 		ereport(LOG_SERVER_ONLY,
@@ -404,10 +407,7 @@ ProcessLogQueryPlanInterrupt(void)
 
 	/* Exit immediately when there is no pending request for this backend. */
 	if (TakePendingLogQueryPlanRequest() == NULL)
-	{
-		LogQueryPlanPending = false;
 		return;
-	}
 
 	querydesc = GetCurrentQueryDesc();
 
