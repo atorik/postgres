@@ -134,6 +134,7 @@ typedef struct PartitionPruneState
 } PartitionPruneState;
 
 extern void ExecDoInitialPruning(EState *estate);
+extern void ExecCreatePartitionPruneStates(EState *estate);
 extern PartitionPruneState *ExecInitPartitionExecPruning(PlanState *planstate,
 														 int n_total_subplans,
 														 int part_prune_index,

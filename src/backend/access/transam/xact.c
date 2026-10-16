@@ -1948,6 +1948,12 @@ RecordTransactionAbort(bool isSubXact)
 	if (ndroppedstats)
 		pfree(droppedstats);
 
+	/*
+	 * Test the window where the transaction is aborted in pg_xact but still
+	 * present in ProcArray.
+	 */
+	INJECTION_POINT("transaction-abort-after-clog", NULL);
+
 	return latestXid;
 }
 

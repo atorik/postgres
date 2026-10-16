@@ -3316,7 +3316,11 @@ description | Waiting for a newly initialized WAL file to reach durable storage
         <structfield>hits</structfield> <type>bigint</type>
        </para>
        <para>
-        The number of times a desired block was found in a shared buffer.
+        The number of times a desired block was found in a shared buffer, or
+        in the WAL buffers for <varname>object</varname>
+        <literal>wal</literal>. For <varname>object</varname>
+        <literal>wal</literal>, a page that is only partially read counts as
+        one hit.
        </para>
       </entry>
      </row>
@@ -3424,6 +3428,8 @@ description | Waiting for a newly initialized WAL file to reach durable storage
    <varname>writes</varname> and <varname>write_time</varname>
    track the write activity of WAL files done in
    <function>XLogWrite</function>.
+   <varname>hits</varname> tracks the reads of WAL from the WAL buffers done
+   in <function>WALReadFromBuffers</function>, which avoid reading a WAL file.
    See <xref linkend="wal-configuration"/> for more information.
   </para>
 
@@ -3570,6 +3576,19 @@ description | Waiting for a newly initialized WAL file to reach durable storage
         True if entries of this kind are persisted to the statistics file at
         shutdown and reloaded on startup, false if they are kept only in
         shared memory.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>own_hash</structfield> <type>boolean</type>
+       </para>
+       <para>
+        For variable-numbered statistics kinds, true if entries of this kind
+        are stored in a dedicated hash table, false if they are stored in the
+        shared hash table.  False for fixed-numbered statistics kinds.
        </para>
       </entry>
      </row>
@@ -8137,8 +8156,9 @@ FROM pg_stat_get_backend_idset() AS backendid;
        <structfield>backup_total</structfield> <type>bigint</type>
       </para>
       <para>
-       Total amount of data that will be streamed. This is estimated and
-       reported as of the beginning of
+       Total amount of data that will be streamed. This counts archive data
+       before any server-side compression. The estimate is reported as of
+       the beginning of the
        <literal>streaming database files</literal> phase. Note that
        this is only an approximation since the database
        may change during <literal>streaming database files</literal> phase
@@ -8157,7 +8177,8 @@ FROM pg_stat_get_backend_idset() AS backendid;
        <structfield>backup_streamed</structfield> <type>bigint</type>
       </para>
       <para>
-       Amount of data streamed. This counter only advances
+       Amount of data streamed. This counts archive data before any server-side
+       compression. This counter only advances
        when the phase is <literal>streaming database files</literal> or
        <literal>transferring wal files</literal>.
       </para></entry>

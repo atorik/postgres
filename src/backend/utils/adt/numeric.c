@@ -3885,8 +3885,18 @@ numeric_log(PG_FUNCTION_ARGS)
 			PG_RETURN_NUMERIC(make_result(&const_zero));
 		}
 		Assert(NUMERIC_IS_PINF(num2));
-		/* log(finite-positive, Inf) is Inf */
-		PG_RETURN_NUMERIC(make_result(&const_pinf));
+
+		/*
+		 * For a finite-positive base, log(base, Inf) = Inf / ln(base), so the
+		 * sign depends on whether base is more or less than 1.  If base = 1,
+		 * fall through and let log_var report the error.
+		 */
+		init_var_from_num(num1, &arg1);
+		sign1 = cmp_var(&arg1, &const_one);
+		if (sign1 < 0)
+			PG_RETURN_NUMERIC(make_result(&const_ninf));
+		if (sign1 > 0)
+			PG_RETURN_NUMERIC(make_result(&const_pinf));
 	}
 
 	/*
@@ -10812,6 +10822,16 @@ log_var(const NumericVar *base, const NumericVar *num, NumericVar *result)
 	int			ln_base_rscale;
 	int			ln_num_rscale;
 
+	/*
+	 * ln_var will throw a suitable error for most invalid-input cases, but we
+	 * need a special case for base == 1, else we'd report "division by zero"
+	 * which is a bit confusing.
+	 */
+	if (cmp_var(base, &const_one) == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_ARGUMENT_FOR_LOG),
+				 errmsg("cannot take logarithm using base one")));
+
 	init_var(&ln_base);
 	init_var(&ln_num);
 
@@ -11909,8 +11929,6 @@ static void
 accum_sum_add(NumericSumAccum *accum, const NumericVar *val)
 {
 	int32	   *accum_digits;
-	int			i,
-				val_i;
 	int			val_ndigits;
 	NumericDigit *val_digits;
 
@@ -11940,12 +11958,9 @@ accum_sum_add(NumericSumAccum *accum, const NumericVar *val)
 	val_ndigits = val->ndigits;
 	val_digits = val->digits;
 
-	i = accum->weight - val->weight;
-	for (val_i = 0; val_i < val_ndigits; val_i++)
-	{
-		accum_digits[i] += (int32) val_digits[val_i];
-		i++;
-	}
+	accum_digits += accum->weight - val->weight;
+	for (int i = 0; i < val_ndigits; i++)
+		accum_digits[i] += (int32) val_digits[i];
 
 	accum->num_uncarried++;
 }
