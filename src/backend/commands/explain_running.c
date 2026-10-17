@@ -273,6 +273,20 @@ FinishLogQueryPlanRequest(void)
 }
 
 /*
+ * Discard any unfinished request when a transaction or subtransaction aborts.
+ * Do not allocate or report errors here: the original error must be preserved.
+ */
+void
+AbortLogQueryPlanRequest(void)
+{
+	/* Only client backends use query plan logging request slots. */
+	if (MyBackendType != B_BACKEND)
+		return;
+
+	FinishLogQueryPlanRequest();
+}
+
+/*
  * Wrap all the underlying ExecProcNode with ExecProcNodeFirst.
  */
 static bool
