@@ -31,7 +31,7 @@
 #include "utils/backend_status.h"
 #include "utils/injection_point.h"
 
-typedef uint64 LogQueryPlanRequestId;
+typedef int64 LogQueryPlanRequestId;
 
 typedef struct LogQueryPlanRequestIdControl
 {
@@ -358,7 +358,7 @@ LogQueryPlan(void)
 		ExplainStringAssemble(es, queryDesc, es->format, false, -1);
 
 		ereport(LOG_SERVER_ONLY,
-				errmsg("query and its plan for queryid " INT64_FORMAT " requested by request ID " UINT64_FORMAT " running on backend with PID %d are:\n%s",
+				errmsg("query and its plan for queryid " INT64_FORMAT " requested by request ID " INT64_FORMAT " running on backend with PID %d are:\n%s",
 					   queryDesc->plannedstmt->queryId,
 					   request->request_id, MyProcPid,
 					   es->str->data));
@@ -393,11 +393,11 @@ FinishLogQueryPlanRequestWithoutPlan(uint64 query_id)
 
 	if (query_id != 0)
 		ereport(LOG_SERVER_ONLY,
-				errmsg("query plan logging request " UINT64_FORMAT " could not be completed because there was no opportunity to log the plan for queryid " INT64_FORMAT,
+				errmsg("query plan logging request " INT64_FORMAT " could not be completed because there was no opportunity to log the plan for queryid " INT64_FORMAT,
 					   request_id, query_id));
 	else
 		ereport(LOG_SERVER_ONLY,
-				errmsg("query plan logging request " UINT64_FORMAT " could not be completed because there was no opportunity to log the plan",
+				errmsg("query plan logging request " INT64_FORMAT " could not be completed because there was no opportunity to log the plan",
 					   request_id));
 }
 
@@ -509,5 +509,5 @@ pg_log_query_plan(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 	}
 
-	PG_RETURN_INT64((int64) request_id);
+	PG_RETURN_INT64(request_id);
 }
