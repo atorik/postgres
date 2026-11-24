@@ -1143,10 +1143,11 @@ typedef void (*LogicalDecodeMessageCB) (struct LogicalDecodingContext *ctx,
       the XID of the transaction that emitted the message; for a
       transactional message emitted in a subtransaction, it is the
       subtransaction's XID while <parameter>txn</parameter> is the top-level
-      transaction. The <parameter>lsn</parameter> has WAL
-      location of the message. The <parameter>transactional</parameter> says
-      if the message was sent as transactional or not. Similar to the change
-      callback, in case of decoding a prepared (but yet uncommitted)
+      transaction. The <parameter>message_lsn</parameter> is the
+      start LSN of the message for transactional messages, or its end LSN for
+      non-transactional messages. The <parameter>transactional</parameter>
+      says if the message was sent as transactional or not. Similar to the
+      change callback, in case of decoding a prepared (but yet uncommitted)
       transaction or decoding of an uncommitted transaction, this message
       callback might also error out due to simultaneous rollback of
       this very same transaction. In that case, the logical decoding of this
