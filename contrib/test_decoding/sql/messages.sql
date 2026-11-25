@@ -22,7 +22,8 @@ SELECT 'ignorethis' FROM pg_logical_emit_message(true, 'test', 'czechtastic');
 
 SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'force-binary', '0', 'skip-empty-xacts', '1', 'include-xids', '0');
 
--- Test the reported LSN.
+-- Test the reported LSN.  pg_logical_emit_message() returns the end LSN of
+-- the message's WAL record.
 -- For transactional messages, decoding reports the start LSN,
 -- so it must be less than the returned LSN.
 SELECT pg_logical_emit_message(true, 'test', 'lsn_test') AS message_end_lsn \gset
